@@ -111,7 +111,7 @@ public class LoginCommandHandler : IRequestHandler<LoginCommand, LoginResponse>
         catch (Exception ex)
         {
             _logger.LogError(ex, "Critical failure during login for {Identifier}", request.Identifier);
-            return new LoginResponse { Success = false, Error = "An internal server error occurred." };
+            return new LoginResponse { Success = false, Error = $"Internal Error: {ex.Message} | {ex.InnerException?.Message}" };
         }
     }
 }
