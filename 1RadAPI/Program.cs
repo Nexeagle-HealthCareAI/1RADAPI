@@ -2,6 +2,7 @@ using System.Text;
 using System.Threading.RateLimiting;
 using _1Rad.Application;
 using _1Rad.Infrastructure;
+using _1Rad.Infrastructure.Middleware;
 using _1RadAPI.Middleware;
 using FluentValidation.AspNetCore;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -130,6 +131,7 @@ app.UseRateLimiter(); // Apply Rate Limiting
 
 app.UseAuthentication(); // Must be before UseAuthorization
 app.UseAuthorization();
+app.UseMiddleware<ContextualSentinelMiddleware>();
 
 app.MapControllers();
 

@@ -15,6 +15,7 @@ public class VerifyOTPCommandHandlerTests
     private readonly Mock<IPasswordHasher> _hasherMock;
     private readonly Mock<IJwtProvider> _jwtMock;
     private readonly Mock<IPublisher> _publisherMock;
+    private readonly Mock<IUserContext> _userContextMock;
     private readonly Mock<ILogger<VerifyOTPCommandHandler>> _loggerMock;
     private readonly ApplicationDbContext _context;
 
@@ -23,13 +24,14 @@ public class VerifyOTPCommandHandlerTests
         _hasherMock = new Mock<IPasswordHasher>();
         _jwtMock = new Mock<IJwtProvider>();
         _publisherMock = new Mock<IPublisher>();
+        _userContextMock = new Mock<IUserContext>();
         _loggerMock = new Mock<ILogger<VerifyOTPCommandHandler>>();
 
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()
             .UseInMemoryDatabase(databaseName: Guid.NewGuid().ToString())
             .Options;
 
-        _context = new ApplicationDbContext(options, _publisherMock.Object);
+        _context = new ApplicationDbContext(options, _publisherMock.Object, _userContextMock.Object);
     }
 
     [Fact]

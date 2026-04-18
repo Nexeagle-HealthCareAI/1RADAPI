@@ -11,6 +11,8 @@ public interface IApplicationDbContext
     DbSet<Role> Roles { get; }
     DbSet<UserHospitalMapping> UserHospitalMappings { get; }
     DbSet<OTPVerification> OTPVerifications { get; }
+    DbSet<RefreshToken> RefreshTokens { get; }
+    DbSet<Patient> Patients { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken);
 }

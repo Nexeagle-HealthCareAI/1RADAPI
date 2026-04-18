@@ -21,6 +21,9 @@ public static class DependencyInjection
         services.AddScoped<IEmailService, EmailService>();
         services.AddScoped<IJwtProvider, JwtProvider>();
         services.AddScoped<IPasswordHasher, PasswordHasher>();
+        services.AddScoped<IOtpService, OtpService>();
+        services.AddHttpContextAccessor();
+        services.AddScoped<IUserContext, UserContext>();
 
         return services;
     }

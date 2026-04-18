@@ -1,7 +1,13 @@
-using _1Rad.Application.Features.Auth.Commands.DeployInfrastructure;
-using _1Rad.Application.Features.Auth.Commands.IdentitySetup;
 using _1Rad.Application.Features.Auth.Commands.SendOTP;
 using _1Rad.Application.Features.Auth.Commands.VerifyOTP;
+using _1Rad.Application.Features.Auth.Commands.IdentitySetup;
+using _1Rad.Application.Features.Auth.Commands.DeployInfrastructure;
+using _1Rad.Application.Features.Auth.Commands.Login;
+using _1Rad.Application.Features.Auth.Commands.TokenRefresh;
+using _1Rad.Application.Features.Auth.Commands.SwitchContext;
+using _1Rad.Application.Features.Auth.Commands.ForgotPassword;
+using _1Rad.Application.Features.Auth.Commands.VerifyResetCode;
+using _1Rad.Application.Features.Auth.Commands.ResetPassword;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
@@ -59,10 +65,10 @@ public class AuthController : ControllerBase
     [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
     public async Task<IActionResult> VerifyOTP([FromBody] VerifyOTPCommand command)
     {
-        var token = await _mediator.Send(command);
-        return token != null 
-            ? Ok(new { token, message = "OTP verified. Proceed to identity setup." }) 
-            : Unauthorized(new { message = "The code provided is invalid or has expired." });
+        var result = await _mediator.Send(command);
+        return result.Success 
+            ? Ok(result) 
+            : Unauthorized(new { message = result.Message });
     }
 
     /// <summary>
@@ -105,5 +111,77 @@ public class AuthController : ControllerBase
         return result.Success 
             ? Ok(new { message = "Clinical Hub infrastructure deployed successfully. Welcome aboard!" }) 
             : BadRequest(new { error = result.Error });
+    }
+
+    /// <summary>
+    /// Tactical Login: Authenticates user via Email or Mobile.
+    /// </summary>
+    [HttpPost("login")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> Login([FromBody] LoginCommand command)
+    {
+        var result = await _mediator.Send(command);
+        return result.Success ? Ok(result) : Unauthorized(new { error = result.Error });
+    }
+
+    /// <summary>
+    /// Refresh Token: Rotates the session for clinical continuity.
+    /// </summary>
+    [HttpPost("refresh")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> Refresh([FromBody] RefreshTokenCommand command)
+    {
+        var result = await _mediator.Send(command);
+        return result.Success ? Ok(result) : Unauthorized(new { error = result.Error });
+    }
+
+    /// <summary>
+    /// Switch Context: Toggles active hospital context without full re-login.
+    /// </summary>
+    [Authorize]
+    [HttpPost("switch-context")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    public async Task<IActionResult> SwitchContext([FromBody] SwitchContextCommand command)
+    {
+        var result = await _mediator.Send(command);
+        return result.Success ? Ok(result) : BadRequest(new { error = result.Error });
+    }
+
+    /// <summary>
+    /// Recovery 1: Initiates password reset flow by sending an OTP.
+    /// </summary>
+    [HttpPost("forgot-password")]
+    public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordCommand command)
+    {
+        var (success, message) = await _mediator.Send(command);
+        return Ok(new { message });
+    }
+
+    /// <summary>
+    /// Recovery 2: Verifies reset OTP and issues a persistent Reset Token.
+    /// </summary>
+    [HttpPost("verify-reset-code")]
+    public async Task<IActionResult> VerifyResetCode([FromBody] VerifyResetCodeCommand command)
+    {
+        var (success, resetToken, error) = await _mediator.Send(command);
+        return success 
+            ? Ok(new { resetToken }) 
+            : BadRequest(new { error });
+    }
+
+    /// <summary>
+    /// Recovery 3: Finalizes password update using the Reset Token.
+    /// </summary>
+    [HttpPost("reset-password")]
+    public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordCommand command)
+    {
+        var (success, error) = await _mediator.Send(command);
+        return success 
+            ? Ok(new { message = "Password reset successfully. You can now login with your new credentials." }) 
+            : BadRequest(new { error });
     }
 }

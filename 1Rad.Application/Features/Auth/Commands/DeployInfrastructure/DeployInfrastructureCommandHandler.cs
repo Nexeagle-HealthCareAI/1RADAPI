@@ -59,20 +59,31 @@ public class DeployInfrastructureCommandHandler : IRequestHandler<DeployInfrastr
             _context.Hospitals.Add(hospital);
 
             // 4. Map Authority
-            _logger.LogDebug("Mapping User {UserId} to Hospital {HospitalId}", user.UserId, hospital.HospitalId);
+            _logger.LogDebug("Mapping User {UserId} to Hospital {HospitalId} with Role {RoleId}", user.UserId, hospital.HospitalId, request.RoleId);
+            
+            var role = await _context.Roles.FindAsync(new object[] { request.RoleId }, cancellationToken);
+            if (role == null)
+            {
+                _logger.LogWarning("Deployment failed: Role {RoleId} not found.", request.RoleId);
+                return (false, "Specified role not found.");
+            }
+
             var mapping = new UserHospitalMapping
             {
                 UserId = user.UserId,
                 HospitalId = hospital.HospitalId,
-                RoleId = request.RoleId,
                 IsDefault = true
             };
+            mapping.Roles.Add(role);
             _context.UserHospitalMappings.Add(mapping);
 
-            // 5. Promote User
+            // 5. Promote User & Standardize Clinical Data
             _logger.LogInformation("Promoting User {UserId} to Active status.", user.UserId);
             user.Status = UserStatus.Active;
             user.IsVerified = true;
+            user.Specialization = request.Specialization;
+            user.Degree = request.Degree;
+            user.LicenseNo = request.LicenseNo;
 
             // 6. Trigger Domain Event
             hospital.AddDomainEvent(new HospitalRegisteredEvent(user, hospital));

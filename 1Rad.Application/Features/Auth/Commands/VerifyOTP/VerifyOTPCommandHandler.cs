@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging;
 
 namespace _1Rad.Application.Features.Auth.Commands.VerifyOTP;
 
-public class VerifyOTPCommandHandler : IRequestHandler<VerifyOTPCommand, string?>
+public class VerifyOTPCommandHandler : IRequestHandler<VerifyOTPCommand, VerifyOTPResponse>
 {
     private readonly IApplicationDbContext _context;
     private readonly IPasswordHasher _hasher;
@@ -20,7 +20,7 @@ public class VerifyOTPCommandHandler : IRequestHandler<VerifyOTPCommand, string?
         _logger = logger;
     }
 
-    public async Task<string?> Handle(VerifyOTPCommand request, CancellationToken cancellationToken)
+    public async Task<VerifyOTPResponse> Handle(VerifyOTPCommand request, CancellationToken cancellationToken)
     {
         _logger.LogInformation("Verifying OTP for mobile: {Mobile}", request.Mobile);
 
@@ -34,27 +34,66 @@ public class VerifyOTPCommandHandler : IRequestHandler<VerifyOTPCommand, string?
             if (verification == null)
             {
                 _logger.LogWarning("No active OTP found for mobile: {Mobile}", request.Mobile);
-                return null;
+                return new VerifyOTPResponse(false, Message: "The code provided is invalid or has expired.");
             }
 
             if (!_hasher.Verify(request.Code, verification.CodeHash))
             {
                 _logger.LogWarning("Invalid OTP code provided for mobile: {Mobile}", request.Mobile);
-                return null;
+                return new VerifyOTPResponse(false, Message: "Invalid verification code.");
             }
 
             verification.IsUsed = true;
             await _context.SaveChangesAsync(cancellationToken);
 
-            _logger.LogInformation("OTP verified and marked as used for {Mobile}", request.Mobile);
+            // Dual-Path Logic: Login or Registration?
+            var user = await _context.Users
+                .Include(u => u.HospitalMappings)
+                .ThenInclude(m => m.Roles)
+                .FirstOrDefaultAsync(u => u.Mobile == request.Mobile, cancellationToken);
 
-            var token = _jwtProvider.GenerateInitiationToken(request.Mobile);
-            return token;
+            if (user != null && user.Status == _1Rad.Domain.Enums.UserStatus.Active)
+            {
+                _logger.LogInformation("Existing user {Mobile} verified. Routing to Full Authentication Path.", request.Mobile);
+                
+                var activeMapping = user.HospitalMappings.FirstOrDefault(m => m.IsDefault) 
+                                   ?? user.HospitalMappings.FirstOrDefault();
+
+                if (activeMapping != null)
+                {
+                    var authorizedHospitalIds = user.HospitalMappings.Select(m => m.HospitalId).ToList();
+                    var accessToken = _jwtProvider.GenerateContextualToken(user, activeMapping, authorizedHospitalIds);
+                    var refreshToken = _jwtProvider.GenerateRefreshToken();
+
+                    return new VerifyOTPResponse(
+                        Success: true,
+                        Token: accessToken,
+                        RefreshToken: refreshToken,
+                        IsRegistered: true,
+                        User: new UserDetailsDto(
+                            user.UserId, 
+                            user.FullName, 
+                            user.Email, 
+                            user.Mobile, 
+                            string.Join(", ", activeMapping.Roles.Select(r => r.RoleName).DefaultIfEmpty("User")))
+                    );
+                }
+            }
+
+            _logger.LogInformation("New or Pending user {Mobile} verified. Routing to Identity Initiation Path.", request.Mobile);
+            var initiationToken = _jwtProvider.GenerateInitiationToken(request.Mobile, user?.UserId);
+            
+            return new VerifyOTPResponse(
+                Success: true, 
+                Token: initiationToken, 
+                IsRegistered: false,
+                Message: "OTP verified. Please complete your registration."
+            );
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Unexpected error during OTP verification for {Mobile}", request.Mobile);
-            return null;
+            return new VerifyOTPResponse(false, Message: "A system error occurred during verification.");
         }
     }
 }

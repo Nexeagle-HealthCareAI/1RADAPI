@@ -9,10 +9,15 @@ namespace _1Rad.Infrastructure.Persistence;
 public class ApplicationDbContext : DbContext, IApplicationDbContext
 {
     private readonly IPublisher _publisher;
+    public IUserContext UserContext { get; }
 
-    public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options, IPublisher publisher) : base(options)
+    public ApplicationDbContext(
+        DbContextOptions<ApplicationDbContext> options, 
+        IPublisher publisher,
+        IUserContext userContext) : base(options)
     {
         _publisher = publisher;
+        UserContext = userContext;
     }
 
     public DbSet<User> Users => Set<User>();
@@ -21,6 +26,8 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<Role> Roles => Set<Role>();
     public DbSet<UserHospitalMapping> UserHospitalMappings => Set<UserHospitalMapping>();
     public DbSet<OTPVerification> OTPVerifications => Set<OTPVerification>();
+    public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
+    public DbSet<Patient> Patients => Set<Patient>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -84,9 +91,17 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
                 .WithMany(h => h.UserMappings)
                 .HasForeignKey(e => e.HospitalId);
 
-            entity.HasOne(e => e.Role)
+            entity.HasMany(e => e.Roles)
                 .WithMany(r => r.HospitalMappings)
-                .HasForeignKey(e => e.RoleId);
+                .UsingEntity<Dictionary<string, object>>(
+                    "UserHospitalRole",
+                    j => j.HasOne<Role>().WithMany().HasForeignKey("RoleId"),
+                    j => j.HasOne<UserHospitalMapping>().WithMany().HasForeignKey("MappingId"),
+                    j =>
+                    {
+                        j.ToTable("UserHospitalRoles", "dbo");
+                        j.HasKey("MappingId", "RoleId");
+                    });
         });
 
         // OTPVerification Configuration
@@ -97,6 +112,48 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.Identifier).IsRequired().HasMaxLength(100);
             entity.Property(e => e.CodeHash).IsRequired();
         });
+
+        // RefreshToken Configuration
+        modelBuilder.Entity<RefreshToken>(entity =>
+        {
+            entity.ToTable("RefreshTokens", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Token).IsRequired().HasMaxLength(500);
+            entity.HasOne(e => e.User)
+                .WithMany()
+                .HasForeignKey(e => e.UserId);
+        });
+
+        // Patient Configuration
+        modelBuilder.Entity<Patient>(entity =>
+        {
+            entity.ToTable("Patients", "dbo");
+            entity.HasKey(e => e.PatientId);
+            entity.Property(e => e.PatientIdentifier).IsRequired().HasMaxLength(50);
+            entity.HasOne(e => e.Hospital)
+                .WithMany()
+                .HasForeignKey(e => e.HospitalId);
+        });
+
+        // Tactical Global Query Filters for Multi-Facility Isolation
+        foreach (var entityType in modelBuilder.Model.GetEntityTypes())
+        {
+            if (typeof(IHospitalContext).IsAssignableFrom(entityType.ClrType))
+            {
+                // Dynamic equivalent of: HasQueryFilter(e => e.HospitalId == UserContext.HospitalId)
+                var parameter = System.Linq.Expressions.Expression.Parameter(entityType.ClrType, "e");
+                
+                var left = System.Linq.Expressions.Expression.Property(parameter, nameof(IHospitalContext.HospitalId));
+                
+                var userContextProperty = System.Linq.Expressions.Expression.Property(System.Linq.Expressions.Expression.Constant(this), nameof(UserContext));
+                var right = System.Linq.Expressions.Expression.Property(userContextProperty, nameof(IUserContext.HospitalId));
+                
+                var body = System.Linq.Expressions.Expression.Equal(left, right);
+
+                var lambda = System.Linq.Expressions.Expression.Lambda(body, parameter);
+                modelBuilder.Entity(entityType.ClrType).HasQueryFilter(lambda);
+            }
+        }
     }
 
     public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)

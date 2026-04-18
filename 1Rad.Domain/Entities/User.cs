@@ -12,8 +12,12 @@ public class User : BaseEntity
     public string PasswordHash { get; set; } = string.Empty;
     public bool IsVerified { get; set; } = false;
     public UserStatus Status { get; set; } = UserStatus.Pending;
+    public string? Specialization { get; set; }
+    public string? Degree { get; set; }
+    public string? LicenseNo { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
-
+    
     // Navigation properties
     public ICollection<UserHospitalMapping> HospitalMappings { get; set; } = new List<UserHospitalMapping>();
+    public ICollection<RefreshToken> RefreshTokens { get; set; } = new List<RefreshToken>();
 }

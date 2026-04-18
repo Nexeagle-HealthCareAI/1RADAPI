@@ -14,6 +14,7 @@ public class SendOTPCommandHandlerTests
     private readonly Mock<ISmsService> _smsMock;
     private readonly Mock<IPasswordHasher> _hasherMock;
     private readonly Mock<IPublisher> _publisherMock;
+    private readonly Mock<IUserContext> _userContextMock;
     private readonly Mock<ILogger<SendOTPCommandHandler>> _loggerMock;
     private readonly ApplicationDbContext _context;
 
@@ -22,13 +23,14 @@ public class SendOTPCommandHandlerTests
         _smsMock = new Mock<ISmsService>();
         _hasherMock = new Mock<IPasswordHasher>();
         _publisherMock = new Mock<IPublisher>();
+        _userContextMock = new Mock<IUserContext>();
         _loggerMock = new Mock<ILogger<SendOTPCommandHandler>>();
 
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()
             .UseInMemoryDatabase(databaseName: Guid.NewGuid().ToString())
             .Options;
 
-        _context = new ApplicationDbContext(options, _publisherMock.Object);
+        _context = new ApplicationDbContext(options, _publisherMock.Object, _userContextMock.Object);
     }
 
     [Fact]
