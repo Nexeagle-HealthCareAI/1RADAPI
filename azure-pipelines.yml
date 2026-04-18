@@ -9,7 +9,7 @@ pool:
 variables:
   buildConfiguration: 'Release'
   dotnetSdkVersion: '8.0.x'
-  azureServiceConnection: 'svc-conn-1rad-dev'
+  azureServiceConnection: 'onerad'
   webAppName: '1RadAPI'
   apiProject: '1RadAPI/1RadAPI.csproj'
   testProjects: '1Rad.UnitTests/1Rad.UnitTests.csproj'
