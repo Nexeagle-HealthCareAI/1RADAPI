@@ -6,6 +6,8 @@ public record AppointmentDto(
     Guid PatientId,
     string PatientName,
     string Mobile,
+    string PatientAge,
+    string PatientGender,
     string Service,
     string Modality,
     DateTime DateTime,
