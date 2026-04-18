@@ -109,11 +109,20 @@ var app = builder.Build();
 // Configure the HTTP request pipeline.
 app.UseMiddleware<ExceptionHandlingMiddleware>(); // Custom Global Exception Handler
 
-if (app.Environment.IsDevelopment())
+// Enable Swagger in all environments for testing on Azure
+app.UseSwagger();
+app.UseSwaggerUI(c =>
 {
-    app.UseSwagger();
-    app.UseSwaggerUI();
-}
+    c.SwaggerEndpoint("/swagger/v1/swagger.json", "1Rad API V1");
+    c.RoutePrefix = "swagger"; // Standard /swagger path
+});
+
+// Redirect root URL (/) to Swagger UI
+app.MapGet("/", context =>
+{
+    context.Response.Redirect("/swagger");
+    return Task.CompletedTask;
+});
 
 app.UseHttpsRedirection();
 
