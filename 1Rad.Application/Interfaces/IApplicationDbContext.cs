@@ -13,6 +13,9 @@ public interface IApplicationDbContext
     DbSet<OTPVerification> OTPVerifications { get; }
     DbSet<RefreshToken> RefreshTokens { get; }
     DbSet<Patient> Patients { get; }
+    DbSet<Referrer> Referrers { get; }
+    DbSet<Appointment> Appointments { get; }
+    IUserContext UserContext { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken);
 }
