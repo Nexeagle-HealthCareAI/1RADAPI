@@ -19,7 +19,7 @@ public class DeployInfrastructureCommandValidatorTests
         // Arrange
         var command = new DeployInfrastructureCommand(
             Guid.NewGuid(), "Chain A", "Hospital 1", "Address 1", 
-            RoleConstants.AdminDoctor, null, null, "LIC123");
+            RoleConstants.AdminDoctor, null, null, null, null, null, null, "LIC123");
 
         // Act
         var result = _validator.Validate(command);
@@ -35,7 +35,7 @@ public class DeployInfrastructureCommandValidatorTests
         // Arrange
         var command = new DeployInfrastructureCommand(
             Guid.NewGuid(), "Chain A", "Hospital 1", "Address 1", 
-            RoleConstants.AdminDoctor, "Radiology", "MBBS", "LIC123");
+            RoleConstants.AdminDoctor, null, null, null, null, "Radiology", "MBBS", "LIC123");
 
         // Act
         var result = _validator.Validate(command);
@@ -50,7 +50,7 @@ public class DeployInfrastructureCommandValidatorTests
         // Arrange
         var command = new DeployInfrastructureCommand(
             Guid.NewGuid(), "Chain A", "Hospital 1", "Address 1", 
-            RoleConstants.AdminOperator, null, null, null);
+            RoleConstants.AdminOperator, null, null, null, null, null, null, null);
 
         // Act
         var result = _validator.Validate(command);

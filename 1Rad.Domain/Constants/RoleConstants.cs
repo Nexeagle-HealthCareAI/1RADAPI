@@ -5,10 +5,6 @@ public static class RoleConstants
     /// <summary>
     /// Chief Medical Officer / Clinical Administrator
     /// </summary>
-    public const int AdminDoctor = 1;
-
-    /// <summary>
-    /// Operations Director / Business Administrator
-    /// </summary>
-    public const int AdminOperator = 2;
+    public const string AdminDoctor = "AdminDoctor";
+    public const string AdminOperator = "Admin";
 }

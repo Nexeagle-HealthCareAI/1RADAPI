@@ -63,12 +63,12 @@ public class DeployInfrastructureCommandHandler : IRequestHandler<DeployInfrastr
             _context.Hospitals.Add(hospital);
 
             // 4. Map Authority
-            _logger.LogDebug("Mapping User {UserId} to Hospital {HospitalId} with Role {RoleId}", user.UserId, hospital.HospitalId, request.RoleId);
+            _logger.LogDebug("Mapping User {UserId} to Hospital {HospitalId} with Role {RoleName}", user.UserId, hospital.HospitalId, request.RoleName);
             
-            var role = await _context.Roles.FindAsync(new object[] { request.RoleId }, cancellationToken);
+            var role = await _context.Roles.FirstOrDefaultAsync(r => r.RoleName == request.RoleName, cancellationToken);
             if (role == null)
             {
-                _logger.LogWarning("Deployment failed: Role {RoleId} not found.", request.RoleId);
+                _logger.LogWarning("Deployment failed: Role {RoleName} not found.", request.RoleName);
                 return (false, "Specified role not found.");
             }
 

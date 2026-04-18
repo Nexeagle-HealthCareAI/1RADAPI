@@ -40,7 +40,7 @@ public class DeployInfrastructureCommandHandlerTests
         _context.Roles.Add(new Role { RoleId = 1, RoleName = "AdminDoctor" });
         await _context.SaveChangesAsync();
 
-        var command = new DeployInfrastructureCommand(user.UserId, "Chain A", "Hospital 1", "Address 1", 1, "Radiology", "MBBS, MD", "LIC123");
+        var command = new DeployInfrastructureCommand(user.UserId, "Chain A", "Hospital 1", "Address 1", "AdminDoctor", null, null, null, null, "Radiology", "MBBS, MD", "LIC123");
         var handler = new DeployInfrastructureCommandHandler(_context, _loggerMock.Object);
 
         // Act

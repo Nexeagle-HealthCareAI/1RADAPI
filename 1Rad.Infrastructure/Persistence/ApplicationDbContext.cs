@@ -113,6 +113,16 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
                     });
         });
 
+        // Seed Roles
+        modelBuilder.Entity<Role>().HasData(
+            new Role { RoleId = 1, RoleName = "AdminDoctor" },
+            new Role { RoleId = 2, RoleName = "Admin" },
+            new Role { RoleId = 3, RoleName = "Doctor" },
+            new Role { RoleId = 4, RoleName = "Technician" },
+            new Role { RoleId = 5, RoleName = "Receptionist" },
+            new Role { RoleId = 6, RoleName = "Accountant" }
+        );
+
         // OTPVerification Configuration
         modelBuilder.Entity<OTPVerification>(entity =>
         {

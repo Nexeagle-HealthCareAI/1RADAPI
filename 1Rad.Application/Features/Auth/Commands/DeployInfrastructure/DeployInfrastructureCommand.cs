@@ -8,7 +8,7 @@ public record DeployInfrastructureCommand(
     string ChainName, 
     string HospitalName, 
     string HospitalAddress, 
-    int RoleId,
+    string RoleName,
     string? GSTINNumber = null,
     string? RegistrationNumber = null,
     string? PANNumber = null,
