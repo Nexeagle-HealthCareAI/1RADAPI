@@ -47,7 +47,13 @@ public class AuthController : ControllerBase
     public async Task<IActionResult> SendOTP([FromBody] SendOTPCommand command)
     {
         var result = await _mediator.Send(command);
-        return result 
+
+        if (result.IsAlreadyRegistered)
+        {
+            return Ok(new { message = "You are already registered. Please try to login." });
+        }
+
+        return result.Success 
             ? Ok(new { message = "OTP sent successfully." }) 
             : StatusCode(StatusCodes.Status500InternalServerError, new { message = "Infrastructure failure while sending OTP." });
     }

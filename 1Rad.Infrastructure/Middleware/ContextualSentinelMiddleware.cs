@@ -31,6 +31,14 @@ public class ContextualSentinelMiddleware
 
         if (context.User.Identity?.IsAuthenticated == true)
         {
+            // Tactical: Initiation and PasswordReset tokens do not have hospital context
+            var tokenType = context.User.FindFirstValue("type");
+            if (tokenType != null && tokenType != "access")
+            {
+                await _next(context);
+                return;
+            }
+
             var userId = userContext.UserId;
             var currentHospitalId = userContext.HospitalId;
             var authorizedHubs = userContext.AuthorizedHospitalIds.ToList();
