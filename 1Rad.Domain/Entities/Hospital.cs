@@ -9,6 +9,9 @@ public class Hospital : BaseEntity
     public string HospitalName { get; set; } = string.Empty;
     public string HospitalAddress { get; set; } = string.Empty;
     public string? GSTIN { get; set; }
+    public string? RegistrationNumber { get; set; }
+    public string? PAN { get; set; }
+    public string? NABHNumber { get; set; }
     public string Status { get; set; } = "Active";
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 

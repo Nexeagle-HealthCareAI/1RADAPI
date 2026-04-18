@@ -54,6 +54,10 @@ public class DeployInfrastructureCommandHandler : IRequestHandler<DeployInfrastr
                 GroupId = group.GroupId,
                 HospitalName = request.HospitalName,
                 HospitalAddress = request.HospitalAddress,
+                GSTIN = request.GSTINNumber,
+                RegistrationNumber = request.RegistrationNumber,
+                PAN = request.PANNumber,
+                NABHNumber = request.NABHNumber,
                 Status = "Active"
             };
             _context.Hospitals.Add(hospital);

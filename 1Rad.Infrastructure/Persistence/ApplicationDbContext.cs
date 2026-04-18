@@ -62,6 +62,13 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.HasKey(e => e.HospitalId);
             entity.Property(e => e.HospitalName).IsRequired().HasMaxLength(255);
             entity.Property(e => e.HospitalAddress).IsRequired();
+            
+            // Metadata Fields
+            entity.Property(e => e.GSTIN).HasMaxLength(15);
+            entity.Property(e => e.RegistrationNumber).HasMaxLength(100);
+            entity.Property(e => e.PAN).HasMaxLength(10);
+            entity.Property(e => e.NABHNumber).HasMaxLength(100);
+
             entity.HasOne(e => e.Group)
                 .WithMany(g => g.Hospitals)
                 .HasForeignKey(e => e.GroupId)

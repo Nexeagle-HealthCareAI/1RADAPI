@@ -19,6 +19,16 @@ public class ContextualSentinelMiddleware
 
     public async Task InvokeAsync(HttpContext context, IUserContext userContext)
     {
+        // Skip validation for public endpoints or endpoints explicitly allowing anonymous access
+        var endpoint = context.GetEndpoint();
+        if (endpoint != null && 
+            (endpoint.Metadata.GetMetadata<Microsoft.AspNetCore.Authorization.IAllowAnonymous>() != null || 
+             !endpoint.Metadata.Any(m => m is Microsoft.AspNetCore.Authorization.IAuthorizeData)))
+        {
+            await _next(context);
+            return;
+        }
+
         if (context.User.Identity?.IsAuthenticated == true)
         {
             var userId = userContext.UserId;
