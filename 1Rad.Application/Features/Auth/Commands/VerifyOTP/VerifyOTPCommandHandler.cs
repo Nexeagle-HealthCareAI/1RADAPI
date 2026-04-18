@@ -65,6 +65,16 @@ public class VerifyOTPCommandHandler : IRequestHandler<VerifyOTPCommand, VerifyO
                     var accessToken = _jwtProvider.GenerateContextualToken(user, activeMapping, authorizedHospitalIds);
                     var refreshToken = _jwtProvider.GenerateRefreshToken();
 
+                    // Persist Refresh Token
+                    var refreshTokenEntity = new _1Rad.Domain.Entities.RefreshToken
+                    {
+                        UserId = user.UserId,
+                        Token = refreshToken,
+                        ExpiresAt = DateTime.UtcNow.AddDays(7)
+                    };
+                    _context.RefreshTokens.Add(refreshTokenEntity);
+                    await _context.SaveChangesAsync(cancellationToken);
+
                     return new VerifyOTPResponse(
                         Success: true,
                         Token: accessToken,
@@ -93,7 +103,7 @@ public class VerifyOTPCommandHandler : IRequestHandler<VerifyOTPCommand, VerifyO
         catch (Exception ex)
         {
             _logger.LogError(ex, "Unexpected error during OTP verification for {Mobile}", request.Mobile);
-            return new VerifyOTPResponse(false, Message: "A system error occurred during verification.");
+            return new VerifyOTPResponse(false, Message: $"Internal Error: {ex.Message} | {ex.InnerException?.Message}");
         }
     }
 }

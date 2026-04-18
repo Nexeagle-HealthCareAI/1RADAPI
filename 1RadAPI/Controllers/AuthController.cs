@@ -175,7 +175,7 @@ public class AuthController : ControllerBase
     {
         var (success, resetToken, error) = await _mediator.Send(command);
         return success 
-            ? Ok(new { resetToken }) 
+            ? Ok(new { success = true, resetToken }) 
             : BadRequest(new { error });
     }
 
