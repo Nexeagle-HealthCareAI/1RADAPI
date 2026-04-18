@@ -28,6 +28,8 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<OTPVerification> OTPVerifications => Set<OTPVerification>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<Patient> Patients => Set<Patient>();
+    public DbSet<Referrer> Referrers => Set<Referrer>();
+    public DbSet<Appointment> Appointments => Set<Appointment>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -136,7 +138,46 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
         {
             entity.ToTable("Patients", "dbo");
             entity.HasKey(e => e.PatientId);
+            entity.Property(e => e.FullName).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.Mobile).HasMaxLength(20);
             entity.Property(e => e.PatientIdentifier).IsRequired().HasMaxLength(50);
+            entity.HasIndex(e => e.Mobile);
+            
+            entity.HasOne(e => e.Hospital)
+                .WithMany()
+                .HasForeignKey(e => e.HospitalId);
+        });
+
+        // Referrer Configuration
+        modelBuilder.Entity<Referrer>(entity =>
+        {
+            entity.ToTable("Referrers", "dbo");
+            entity.HasKey(e => e.ReferrerId);
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.Contact).HasMaxLength(20);
+            
+            entity.HasOne(e => e.Hospital)
+                .WithMany()
+                .HasForeignKey(e => e.HospitalId);
+        });
+
+        // Appointment Configuration
+        modelBuilder.Entity<Appointment>(entity =>
+        {
+            entity.ToTable("Appointments", "dbo");
+            entity.HasKey(e => e.AppointmentId);
+            entity.Property(e => e.DisplayId).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.PatientName).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.Service).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.Modality).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.Type).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.Status).IsRequired().HasMaxLength(50);
+            
+            entity.HasOne(e => e.Patient)
+                .WithMany()
+                .HasForeignKey(e => e.PatientId)
+                .OnDelete(DeleteBehavior.Restrict);
+
             entity.HasOne(e => e.Hospital)
                 .WithMany()
                 .HasForeignKey(e => e.HospitalId);

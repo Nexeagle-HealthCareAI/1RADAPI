@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 
 namespace _1Rad.Application.Features.Auth.Commands.SendOTP;
 
-public class SendOTPCommandHandler : IRequestHandler<SendOTPCommand, bool>
+public class SendOTPCommandHandler : IRequestHandler<SendOTPCommand, SendOTPResponse>
 {
     private readonly IApplicationDbContext _context;
     private readonly ISmsService _sms;

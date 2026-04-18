@@ -46,7 +46,7 @@ public class SendOTPCommandHandlerTests
         var result = await handler.Handle(command, CancellationToken.None);
 
         // Assert
-        result.Should().BeTrue();
+        result.Success.Should().BeTrue();
         
         var verification = await _context.OTPVerifications.FirstOrDefaultAsync(x => x.Identifier == "9876543210");
         verification.Should().NotBeNull();
