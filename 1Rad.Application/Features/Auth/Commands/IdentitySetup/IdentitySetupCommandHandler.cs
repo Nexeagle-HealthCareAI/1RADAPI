@@ -28,23 +28,34 @@ public class IdentitySetupCommandHandler : IRequestHandler<IdentitySetupCommand,
 
         try
         {
-            // 1. Uniqueness check
-            if (await _context.Users.AnyAsync(u => u.Email == request.Email, cancellationToken))
+            // 1. Check for existing user
+            var existingUser = await _context.Users
+                .FirstOrDefaultAsync(u => u.Email == request.Email || u.Mobile == request.Mobile, cancellationToken);
+
+            if (existingUser != null)
             {
-                _logger.LogWarning("Email already in use: {Email}", request.Email);
-                return (null, null, "Email already in use.");
+                if (existingUser.Status == UserStatus.Active)
+                {
+                    _logger.LogWarning("Identity attempt for already active user: {Email}/{Mobile}", request.Email, request.Mobile);
+                    return (null, null, "This identity is already active and registered. Please login.");
+                }
+
+                _logger.LogInformation("Updating existing Pending user: {UserId}", existingUser.UserId);
+                
+                // Update credentials for fresh start
+                existingUser.FullName = request.FullName;
+                existingUser.Email = request.Email;
+                existingUser.Mobile = request.Mobile;
+                existingUser.PasswordHash = _hasher.Hash(request.Password);
+                
+                await _context.SaveChangesAsync(cancellationToken);
+
+                var updateToken = _jwtProvider.GenerateInitiationToken(existingUser.Mobile, existingUser.UserId);
+                return (existingUser.UserId, updateToken, null);
             }
 
-            if (await _context.Users.AnyAsync(u => u.Mobile == request.Mobile, cancellationToken))
-            {
-                _logger.LogWarning("Mobile already in use: {Mobile}", request.Mobile);
-                return (null, null, "Mobile already in use.");
-            }
-
-            // 2. Hash Password
+            // 2. Create new User if none exists
             var passwordHash = _hasher.Hash(request.Password);
-
-            // 3. Create User
             var user = new User
             {
                 FullName = request.FullName,
@@ -52,7 +63,7 @@ public class IdentitySetupCommandHandler : IRequestHandler<IdentitySetupCommand,
                 Mobile = request.Mobile,
                 PasswordHash = passwordHash,
                 Status = UserStatus.Pending,
-                IsVerified = false // verified after infra deployment in Stage 3
+                IsVerified = false
             };
 
             _context.Users.Add(user);
