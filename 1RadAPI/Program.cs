@@ -68,6 +68,22 @@ builder.Services.AddRateLimiter(options =>
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 });
 
+// Configure CORS
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowedOrigins", policy =>
+    {
+        var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() 
+            ?? new[] { "http://localhost:5173", "https://gray-tree-058a09500.1.azurestaticapps.net" };
+        
+        policy.WithOrigins(allowedOrigins)
+              .AllowAnyMethod()
+              .AllowAnyHeader()
+              .AllowCredentials()
+              .SetPreflightMaxAge(TimeSpan.FromMinutes(10)); // Cache preflight requests
+    });
+});
+
 // JWT Authentication Configuration
 var jwtSettings = builder.Configuration.GetSection("Jwt");
 var secretKey = jwtSettings["Secret"] ?? "a_very_long_and_secure_secret_key_for_1rad_api_development_2026";
@@ -126,6 +142,8 @@ app.MapGet("/", context =>
 });
 
 app.UseHttpsRedirection();
+
+app.UseCors("AllowedOrigins"); // Enable CORS
 
 app.UseRateLimiter(); // Apply Rate Limiting
 
