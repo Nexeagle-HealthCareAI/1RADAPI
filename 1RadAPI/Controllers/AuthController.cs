@@ -48,13 +48,12 @@ public class AuthController : ControllerBase
     {
         var result = await _mediator.Send(command);
 
-        if (result.IsAlreadyRegistered)
-        {
-            return Ok(new { message = "You are already registered. Please try to login." });
-        }
-
         return result.Success 
-            ? Ok(new { message = result.IsAlreadyRegistered ? result.Message ?? "You are already registered. Please try to login." : "OTP sent successfully." }) 
+            ? Ok(new { 
+                success = true,
+                isAlreadyRegistered = result.IsAlreadyRegistered,
+                message = result.IsAlreadyRegistered ? "Mobile registered. Proceeding with authentication." : "OTP sent successfully." 
+              }) 
             : StatusCode(StatusCodes.Status500InternalServerError, new { message = result.Message ?? "Infrastructure failure while sending OTP." });
     }
 

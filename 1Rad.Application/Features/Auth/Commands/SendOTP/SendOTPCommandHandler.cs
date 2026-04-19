@@ -33,10 +33,11 @@ public class SendOTPCommandHandler : IRequestHandler<SendOTPCommand, SendOTPResp
             var existingUser = await _context.Users
                 .FirstOrDefaultAsync(u => u.Mobile == request.Mobile, cancellationToken);
             
+            var isAlreadyRegistered = false;
             if (existingUser != null && existingUser.Status == _1Rad.Domain.Enums.UserStatus.Active)
             {
-                _logger.LogInformation("User {Mobile} is already registered and active. Redirecting to login path.", request.Mobile);
-                return new SendOTPResponse(Success: true, IsAlreadyRegistered: true);
+                _logger.LogInformation("User {Mobile} is already registered and active. Proceeding with OTP dispatch for authentication path.", request.Mobile);
+                isAlreadyRegistered = true;
             }
 
             // 2. Generate a secure 6-digit passcode
@@ -84,7 +85,7 @@ public class SendOTPCommandHandler : IRequestHandler<SendOTPCommand, SendOTPResp
             if (emailTask != null) await emailTask;
             
             _logger.LogInformation("OTP successfully dispatched to {Mobile}", request.Mobile);
-            return new SendOTPResponse(Success: true);
+            return new SendOTPResponse(Success: true, IsAlreadyRegistered: isAlreadyRegistered);
         }
         catch (Exception ex)
         {
