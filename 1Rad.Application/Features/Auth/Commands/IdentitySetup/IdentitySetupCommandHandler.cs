@@ -7,7 +7,7 @@ using Microsoft.Extensions.Logging;
 
 namespace _1Rad.Application.Features.Auth.Commands.IdentitySetup;
 
-public class IdentitySetupCommandHandler : IRequestHandler<IdentitySetupCommand, (Guid? UserId, string? Token, string? Error)>
+public class IdentitySetupCommandHandler : IRequestHandler<IdentitySetupCommand, IdentitySetupResponse>
 {
     private readonly IApplicationDbContext _context;
     private readonly IPasswordHasher _hasher;

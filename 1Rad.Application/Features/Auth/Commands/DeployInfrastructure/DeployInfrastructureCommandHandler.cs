@@ -8,7 +8,7 @@ using Microsoft.Extensions.Logging;
 
 namespace _1Rad.Application.Features.Auth.Commands.DeployInfrastructure;
 
-public class DeployInfrastructureCommandHandler : IRequestHandler<DeployInfrastructureCommand, (bool Success, string? Error)>
+public class DeployInfrastructureCommandHandler : IRequestHandler<DeployInfrastructureCommand, DeployInfrastructureResponse>
 {
     private readonly IApplicationDbContext _context;
     private readonly ILogger<DeployInfrastructureCommandHandler> _logger;
