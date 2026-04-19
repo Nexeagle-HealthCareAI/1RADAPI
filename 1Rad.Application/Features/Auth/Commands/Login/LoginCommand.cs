@@ -10,6 +10,8 @@ public class LoginResponse
     public string? AccessToken { get; set; }
     public string? RefreshToken { get; set; }
     public string? Error { get; set; }
+    public string? ErrorCode { get; set; } // USER_NOT_FOUND, ACCOUNT_INACTIVE, INVALID_CREDENTIALS
+    public string? AccountStatus { get; set; }
     public UserProfileDto? UserProfile { get; set; }
 }
 

@@ -43,21 +43,34 @@ public class LoginCommandHandler : IRequestHandler<LoginCommand, LoginResponse>
             if (user == null)
             {
                 _logger.LogWarning("Login failed: User not found for {Identifier}", request.Identifier);
-                return new LoginResponse { Success = false, Error = "Invalid credentials." };
+                return new LoginResponse { 
+                    Success = false, 
+                    Error = "This identity is not recognized in the 1Rad grid.",
+                    ErrorCode = "USER_NOT_FOUND"
+                };
             }
 
             // 2. Security Check: Status
             if (user.Status != UserStatus.Active)
             {
                 _logger.LogWarning("Login blocked: User {UserId} is not Active (Status: {Status})", user.UserId, user.Status);
-                return new LoginResponse { Success = false, Error = "Account is not active. Please complete registration or contact support." };
+                return new LoginResponse { 
+                    Success = false, 
+                    Error = $"Action Required: Your clinical account is currently {user.Status}.",
+                    ErrorCode = "ACCOUNT_INACTIVE",
+                    AccountStatus = user.Status.ToString()
+                };
             }
 
             // 3. Verify Password
             if (!_passwordHasher.Verify(request.Password, user.PasswordHash))
             {
                 _logger.LogWarning("Login failed: Invalid password for user {UserId}", user.UserId);
-                return new LoginResponse { Success = false, Error = "Invalid credentials." };
+                return new LoginResponse { 
+                    Success = false, 
+                    Error = "Invalid credentials protocol failed. Verify your secure key.",
+                    ErrorCode = "INVALID_CREDENTIALS"
+                };
             }
 
             // 4. Resolve Authority Matrix
