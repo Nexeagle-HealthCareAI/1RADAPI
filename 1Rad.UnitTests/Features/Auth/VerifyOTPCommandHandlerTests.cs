@@ -61,7 +61,8 @@ public class VerifyOTPCommandHandlerTests
         var result = await handler.Handle(command, CancellationToken.None);
 
         // Assert
-        result.Should().Be("valid_token");
+        result.Success.Should().BeTrue();
+        result.Token.Should().Be("valid_token");
         
         var verification = await _context.OTPVerifications.FirstAsync();
         verification.IsUsed.Should().BeTrue();
@@ -92,6 +93,7 @@ public class VerifyOTPCommandHandlerTests
         var result = await handler.Handle(command, CancellationToken.None);
 
         // Assert
-        result.Should().BeNull();
+        result.Success.Should().BeFalse();
+        result.Token.Should().BeNull();
     }
 }

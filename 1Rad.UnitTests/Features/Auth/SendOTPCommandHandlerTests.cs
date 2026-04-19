@@ -12,6 +12,7 @@ namespace _1Rad.UnitTests.Features.Auth;
 public class SendOTPCommandHandlerTests
 {
     private readonly Mock<ISmsService> _smsMock;
+    private readonly Mock<IEmailService> _emailMock;
     private readonly Mock<IPasswordHasher> _hasherMock;
     private readonly Mock<IPublisher> _publisherMock;
     private readonly Mock<IUserContext> _userContextMock;
@@ -21,6 +22,7 @@ public class SendOTPCommandHandlerTests
     public SendOTPCommandHandlerTests()
     {
         _smsMock = new Mock<ISmsService>();
+        _emailMock = new Mock<IEmailService>();
         _hasherMock = new Mock<IPasswordHasher>();
         _publisherMock = new Mock<IPublisher>();
         _userContextMock = new Mock<IUserContext>();
@@ -40,7 +42,7 @@ public class SendOTPCommandHandlerTests
         var command = new SendOTPCommand("9876543210");
         _hasherMock.Setup(x => x.Hash(It.IsAny<string>())).Returns("hashed_otp");
         
-        var handler = new SendOTPCommandHandler(_context, _smsMock.Object, _hasherMock.Object, _loggerMock.Object);
+        var handler = new SendOTPCommandHandler(_context, _smsMock.Object, _emailMock.Object, _hasherMock.Object, _loggerMock.Object);
 
         // Act
         var result = await handler.Handle(command, CancellationToken.None);
