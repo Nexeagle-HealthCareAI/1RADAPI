@@ -73,7 +73,7 @@ public class AuthController : ControllerBase
         var result = await _mediator.Send(command);
         return result.Success 
             ? Ok(result) 
-            : Unauthorized(new { message = result.Message });
+            : Unauthorized(result);
     }
 
     /// <summary>
@@ -93,7 +93,7 @@ public class AuthController : ControllerBase
         var result = await _mediator.Send(command);
         
         if (result.Error != null) 
-            return BadRequest(new { error = result.Error });
+            return BadRequest(result);
             
         return Ok(new { userId = result.UserId, token = result.Token, message = "Identity created. Proceed to infrastructure deployment." });
     }
@@ -115,7 +115,7 @@ public class AuthController : ControllerBase
         var result = await _mediator.Send(command);
         return result.Success 
             ? Ok(new { message = "Clinical Hub infrastructure deployed successfully. Welcome aboard!" }) 
-            : BadRequest(new { error = result.Error });
+            : BadRequest(result);
     }
 
     /// <summary>
@@ -127,7 +127,7 @@ public class AuthController : ControllerBase
     public async Task<IActionResult> Login([FromBody] LoginCommand command)
     {
         var result = await _mediator.Send(command);
-        return result.Success ? Ok(result) : Unauthorized(new { error = result.Error });
+        return result.Success ? Ok(result) : Unauthorized(result);
     }
 
     /// <summary>
@@ -139,7 +139,7 @@ public class AuthController : ControllerBase
     public async Task<IActionResult> Refresh([FromBody] RefreshTokenCommand command)
     {
         var result = await _mediator.Send(command);
-        return result.Success ? Ok(result) : Unauthorized(new { error = result.Error });
+        return result.Success ? Ok(result) : Unauthorized(result);
     }
 
     /// <summary>
