@@ -139,7 +139,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Token).IsRequired().HasMaxLength(500);
             entity.HasOne(e => e.User)
-                .WithMany()
+                .WithMany(u => u.RefreshTokens)
                 .HasForeignKey(e => e.UserId);
         });
 
