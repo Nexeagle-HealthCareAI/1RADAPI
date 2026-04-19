@@ -15,4 +15,11 @@ public record DeployInfrastructureCommand(
     string? NABHNumber = null,
     string? Specialization = null,
     string? Degree = null,
-    string? LicenseNo = null) : IRequest<(bool Success, string? Error)>;
+    string? LicenseNo = null) : IRequest<DeployInfrastructureResponse>;
+
+public class DeployInfrastructureResponse
+{
+    public bool Success { get; set; }
+    public string? Error { get; set; }
+    public string? ErrorCode { get; set; }
+}

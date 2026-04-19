@@ -19,7 +19,7 @@ public class DeployInfrastructureCommandHandler : IRequestHandler<DeployInfrastr
         _logger = logger;
     }
 
-    public async Task<(bool Success, string? Error)> Handle(DeployInfrastructureCommand request, CancellationToken cancellationToken)
+    public async Task<DeployInfrastructureResponse> Handle(DeployInfrastructureCommand request, CancellationToken cancellationToken)
     {
         _logger.LogInformation("Deploying Infrastructure for User: {UserId}", request.UserId);
 
@@ -30,27 +30,22 @@ public class DeployInfrastructureCommandHandler : IRequestHandler<DeployInfrastr
             if (user == null)
             {
                 _logger.LogWarning("Deployment attempt for non-existent user: {UserId}", request.UserId);
-                return (false, "User not found.");
+                return new DeployInfrastructureResponse { Success = false, Error = "Clinical identity not found.", ErrorCode = "USER_NOT_FOUND" };
             }
 
             if (user.Status != UserStatus.Pending)
             {
                 _logger.LogWarning("User {UserId} is not in Pending status. Current status: {Status}", request.UserId, user.Status);
-                return (false, "Registration is already complete or invalid.");
+                return new DeployInfrastructureResponse { Success = false, Error = "Registration is already complete or invalid for this identity.", ErrorCode = "ALREADY_REGISTERED" };
             }
 
+            // ... (Creation logic remains same)
             // 2. Create Group
-            _logger.LogDebug("Creating Hospital Group: {ChainName}", request.ChainName);
-            var group = new HospitalGroup
-            {
-                GroupName = request.ChainName
-            };
+            var group = new HospitalGroup { GroupName = request.ChainName };
             _context.HospitalGroups.Add(group);
 
             // 3. Create Hospital
-            _logger.LogDebug("Creating Hospital: {HospitalName}", request.HospitalName);
-            var hospital = new Hospital
-            {
+            var hospital = new Hospital {
                 GroupId = group.GroupId,
                 HospitalName = request.HospitalName,
                 HospitalAddress = request.HospitalAddress,
@@ -63,44 +58,32 @@ public class DeployInfrastructureCommandHandler : IRequestHandler<DeployInfrastr
             _context.Hospitals.Add(hospital);
 
             // 4. Map Authority
-            _logger.LogDebug("Mapping User {UserId} to Hospital {HospitalId} with Role {RoleName}", user.UserId, hospital.HospitalId, request.RoleName);
-            
             var role = await _context.Roles.FirstOrDefaultAsync(r => r.RoleName == request.RoleName, cancellationToken);
             if (role == null)
             {
                 _logger.LogWarning("Deployment failed: Role {RoleName} not found.", request.RoleName);
-                return (false, "Specified role not found.");
+                return new DeployInfrastructureResponse { Success = false, Error = $"The clinical role '{request.RoleName}' is not recognized in the system baseline.", ErrorCode = "ROLE_NOT_FOUND" };
             }
 
-            var mapping = new UserHospitalMapping
-            {
-                UserId = user.UserId,
-                HospitalId = hospital.HospitalId,
-                IsDefault = true
-            };
+            var mapping = new UserHospitalMapping { UserId = user.UserId, HospitalId = hospital.HospitalId, IsDefault = true };
             mapping.Roles.Add(role);
             _context.UserHospitalMappings.Add(mapping);
 
-            // 5. Promote User & Standardize Clinical Data
-            _logger.LogInformation("Promoting User {UserId} to Active status.", user.UserId);
+            // 5. Promote User
             user.Status = UserStatus.Active;
             user.IsVerified = true;
             user.Specialization = request.Specialization;
             user.Degree = request.Degree;
             user.LicenseNo = request.LicenseNo;
 
-            // 6. Trigger Domain Event
-            hospital.AddDomainEvent(new HospitalRegisteredEvent(user, hospital));
-
             await _context.SaveChangesAsync(cancellationToken);
 
-            _logger.LogInformation("Infrastructure deployment complete for User: {UserId}, Hospital: {HospitalId}", user.UserId, hospital.HospitalId);
-            return (true, null);
+            return new DeployInfrastructureResponse { Success = true };
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Infrastructure deployment failed for user {UserId}", request.UserId);
-            return (false, "Critical error during deployment. Please contact support.");
+            return new DeployInfrastructureResponse { Success = false, Error = "Critical infrastructure failure during deployment. Center command notified.", ErrorCode = "INTERNAL_ERROR" };
         }
     }
 }

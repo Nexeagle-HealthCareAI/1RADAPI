@@ -6,4 +6,12 @@ public record IdentitySetupCommand(
     string FullName, 
     string Email, 
     string Mobile, 
-    string Password) : IRequest<(Guid? UserId, string? Token, string? Error)>;
+    string Password) : IRequest<IdentitySetupResponse>;
+
+public class IdentitySetupResponse
+{
+    public Guid? UserId { get; set; }
+    public string? Token { get; set; }
+    public string? Error { get; set; }
+    public string? ErrorCode { get; set; }
+}

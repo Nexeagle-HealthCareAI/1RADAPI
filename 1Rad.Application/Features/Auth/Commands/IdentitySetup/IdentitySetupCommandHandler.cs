@@ -22,7 +22,7 @@ public class IdentitySetupCommandHandler : IRequestHandler<IdentitySetupCommand,
         _logger = logger;
     }
 
-    public async Task<(Guid? UserId, string? Token, string? Error)> Handle(IdentitySetupCommand request, CancellationToken cancellationToken)
+    public async Task<IdentitySetupResponse> Handle(IdentitySetupCommand request, CancellationToken cancellationToken)
     {
         _logger.LogInformation("Processing Identity Setup for mobile: {Mobile}", request.Mobile);
 
@@ -37,7 +37,10 @@ public class IdentitySetupCommandHandler : IRequestHandler<IdentitySetupCommand,
                 if (existingUser.Status == UserStatus.Active)
                 {
                     _logger.LogWarning("Identity attempt for already active user: {Email}/{Mobile}", request.Email, request.Mobile);
-                    return (null, null, "This identity is already active and registered. Please login.");
+                    return new IdentitySetupResponse { 
+                        Error = "This identity is already fully registered and active. Please proceed to login.",
+                        ErrorCode = "IDENTITY_ALREADY_ACTIVE"
+                    };
                 }
 
                 _logger.LogInformation("Updating existing Pending user: {UserId}", existingUser.UserId);
@@ -51,7 +54,7 @@ public class IdentitySetupCommandHandler : IRequestHandler<IdentitySetupCommand,
                 await _context.SaveChangesAsync(cancellationToken);
 
                 var updateToken = _jwtProvider.GenerateInitiationToken(existingUser.Mobile, existingUser.UserId);
-                return (existingUser.UserId, updateToken, null);
+                return new IdentitySetupResponse { UserId = existingUser.UserId, Token = updateToken };
             }
 
             // 2. Create new User if none exists
@@ -74,12 +77,12 @@ public class IdentitySetupCommandHandler : IRequestHandler<IdentitySetupCommand,
             // 4. Return new JWT with UserId
             var token = _jwtProvider.GenerateInitiationToken(user.Mobile, user.UserId);
 
-            return (user.UserId, token, null);
+            return new IdentitySetupResponse { UserId = user.UserId, Token = token };
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Unexpected error during identity setup for {Mobile}", request.Mobile);
-            return (null, null, $"Internal error: {ex.Message}");
+            return new IdentitySetupResponse { Error = $"Critical registration error: {ex.Message}", ErrorCode = "INTERNAL_ERROR" };
         }
     }
 }
