@@ -2,6 +2,7 @@ using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Events;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
+using System.Security.Claims;
 
 namespace _1Rad.Application.Features.Auth.Commands.ResetPassword;
 
@@ -23,22 +24,29 @@ public class ResetPasswordCommandHandler : IRequestHandler<ResetPasswordCommand,
         try
         {
             // 1. Verify Reset JWT using IJwtProvider
-            var principal = _jwtProvider.ValidateToken(request.ResetToken, "password-reset");
+            string token = request.ResetToken;
+            var principal = _jwtProvider.ValidateToken(token, "password-reset");
             if (principal == null)
             {
                 return (false, "Invalid or expired reset token.");
             }
 
-            var userIdClaim = principal.FindFirst("sub")?.Value;
+            // Try both 'sub' and NameIdentifier due to potential claim mapping by JwtSecurityTokenHandler
+            var claim = principal.FindFirst("sub") ?? principal.FindFirst(ClaimTypes.NameIdentifier);
+            string? userIdClaim = claim?.Value;
+
             if (string.IsNullOrEmpty(userIdClaim))
             {
                 return (false, "Invalid token claims.");
             }
 
-            var userId = Guid.Parse(userIdClaim);
+            if (!Guid.TryParse(userIdClaim, out Guid userId))
+            {
+                return (false, "Invalid user identity in token.");
+            }
 
             // 2. Resolve User
-            var user = await _context.Users.FindAsync(new object[] { userId }, cancellationToken);
+            var user = await _context.Users.FirstOrDefaultAsync(u => u.UserId == userId, cancellationToken);
             if (user == null)
             {
                 return (false, "Account not found.");
@@ -47,11 +55,15 @@ public class ResetPasswordCommandHandler : IRequestHandler<ResetPasswordCommand,
             // 3. Update Password
             user.PasswordHash = _hasher.Hash(request.NewPassword);
 
-            // 4. Invalidate Sessions (Optional: could delete refresh tokens here)
-            var activeTokens = await _context.RefreshTokens
+            // 4. Invalidate Sessions
+            var tokensToRemove = await _context.RefreshTokens
                 .Where(t => t.UserId == userId)
                 .ToListAsync(cancellationToken);
-            _context.RefreshTokens.RemoveRange(activeTokens);
+            
+            if (tokensToRemove.Any())
+            {
+                _context.RefreshTokens.RemoveRange(tokensToRemove);
+            }
 
             // 5. Audit Event
             user.AddDomainEvent(new UserPasswordChangedEvent(user));

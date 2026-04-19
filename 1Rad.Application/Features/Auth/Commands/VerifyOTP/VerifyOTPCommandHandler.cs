@@ -83,6 +83,7 @@ public class VerifyOTPCommandHandler : IRequestHandler<VerifyOTPCommand, VerifyO
                         RefreshToken: refreshToken,
                         IsRegistered: true,
                         User: new UserDetailsDto(
+                        user.UserId,
                         user.FullName, 
                         user.Email, 
                         user.Mobile, 
