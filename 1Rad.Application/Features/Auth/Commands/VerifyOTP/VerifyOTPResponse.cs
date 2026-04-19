@@ -15,4 +15,11 @@ public record UserDetailsDto(
     string FullName, 
     string Email, 
     string Mobile, 
-    string RoleName);
+    string RoleName,
+    List<AuthorizedHospitalDto> AuthorizedHospitals = null!);
+
+public record AuthorizedHospitalDto(
+    Guid HospitalId, 
+    string HospitalName, 
+    string RoleName, 
+    bool IsDefault);

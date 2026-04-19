@@ -49,7 +49,9 @@ public class VerifyOTPCommandHandler : IRequestHandler<VerifyOTPCommand, VerifyO
             // Dual-Path Logic: Login or Registration?
             var user = await _context.Users
                 .Include(u => u.HospitalMappings)
-                .ThenInclude(m => m.Roles)
+                    .ThenInclude(m => m.Hospital)
+                .Include(u => u.HospitalMappings)
+                    .ThenInclude(m => m.Roles)
                 .FirstOrDefaultAsync(u => u.Mobile == request.Mobile, cancellationToken);
 
             if (user != null && user.Status == _1Rad.Domain.Enums.UserStatus.Active)
@@ -81,11 +83,16 @@ public class VerifyOTPCommandHandler : IRequestHandler<VerifyOTPCommand, VerifyO
                         RefreshToken: refreshToken,
                         IsRegistered: true,
                         User: new UserDetailsDto(
-                            user.UserId, 
-                            user.FullName, 
-                            user.Email, 
-                            user.Mobile, 
-                            string.Join(", ", activeMapping.Roles.Select(r => r.RoleName).DefaultIfEmpty("User")))
+                        user.FullName, 
+                        user.Email, 
+                        user.Mobile, 
+                        string.Join(", ", activeMapping.Roles.Select(r => r.RoleName).DefaultIfEmpty("User")),
+                        user.HospitalMappings.Select(m => new AuthorizedHospitalDto(
+                            m.HospitalId,
+                            m.Hospital?.HospitalName ?? "Unknown Hub",
+                            string.Join(", ", m.Roles.Select(r => r.RoleName).DefaultIfEmpty("User")),
+                            m.IsDefault
+                        )).ToList())
                     );
                 }
             }
