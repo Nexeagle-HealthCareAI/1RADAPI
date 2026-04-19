@@ -1,6 +1,7 @@
 using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Entities;
 using MediatR;
+using Microsoft.EntityFrameworkCore;
 
 namespace _1Rad.Application.Features.Patients.Commands.CreatePatient;
 
@@ -26,6 +27,10 @@ public class CreatePatientCommandHandler : IRequestHandler<CreatePatientCommand,
 
     public async Task<Guid> Handle(CreatePatientCommand request, CancellationToken cancellationToken)
     {
+        var hospitalId = _context.UserContext.HospitalId;
+        var count = await _context.Patients
+            .CountAsync(p => p.HospitalId == hospitalId, cancellationToken);
+            
         var patient = new Patient
         {
             FullName = request.FullName,
@@ -36,8 +41,8 @@ public class CreatePatientCommandHandler : IRequestHandler<CreatePatientCommand,
             District = request.District,
             Address = request.Address,
             SourceOfInfo = request.SourceOfInfo,
-            PatientIdentifier = $"PAT-{DateTime.Now:yyyyMMdd}-{new Random().Next(1000, 9999)}", // Tactical MRN generation
-            HospitalId = _context.UserContext.HospitalId
+            PatientIdentifier = $"PTID{(count + 1):D8}", // Readable hospital-scoped sequence
+            HospitalId = hospitalId
         };
 
         _context.Patients.Add(patient);

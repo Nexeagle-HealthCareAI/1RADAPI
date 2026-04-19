@@ -8,6 +8,7 @@ public record AppointmentDto(
     string Mobile,
     string PatientAge,
     string PatientGender,
+    string PatientIdentifier,
     string Service,
     string Modality,
     DateTime DateTime,
