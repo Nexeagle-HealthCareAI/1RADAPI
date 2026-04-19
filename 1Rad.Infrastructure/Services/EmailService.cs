@@ -43,6 +43,7 @@ public class EmailService : IEmailService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to send email to {To}", to);
+            throw; // Rethrow to ensure the command handler captures the failure
         }
     }
 }
