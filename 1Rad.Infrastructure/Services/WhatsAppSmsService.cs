@@ -91,6 +91,7 @@ public class WhatsAppSmsService : ISmsService
                 {
                     var error = await response.Content.ReadAsStringAsync();
                     _logger.LogError("Failed to send WhatsApp OTP. Status: {Status}, Error: {Error}", response.StatusCode, error);
+                    throw new Exception($"WHATSAPP_GATEWAY_FAILURE: Status {response.StatusCode}. Details: {error}");
                 }
                 else
                 {
@@ -105,6 +106,7 @@ public class WhatsAppSmsService : ISmsService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Exception while sending WhatsApp OTP to {Mobile}", mobileNumber);
+            throw; // Rethrow to let the handler catch it
         }
     }
 }

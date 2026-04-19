@@ -54,8 +54,8 @@ public class AuthController : ControllerBase
         }
 
         return result.Success 
-            ? Ok(new { message = "OTP sent successfully." }) 
-            : StatusCode(StatusCodes.Status500InternalServerError, new { message = "Infrastructure failure while sending OTP." });
+            ? Ok(new { message = result.IsAlreadyRegistered ? result.Message ?? "You are already registered. Please try to login." : "OTP sent successfully." }) 
+            : StatusCode(StatusCodes.Status500InternalServerError, new { message = result.Message ?? "Infrastructure failure while sending OTP." });
     }
 
     /// <summary>
