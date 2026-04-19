@@ -32,12 +32,15 @@ public class UserContext : IUserContext
         }
     }
 
-    public Guid RoleId
+    public IEnumerable<int> RoleIds
     {
         get
         {
             var rid = _httpContextAccessor.HttpContext?.User.FindFirstValue("rid");
-            return rid != null ? Guid.Parse(rid) : Guid.Empty;
+            if (string.IsNullOrEmpty(rid)) return Enumerable.Empty<int>();
+
+            return rid.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                       .Select(int.Parse);
         }
     }
 

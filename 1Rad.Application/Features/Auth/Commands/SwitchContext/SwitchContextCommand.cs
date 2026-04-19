@@ -8,5 +8,6 @@ public class SwitchContextResponse
 {
     public bool Success { get; set; }
     public string? AccessToken { get; set; }
+    public List<string> Roles { get; set; } = new();
     public string? Error { get; set; }
 }

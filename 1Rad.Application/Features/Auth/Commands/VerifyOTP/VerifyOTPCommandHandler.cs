@@ -111,7 +111,7 @@ public class VerifyOTPCommandHandler : IRequestHandler<VerifyOTPCommand, VerifyO
         catch (Exception ex)
         {
             _logger.LogError(ex, "Unexpected error during OTP verification for {Mobile}", request.Mobile);
-            return new VerifyOTPResponse(false, Message: $"Internal Error: {ex.Message} | {ex.InnerException?.Message}");
+            return new VerifyOTPResponse(false, Message: "A system error occurred during verification.");
         }
     }
 }

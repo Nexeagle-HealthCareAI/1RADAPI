@@ -56,7 +56,8 @@ public class SwitchContextCommandHandler : IRequestHandler<SwitchContextCommand,
             return new SwitchContextResponse
             {
                 Success = true,
-                AccessToken = accessToken
+                AccessToken = accessToken,
+                Roles = mapping.Roles.Select(r => r.RoleName).ToList()
             };
         }
         catch (Exception ex)
