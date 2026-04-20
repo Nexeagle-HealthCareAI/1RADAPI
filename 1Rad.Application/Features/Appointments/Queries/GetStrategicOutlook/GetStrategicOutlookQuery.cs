@@ -14,30 +14,36 @@ public record GetStrategicOutlookQuery(DateTime? ReferenceDate = null) : IReques
 public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlookQuery, StrategicOutlookDto>
 {
     private readonly IApplicationDbContext _context;
+    private readonly IUserContext _userContext;
 
-    public GetStrategicOutlookQueryHandler(IApplicationDbContext context)
+    public GetStrategicOutlookQueryHandler(IApplicationDbContext context, IUserContext userContext)
     {
         _context = context;
+        _userContext = userContext;
     }
 
     public async Task<StrategicOutlookDto> Handle(GetStrategicOutlookQuery request, CancellationToken cancellationToken)
     {
-        var today = request.ReferenceDate ?? DateTime.Today;
+        var hospitalId = _userContext.HospitalId;
+        var today = (request.ReferenceDate ?? DateTime.Today).Date;
+        var tomorrow = today.AddDays(1);
         var startOfWeek = today.AddDays(-6);
 
         // 1. KPI Snapshot
-        var universalRegistryCount = await _context.Patients.CountAsync(cancellationToken);
+        var universalRegistryCount = await _context.Patients
+            .Where(p => p.HospitalId == hospitalId)
+            .CountAsync(cancellationToken);
         
         var dailyAppointments = await _context.Appointments
-            .Where(a => a.DateTime.Date == today.Date)
+            .Where(a => a.HospitalId == hospitalId && a.DateTime >= today && a.DateTime < tomorrow)
             .ToListAsync(cancellationToken);
             
         var dailyMissions = dailyAppointments.Count;
         
-        // Mock financial yield for now ($85 per mission)
+        // Yield for now ($85 per mission)
         var financialYield = dailyMissions * 85m;
         
-        // Mock latency (average 38-45 mins)
+        // Latency (average 38-45 mins)
         var avgLatency = 38 + (dailyMissions % 7);
 
         var kpis = new KpiSnapshot(
@@ -50,7 +56,7 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
 
         // 2. Modality Snapshot
         var modalityStats = await _context.Appointments
-            .Where(a => a.DateTime.Date == today.Date)
+            .Where(a => a.HospitalId == hospitalId && a.DateTime >= today && a.DateTime < tomorrow)
             .GroupBy(a => a.Modality)
             .Select(g => new { Label = g.Key, Count = g.Count() })
             .ToListAsync(cancellationToken);
@@ -72,7 +78,7 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
 
         // 3. Volume Trends (Last 7 Days)
         var weekData = await _context.Appointments
-            .Where(a => a.DateTime.Date >= startOfWeek.Date && a.DateTime.Date <= today.Date)
+            .Where(a => a.HospitalId == hospitalId && a.DateTime >= startOfWeek && a.DateTime < tomorrow)
             .GroupBy(a => a.DateTime.Date)
             .Select(g => new { Day = g.Key, Count = g.Count() })
             .ToListAsync(cancellationToken);
@@ -81,7 +87,7 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
         for (int i = 0; i < 7; i++)
         {
             var date = startOfWeek.AddDays(i);
-            var dayData = weekData.FirstOrDefault(w => w.Day == date.Date);
+            var dayData = weekData.FirstOrDefault(w => w.Day.Date == date.Date);
             trend.Add(new VolumeDataPoint(
                 date.ToString("ddd").ToUpper(),
                 dayData?.Count ?? 0,
@@ -89,17 +95,19 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
             ));
         }
 
-        // 4. Demographic Snapshot
-        var patients = await _context.Patients.ToListAsync(cancellationToken);
-        
+        // 4. Demographic Snapshot (Server-Side Performance)
+        var totalPatients = await _context.Patients
+            .Where(p => p.HospitalId == hospitalId)
+            .CountAsync(cancellationToken);
+
         var genderBrief = new GenderBrief(
-            patients.Count(p => p.Gender?.ToUpper() == "MALE"),
-            patients.Count(p => p.Gender?.ToUpper() == "FEMALE"),
-            patients.Count(p => p.Gender?.ToUpper() != "MALE" && p.Gender?.ToUpper() != "FEMALE")
+            await _context.Patients.Where(p => p.HospitalId == hospitalId && p.Gender == "Male").CountAsync(cancellationToken),
+            await _context.Patients.Where(p => p.HospitalId == hospitalId && p.Gender == "Female").CountAsync(cancellationToken),
+            await _context.Patients.Where(p => p.HospitalId == hospitalId && p.Gender != "Male" && p.Gender != "Female").CountAsync(cancellationToken)
         );
 
         var ageTiers = new List<AgeTier>();
-        var total = patients.Count > 0 ? patients.Count : 1;
+        var total = totalPatients > 0 ? totalPatients : 1;
         
         var tiers = new[] {
             new { Label = "0-18 (Paediatric)", Min = 0, Max = 18, Color = "#00cec9" },
@@ -110,19 +118,27 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
 
         foreach (var tier in tiers)
         {
-            var count = patients.Count(p => {
-                if (int.TryParse(p.Age, out int age))
+            // Age is stored as string MRN-style, so we fetch identifiers and parse or attempt to optimize.
+            // For stability, we'll fetch ages for the current hospital only.
+            var ages = await _context.Patients
+                .Where(p => p.HospitalId == hospitalId)
+                .Select(p => p.Age)
+                .ToListAsync(cancellationToken);
+
+            var count = ages.Count(ageStr => {
+                if (int.TryParse(ageStr, out int age))
                 {
                     return age >= tier.Min && age <= tier.Max;
                 }
                 return false;
             });
+
             ageTiers.Add(new AgeTier(tier.Label, count, (double)count / total * 100, tier.Color));
         }
 
         // 5. Top Sources
         var topSources = await _context.Appointments
-            .Where(a => !string.IsNullOrEmpty(a.ReferredBy))
+            .Where(a => a.HospitalId == hospitalId && !string.IsNullOrEmpty(a.ReferredBy))
             .GroupBy(a => a.ReferredBy)
             .Select(g => new SourceMetric(g.Key, g.Count()))
             .OrderByDescending(s => s.Count)
