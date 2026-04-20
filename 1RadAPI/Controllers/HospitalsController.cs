@@ -1,4 +1,5 @@
 using _1Rad.Application.Features.Hospitals.Commands.CreateChain;
+using _1Rad.Application.Features.Hospitals.Queries.GetGroupHospitals;
 using _1Rad.Application.Features.Hospitals.Commands.UpdateHospitalDetails;
 using _1Rad.Application.Features.Hospitals.Queries.GetHospitalDetails;
 using MediatR;
@@ -60,6 +61,13 @@ public class HospitalsController : ControllerBase
             request.NABHNumber));
 
         if (!result.Success) return BadRequest(new { message = result.Error });
+        return Ok(result);
+    }
+
+    [HttpGet("group")]
+    public async Task<IActionResult> GetGroupHospitals()
+    {
+        var result = await _mediator.Send(new GetGroupHospitalsQuery());
         return Ok(result);
     }
 }
