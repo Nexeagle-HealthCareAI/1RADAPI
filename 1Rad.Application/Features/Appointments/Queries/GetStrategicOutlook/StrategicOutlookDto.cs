@@ -6,9 +6,12 @@ namespace _1Rad.Application.Features.Appointments.Queries.GetStrategicOutlook;
 public record StrategicOutlookDto(
     KpiSnapshot Kpis,
     List<ModalityMetric> Modalities,
+    List<ModalityRevenue> RevenueBreakdown,
     List<VolumeDataPoint> VolumeTrends,
     DemographicSnapshot Demographics,
-    List<SourceMetric> TopSources
+    List<SourceMetric> TopSources,
+    InstitutionalLoyalty Loyalty,
+    ServiceFidelity Fidelity
 );
 
 public record KpiSnapshot(
@@ -52,4 +55,23 @@ public record AgeTier(
 public record SourceMetric(
     string Name,
     int Count
+);
+
+public record ModalityRevenue(
+    string Modality,
+    decimal Revenue,
+    string Color
+);
+
+public record InstitutionalLoyalty(
+    int NewTargets,
+    int ReturningPatients,
+    double RetentionRatio
+);
+
+public record ServiceFidelity(
+    double CurrentVolume,
+    double Average30DayVolume,
+    string AdaptiveSignal, // UP, DOWN, STABLE
+    double DeviationPercentage
 );
