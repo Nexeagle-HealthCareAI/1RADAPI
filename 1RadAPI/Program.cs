@@ -74,7 +74,7 @@ builder.Services.AddCors(options =>
     options.AddPolicy("AllowedOrigins", policy =>
     {
         var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() 
-            ?? new[] { "http://localhost:5173", "https://gray-tree-058a09500.1.azurestaticapps.net" };
+            ?? new[] { "http://localhost:5173","http://localhost:8081" ,"https://gray-tree-058a09500.1.azurestaticapps.net" };
         
         policy.WithOrigins(allowedOrigins.Select(o => o.TrimEnd('/')).ToArray())
               .AllowAnyMethod()

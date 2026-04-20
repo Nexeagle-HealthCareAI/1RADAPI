@@ -1,5 +1,7 @@
 using System.Net;
 using System.Text.Json;
+using _1Rad.Domain.Exceptions;
+using FluentValidation;
 using Microsoft.AspNetCore.Mvc;
 
 namespace _1RadAPI.Middleware;
@@ -33,23 +35,102 @@ public class ExceptionHandlingMiddleware
     private async Task HandleExceptionAsync(HttpContext context, Exception exception)
     {
         context.Response.ContentType = "application/json";
-        context.Response.StatusCode = (int)HttpStatusCode.InternalServerError;
 
-        var response = new ProblemDetails
+        var (statusCode, errorResponse) = exception switch
         {
-            Status = context.Response.StatusCode,
-            Type = "https://tools.ietf.org/html/rfc7231#section-6.6.1",
-            Title = "An unexpected error occurred",
-            Detail = _env.IsDevelopment() ? exception.Message : "A internal server error has occurred. Please contact support.",
-            Instance = context.Request.Path
+            DomainException domainEx => HandleDomainException(domainEx),
+            FluentValidation.ValidationException validationEx => HandleFluentValidationException(validationEx),
+            UnauthorizedAccessException => HandleUnauthorizedAccessException(),
+            _ => HandleGenericException(exception)
         };
 
-        if (_env.IsDevelopment())
-        {
-            response.Extensions.Add("stackTrace", exception.StackTrace);
-        }
+        context.Response.StatusCode = statusCode;
 
-        var json = JsonSerializer.Serialize(response);
+        var options = new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            WriteIndented = _env.IsDevelopment()
+        };
+
+        var json = JsonSerializer.Serialize(errorResponse, options);
         await context.Response.WriteAsync(json);
+    }
+
+    private (int StatusCode, object ErrorResponse) HandleDomainException(DomainException exception)
+    {
+        var errorResponse = new
+        {
+            success = false,
+            error = exception.Message,
+            errorCode = exception.ErrorCode,
+            timestamp = DateTime.UtcNow,
+            path = exception.AdditionalData?.ContainsKey("path") == true 
+                ? exception.AdditionalData["path"] 
+                : null,
+            additionalData = exception.AdditionalData,
+            stackTrace = _env.IsDevelopment() ? exception.StackTrace : null
+        };
+
+        return (exception.StatusCode, errorResponse);
+    }
+
+    private (int StatusCode, object ErrorResponse) HandleFluentValidationException(FluentValidation.ValidationException exception)
+    {
+        var errors = exception.Errors
+            .GroupBy(e => e.PropertyName)
+            .ToDictionary(
+                g => g.Key,
+                g => g.Select(e => e.ErrorMessage).ToArray()
+            );
+
+        var errorResponse = new
+        {
+            success = false,
+            error = "One or more validation errors occurred.",
+            errorCode = "VALIDATION_ERROR",
+            errors = errors,
+            timestamp = DateTime.UtcNow,
+            stackTrace = _env.IsDevelopment() ? exception.StackTrace : null
+        };
+
+        return ((int)HttpStatusCode.BadRequest, errorResponse);
+    }
+
+    private (int StatusCode, object ErrorResponse) HandleUnauthorizedAccessException()
+    {
+        var errorResponse = new
+        {
+            success = false,
+            error = "You don't have permission to access this resource.",
+            errorCode = "FORBIDDEN",
+            timestamp = DateTime.UtcNow
+        };
+
+        return ((int)HttpStatusCode.Forbidden, errorResponse);
+    }
+
+    private (int StatusCode, object ErrorResponse) HandleGenericException(Exception exception)
+    {
+        _logger.LogError(exception, "Unhandled exception: {Message}", exception.Message);
+
+        var errorResponse = new
+        {
+            success = false,
+            error = _env.IsDevelopment() 
+                ? exception.Message 
+                : "An unexpected error occurred. Our team has been notified. Please try again later.",
+            errorCode = "SYSTEM_ERROR",
+            timestamp = DateTime.UtcNow,
+            stackTrace = _env.IsDevelopment() ? exception.StackTrace : null,
+            innerException = _env.IsDevelopment() && exception.InnerException != null
+                ? new
+                {
+                    message = exception.InnerException.Message,
+                    stackTrace = exception.InnerException.StackTrace
+                }
+                : null
+        };
+
+        return ((int)HttpStatusCode.InternalServerError, errorResponse);
     }
 }

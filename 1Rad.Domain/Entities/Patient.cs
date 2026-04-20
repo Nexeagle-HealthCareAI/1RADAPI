@@ -14,8 +14,10 @@ public class Patient : BaseEntity, IHospitalContext
     public string Address { get; set; } = string.Empty;
     public string PatientIdentifier { get; set; } = string.Empty; // MRN
     public string SourceOfInfo { get; set; } = string.Empty;
+    public Guid? ReferrerId { get; set; }
     public Guid HospitalId { get; set; }
     
     // Navigation
     public Hospital Hospital { get; set; } = null!;
+    public Referrer? Referrer { get; set; }
 }

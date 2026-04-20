@@ -156,6 +156,11 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.HasOne(e => e.Hospital)
                 .WithMany()
                 .HasForeignKey(e => e.HospitalId);
+
+            entity.HasOne(e => e.Referrer)
+                .WithMany(r => r.Patients)
+                .HasForeignKey(e => e.ReferrerId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         // Referrer Configuration

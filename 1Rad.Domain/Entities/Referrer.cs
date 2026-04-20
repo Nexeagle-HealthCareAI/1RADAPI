@@ -12,4 +12,5 @@ public class Referrer : BaseEntity, IHospitalContext
     
     // Navigation
     public Hospital Hospital { get; set; } = null!;
+    public ICollection<Patient> Patients { get; set; } = new List<Patient>();
 }
