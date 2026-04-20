@@ -113,22 +113,27 @@ public class ExceptionHandlingMiddleware
     {
         _logger.LogError(exception, "Unhandled exception: {Message}", exception.Message);
 
+        var isDevelopment = _env.IsDevelopment();
+        var errorMessage = isDevelopment 
+            ? exception.Message 
+            : "An unexpected error occurred. Our team has been notified. Please try again later.";
+
         var errorResponse = new
         {
             success = false,
-            error = _env.IsDevelopment() 
-                ? exception.Message 
-                : "An unexpected error occurred. Our team has been notified. Please try again later.",
+            error = errorMessage,
             errorCode = "SYSTEM_ERROR",
             timestamp = DateTime.UtcNow,
-            stackTrace = _env.IsDevelopment() ? exception.StackTrace : null,
-            innerException = _env.IsDevelopment() && exception.InnerException != null
+            stackTrace = isDevelopment ? exception.StackTrace : null,
+            innerException = isDevelopment && exception.InnerException != null
                 ? new
                 {
                     message = exception.InnerException.Message,
-                    stackTrace = exception.InnerException.StackTrace
+                    stackTrace = exception.InnerException.StackTrace,
+                    type = exception.InnerException.GetType().Name
                 }
-                : null
+                : null,
+            exceptionType = isDevelopment ? exception.GetType().Name : null
         };
 
         return ((int)HttpStatusCode.InternalServerError, errorResponse);

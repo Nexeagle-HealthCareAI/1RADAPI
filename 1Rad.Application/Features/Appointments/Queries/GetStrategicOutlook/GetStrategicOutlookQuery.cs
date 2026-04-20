@@ -148,7 +148,7 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
             var topSources = await _context.Appointments
                 .Where(a => a.HospitalId == hospitalId && !string.IsNullOrEmpty(a.ReferredBy))
                 .GroupBy(a => a.ReferredBy)
-                .Select(g => new SourceMetric(g.Key, g.Count()))
+                .Select(g => new SourceMetric(g.Key ?? "Unknown", g.Count()))
                 .OrderByDescending(s => s.Count)
                 .Take(5)
                 .ToListAsync(cancellationToken);
