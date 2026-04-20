@@ -4,7 +4,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace _1Rad.Application.Features.Patients.Queries.GetPatients;
 
-public record GetPatientsQuery(string? SearchQuery = null) : IRequest<List<PatientDto>>;
+public record GetPatientsQuery(string? SearchQuery = null, DateTime? StartDate = null, DateTime? EndDate = null) : IRequest<List<PatientDto>>;
 
 public class GetPatientsQueryHandler : IRequestHandler<GetPatientsQuery, List<PatientDto>>
 {
@@ -28,6 +28,16 @@ public class GetPatientsQueryHandler : IRequestHandler<GetPatientsQuery, List<Pa
                 p.PatientIdentifier.ToLower().Contains(search));
         }
 
+        if (request.StartDate.HasValue)
+        {
+            query = query.Where(p => p.CreatedAt.Date >= request.StartDate.Value.Date);
+        }
+
+        if (request.EndDate.HasValue)
+        {
+            query = query.Where(p => p.CreatedAt.Date <= request.EndDate.Value.Date);
+        }
+
         return await query
             .Select(p => new PatientDto(
                 p.PatientId,
@@ -39,7 +49,8 @@ public class GetPatientsQueryHandler : IRequestHandler<GetPatientsQuery, List<Pa
                 p.District,
                 p.Address,
                 p.PatientIdentifier,
-                p.SourceOfInfo
+                p.SourceOfInfo,
+                p.CreatedAt
             ))
             .ToListAsync(cancellationToken);
     }

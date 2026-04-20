@@ -19,9 +19,9 @@ public class PatientsController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<IActionResult> Get([FromQuery] string? search)
+    public async Task<IActionResult> Get([FromQuery] string? search, [FromQuery] DateTime? startDate, [FromQuery] DateTime? endDate)
     {
-        var result = await _mediator.Send(new GetPatientsQuery(search));
+        var result = await _mediator.Send(new GetPatientsQuery(search, startDate, endDate));
         return Ok(result);
     }
 

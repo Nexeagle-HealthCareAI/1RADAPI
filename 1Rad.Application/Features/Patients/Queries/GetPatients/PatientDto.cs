@@ -10,5 +10,6 @@ public record PatientDto(
     string District,
     string Address,
     string PatientIdentifier,
-    string SourceOfInfo
+    string SourceOfInfo,
+    DateTime RegisteredAt
 );

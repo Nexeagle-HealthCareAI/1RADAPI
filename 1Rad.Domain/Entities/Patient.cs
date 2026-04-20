@@ -16,6 +16,7 @@ public class Patient : BaseEntity, IHospitalContext
     public string SourceOfInfo { get; set; } = string.Empty;
     public Guid? ReferrerId { get; set; }
     public Guid HospitalId { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     
     // Navigation
     public Hospital Hospital { get; set; } = null!;
