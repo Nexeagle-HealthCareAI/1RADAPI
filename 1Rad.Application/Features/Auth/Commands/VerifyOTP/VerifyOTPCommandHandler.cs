@@ -50,6 +50,7 @@ public class VerifyOTPCommandHandler : IRequestHandler<VerifyOTPCommand, VerifyO
             var user = await _context.Users
                 .Include(u => u.HospitalMappings)
                     .ThenInclude(m => m.Hospital)
+                        .ThenInclude(h => h.Group)
                 .Include(u => u.HospitalMappings)
                     .ThenInclude(m => m.Roles)
                 .FirstOrDefaultAsync(u => u.Mobile == request.Mobile, cancellationToken);
@@ -91,6 +92,7 @@ public class VerifyOTPCommandHandler : IRequestHandler<VerifyOTPCommand, VerifyO
                         user.HospitalMappings.Select(m => new AuthorizedHospitalDto(
                             m.HospitalId,
                             m.Hospital?.HospitalName ?? "Unknown Hub",
+                            m.Hospital?.Group?.GroupName ?? string.Empty,
                             string.Join(", ", m.Roles.Select(r => r.RoleName).DefaultIfEmpty("User")),
                             m.IsDefault
                         )).ToList())
