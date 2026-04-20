@@ -80,6 +80,7 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
                 g.Count(),
                 g.Select(x => new ReferredPatientDto(
                     x.Patient.PatientId,
+                    x.Patient.PatientIdentifier,
                     x.Patient.FullName,
                     x.Patient.Age,
                     x.Patient.Gender,

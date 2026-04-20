@@ -13,6 +13,7 @@ public record ReferrerIntelligenceDto(
 
 public record ReferredPatientDto(
     Guid PatientId,
+    string PatientIdentifier,
     string Name,
     string Age,
     string Gender,
