@@ -1,6 +1,7 @@
 using _1Rad.Application.Features.Appointments.Queries.GetAppointments;
 using _1Rad.Application.Features.Appointments.Commands.CreateAppointment;
 using _1Rad.Application.Features.Appointments.Commands.UpdateAppointmentStatus;
+using _1Rad.Application.Features.Appointments.Commands.ImportAppointments;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -38,5 +39,17 @@ public class AppointmentsController : ControllerBase
     {
         var result = await _mediator.Send(new UpdateAppointmentStatusCommand(id, status));
         return result ? Ok() : NotFound();
+    }
+
+    [HttpPost("import")]
+    public async Task<IActionResult> Import(IFormFile file)
+    {
+        if (file == null || file.Length == 0) return BadRequest("Mission log file is missing or corrupted.");
+        
+        using (var stream = file.OpenReadStream())
+        {
+            var result = await _mediator.Send(new ImportAppointmentsCommand(stream));
+            return Ok(result);
+        }
     }
 }
