@@ -1,3 +1,4 @@
+using _1Rad.Application.Features.Hospitals.Commands.CreateChain;
 using _1Rad.Application.Features.Hospitals.Commands.UpdateHospitalDetails;
 using _1Rad.Application.Features.Hospitals.Queries.GetHospitalDetails;
 using MediatR;
