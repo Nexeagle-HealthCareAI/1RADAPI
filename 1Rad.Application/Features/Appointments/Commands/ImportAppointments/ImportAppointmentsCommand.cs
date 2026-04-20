@@ -68,9 +68,8 @@ public class ImportAppointmentsCommandHandler : IRequestHandler<ImportAppointmen
                         {
                             FullName = name,
                             Mobile = mobile,
-                            PatientIdentifier = ptid,
-                            HospitalId = _context.UserContext.HospitalId,
-                            CreatedAt = DateTime.UtcNow
+                            PatientIdentifier = ptid ?? string.Empty,
+                            HospitalId = _context.UserContext.HospitalId
                         };
                         _context.Patients.Add(patient);
                     }
@@ -118,7 +117,7 @@ public class ImportAppointmentsCommandHandler : IRequestHandler<ImportAppointmen
                         Type = "In-Patient",
                         Doctor = "Imported Source",
                         ReferredBy = referrerName ?? "Self",
-                        ReferrerId = referrerId,
+                        ReferredContact = referrerContact ?? string.Empty,
                         HospitalId = _context.UserContext.HospitalId
                     };
 

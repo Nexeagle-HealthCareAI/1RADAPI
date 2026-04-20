@@ -50,6 +50,7 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
                 p.ReferrerId,
                 ReferrerName = p.Referrer != null ? p.Referrer.Name : "Direct",
                 ReferrerContact = p.Referrer != null ? p.Referrer.Contact : "N/A",
+                ReferrerAddress = p.Referrer != null ? p.Referrer.Address : "N/A",
                 Patient = p,
                 // Get the latest appointment modality for this intelligence log
                 LatestAppointment = _context.Appointments
@@ -77,11 +78,14 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
                 g.Key ?? Guid.Empty,
                 g.First().ReferrerName,
                 g.First().ReferrerContact,
+                g.First().ReferrerAddress,
                 g.Count(),
                 g.Select(x => new ReferredPatientDto(
                     x.Patient.PatientId,
                     x.Patient.PatientIdentifier,
                     x.Patient.FullName,
+                    x.Patient.Mobile,
+                    x.Patient.Address,
                     x.Patient.Age,
                     x.Patient.Gender,
                     x.LatestAppointment?.Modality ?? "RECON",
