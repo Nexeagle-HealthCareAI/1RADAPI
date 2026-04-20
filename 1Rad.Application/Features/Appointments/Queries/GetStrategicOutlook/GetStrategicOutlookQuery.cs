@@ -131,11 +131,15 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
         }
 
         // --- 6. TOP SOURCES ---
-        var topSources = await _context.Appointments
+        var topSourcesRaw = await _context.Appointments
             .Where(a => a.HospitalId == hospitalId && !string.IsNullOrEmpty(a.ReferredBy))
-            .GroupBy(a => a.ReferredBy)
+            .Select(a => a.ReferredBy)
+            .ToListAsync(cancellationToken);
+
+        var topSources = topSourcesRaw
+            .GroupBy(r => r)
             .Select(g => new SourceMetric(g.Key ?? "Unknown", g.Count()))
-            .OrderByDescending(s => s.Count).Take(5).ToListAsync(cancellationToken);
+            .OrderByDescending(s => s.Count).Take(5).ToList();
 
         // --- 7. INSTITUTIONAL LOYALTY ---
         var todayPatientIds = todayMissions.Select(m => m.PatientId).Distinct().ToList();
