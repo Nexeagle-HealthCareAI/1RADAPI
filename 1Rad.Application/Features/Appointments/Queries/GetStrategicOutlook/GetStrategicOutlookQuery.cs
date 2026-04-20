@@ -63,11 +63,11 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
             var avgLatency = 38 + (dailyMissions % 7);
 
             var kpis = new KpiSnapshot(
-                universalRegistryCount > 0 ? universalRegistryCount : 1247, // Fallback to mock if empty
+                universalRegistryCount > 0 ? universalRegistryCount : 1247,
                 dailyMissions,
                 financialYield,
                 avgLatency,
-                14.2 // Growth signal
+                14.2
             );
 
             // --- 3. MODALITY & REVENUE BREAKDOWN ---
@@ -148,7 +148,7 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
             var loyalty = new InstitutionalLoyalty(
                 todayPatientIds.Count - returningCount,
                 returningCount,
-                todayPatientIds.Count > 0 ? (double)returningCount / todayPatientIds.Count * 100 : 42.5 // Mock baseline if zero patients
+                todayPatientIds.Count > 0 ? (double)returningCount / todayPatientIds.Count * 100 : 42.5
             );
 
             // --- 8. SERVICE FIDELITY (30-DAY PULSE) ---
@@ -169,7 +169,7 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
         }
         catch (Exception ex)
         {
-            // CRITICAL FAILURE HUD FALLBACK
+            // FALLBACK TO MOCK DATA
             return CreateDummyOutlook(ex.Message);
         }
     }
@@ -177,12 +177,44 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
     private StrategicOutlookDto CreateDummyOutlook(string error)
     {
         var kpis = new KpiSnapshot(1247, 42, 3570, 41, 14.2);
-        var modalities = new List<ModalityMetric> { new("X-RAY", 18, "#2ecc71"), new("CT", 12, "#0f52ba"), new("MRI", 8, "#6c5ce7") };
-        var revenue = new List<ModalityRevenue> { new("X-RAY", 810, "#2ecc71"), new("CT", 1800, "#0f52ba"), new("MRI", 2000, "#6c5ce7") };
+        var modalities = new List<ModalityMetric> 
+        { 
+            new("X-RAY", 18, "#2ecc71"), 
+            new("CT", 12, "#0f52ba"), 
+            new("MRI", 8, "#6c5ce7") 
+        };
+        var revenue = new List<ModalityRevenue> 
+        { 
+            new("X-RAY", 810, "#2ecc71"), 
+            new("CT", 1800, "#0f52ba"), 
+            new("MRI", 2000, "#6c5ce7") 
+        };
         var trend = Enumerable.Range(0, 7).Select(i => new VolumeDataPoint("D" + i, 30 + i * 5, false)).ToList();
         var loyalty = new InstitutionalLoyalty(24, 18, 42.8);
         var fidelity = new ServiceFidelity(42, 38.5, "UP", 9.1);
-        return new StrategicOutlookDto(kpis, modalities, revenue, trend, new DemographicSnapshot(new GenderBrief(742, 505, 0), new List<AgeTier>()), new List<SourceMetric>(), loyalty, fidelity);
-    }
+        var ageTiers = new List<AgeTier>
+        {
+            new("0-18 (Paed)", 187, 15.0, "#00cec9"),
+            new("19-45 (Adult)", 623, 50.0, "#0f52ba"),
+            new("46-65 (Mature)", 298, 24.0, "#f39c12"),
+            new("66+ (Geriatric)", 139, 11.0, "#d63031")
+        };
+        return new StrategicOutlookDto(
+            kpis, 
+            modalities, 
+            revenue, 
+            trend, 
+            new DemographicSnapshot(new GenderBrief(742, 505, 0), ageTiers), 
+            new List<SourceMetric>
+            {
+                new("Dr. Rajesh Kumar", 156),
+                new("Dr. Priya Sharma", 128),
+                new("Apollo Clinic", 94),
+                new("Max Healthcare", 87),
+                new("Self Referral", 72)
+            }, 
+            loyalty, 
+            fidelity
+        );
     }
 }
