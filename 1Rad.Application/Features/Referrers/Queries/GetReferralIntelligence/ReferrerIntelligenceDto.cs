@@ -21,6 +21,8 @@ public record ReferredPatientDto(
     string Age,
     string Gender,
     string Modality,
+    string Service,
+    string SourceOfInfo,
     string RegistrationDate,
     string Status
 );

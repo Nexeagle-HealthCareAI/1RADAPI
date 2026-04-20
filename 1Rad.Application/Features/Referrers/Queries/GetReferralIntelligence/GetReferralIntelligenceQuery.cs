@@ -56,7 +56,7 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
                 LatestAppointment = _context.Appointments
                     .Where(a => a.PatientId == p.PatientId)
                     .OrderByDescending(a => a.DateTime)
-                    .Select(a => new { a.Modality, a.Status, a.DateTime })
+                    .Select(a => new { a.Modality, a.Service, a.Status, a.DateTime })
                     .FirstOrDefault()
             })
             .ToListAsync(cancellationToken);
@@ -89,6 +89,8 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
                     x.Patient.Age,
                     x.Patient.Gender,
                     x.LatestAppointment?.Modality ?? "RECON",
+                    x.LatestAppointment?.Service ?? "N/A",
+                    x.Patient.SourceOfInfo ?? "DIRECT",
                     x.LatestAppointment?.DateTime.ToString("yyyy-MM-dd") ?? "N/A",
                     x.LatestAppointment?.Status ?? "COMMITTED"
                 )).ToList()
