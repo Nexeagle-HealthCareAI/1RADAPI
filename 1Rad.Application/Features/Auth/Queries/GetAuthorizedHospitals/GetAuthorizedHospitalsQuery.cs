@@ -26,6 +26,7 @@ public class GetAuthorizedHospitalsQueryHandler : IRequestHandler<GetAuthorizedH
             var user = await _context.Users
                 .Include(u => u.HospitalMappings)
                     .ThenInclude(m => m.Hospital)
+                        .ThenInclude(h => h.Group)
                 .Include(u => u.HospitalMappings)
                     .ThenInclude(m => m.Roles)
                 .FirstOrDefaultAsync(u => u.UserId == request.UserId, cancellationToken);
@@ -39,6 +40,7 @@ public class GetAuthorizedHospitalsQueryHandler : IRequestHandler<GetAuthorizedH
             {
                 HospitalId = m.HospitalId,
                 HospitalName = m.Hospital.HospitalName,
+                GroupName = m.Hospital.Group?.GroupName ?? string.Empty,
                 IsDefault = m.IsDefault,
                 RoleNames = m.Roles.Select(r => r.RoleName).ToList()
             }).ToList();

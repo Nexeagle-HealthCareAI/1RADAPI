@@ -7,6 +7,7 @@ public class AuthorizedHospitalDto
 {
     public Guid HospitalId { get; set; }
     public string HospitalName { get; set; } = string.Empty;
+    public string GroupName { get; set; } = string.Empty;
     public List<string> RoleNames { get; set; } = new();
     public bool IsDefault { get; set; }
 }
