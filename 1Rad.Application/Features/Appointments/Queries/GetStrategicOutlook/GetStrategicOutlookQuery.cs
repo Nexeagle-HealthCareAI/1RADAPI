@@ -76,12 +76,16 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
             colors.ContainsKey(m.Label) ? colors[m.Label] : "#94a3b8"
         )).ToList();
 
-        // 3. Volume Trends (Last 7 Days)
-        var weekData = await _context.Appointments
+        // 3. Volume Trends (Last 7 Days) - Optimized for SQL Translation
+        var weekRawData = await _context.Appointments
             .Where(a => a.HospitalId == hospitalId && a.DateTime >= startOfWeek && a.DateTime < tomorrow)
+            .Select(a => new { a.DateTime })
+            .ToListAsync(cancellationToken);
+
+        var weekData = weekRawData
             .GroupBy(a => a.DateTime.Date)
             .Select(g => new { Day = g.Key, Count = g.Count() })
-            .ToListAsync(cancellationToken);
+            .ToList();
 
         var trend = new List<VolumeDataPoint>();
         for (int i = 0; i < 7; i++)
@@ -95,15 +99,17 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
             ));
         }
 
-        // 4. Demographic Snapshot (Server-Side Performance)
-        var totalPatients = await _context.Patients
+        // 4. Demographic Snapshot (Fetch-Once Optimization)
+        var hospitalPatients = await _context.Patients
             .Where(p => p.HospitalId == hospitalId)
-            .CountAsync(cancellationToken);
+            .Select(p => new { p.Gender, p.Age })
+            .ToListAsync(cancellationToken);
 
+        var totalPatients = hospitalPatients.Count;
         var genderBrief = new GenderBrief(
-            await _context.Patients.Where(p => p.HospitalId == hospitalId && p.Gender == "Male").CountAsync(cancellationToken),
-            await _context.Patients.Where(p => p.HospitalId == hospitalId && p.Gender == "Female").CountAsync(cancellationToken),
-            await _context.Patients.Where(p => p.HospitalId == hospitalId && p.Gender != "Male" && p.Gender != "Female").CountAsync(cancellationToken)
+            hospitalPatients.Count(p => p.Gender == "Male"),
+            hospitalPatients.Count(p => p.Gender == "Female"),
+            hospitalPatients.Count(p => p.Gender != "Male" && p.Gender != "Female")
         );
 
         var ageTiers = new List<AgeTier>();
@@ -118,15 +124,8 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
 
         foreach (var tier in tiers)
         {
-            // Age is stored as string MRN-style, so we fetch identifiers and parse or attempt to optimize.
-            // For stability, we'll fetch ages for the current hospital only.
-            var ages = await _context.Patients
-                .Where(p => p.HospitalId == hospitalId)
-                .Select(p => p.Age)
-                .ToListAsync(cancellationToken);
-
-            var count = ages.Count(ageStr => {
-                if (int.TryParse(ageStr, out int age))
+            var count = hospitalPatients.Count(p => {
+                if (int.TryParse(p.Age, out int age))
                 {
                     return age >= tier.Min && age <= tier.Max;
                 }
