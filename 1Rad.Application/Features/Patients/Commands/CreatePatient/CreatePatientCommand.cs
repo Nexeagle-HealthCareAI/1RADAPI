@@ -13,7 +13,8 @@ public record CreatePatientCommand(
     string Village,
     string District,
     string Address,
-    string SourceOfInfo
+    string SourceOfInfo,
+    Guid? ReferrerId = null
 ) : IRequest<Guid>;
 
 public class CreatePatientCommandHandler : IRequestHandler<CreatePatientCommand, Guid>
@@ -28,6 +29,29 @@ public class CreatePatientCommandHandler : IRequestHandler<CreatePatientCommand,
     public async Task<Guid> Handle(CreatePatientCommand request, CancellationToken cancellationToken)
     {
         var hospitalId = _context.UserContext.HospitalId;
+
+        // 1. Check for Deduplication (Name + Mobile)
+        var existingPatient = await _context.Patients
+            .FirstOrDefaultAsync(p => p.FullName == request.FullName && 
+                                     p.Mobile == request.Mobile && 
+                                     p.HospitalId == hospitalId, cancellationToken);
+
+        if (existingPatient != null)
+        {
+            // 2. Auto-Update existing record with new details
+            existingPatient.Age = request.Age;
+            existingPatient.Gender = request.Gender;
+            existingPatient.Village = request.Village;
+            existingPatient.District = request.District;
+            existingPatient.Address = request.Address;
+            existingPatient.SourceOfInfo = request.SourceOfInfo;
+            existingPatient.ReferrerId = request.ReferrerId;
+
+            await _context.SaveChangesAsync(cancellationToken);
+            return existingPatient.PatientId;
+        }
+
+        // 3. Create New Patient if not found
         var count = await _context.Patients
             .CountAsync(p => p.HospitalId == hospitalId, cancellationToken);
             
@@ -41,7 +65,8 @@ public class CreatePatientCommandHandler : IRequestHandler<CreatePatientCommand,
             District = request.District,
             Address = request.Address,
             SourceOfInfo = request.SourceOfInfo,
-            PatientIdentifier = $"PTID{(count + 1):D8}", // Readable hospital-scoped sequence
+            ReferrerId = request.ReferrerId,
+            PatientIdentifier = $"PTID{(count + 1):D8}",
             HospitalId = hospitalId
         };
 
