@@ -36,6 +36,7 @@ public class LoginCommandHandler : IRequestHandler<LoginCommand, LoginResponse>
             var user = await _context.Users
                 .Include(u => u.HospitalMappings)
                     .ThenInclude(m => m.Hospital)
+                        .ThenInclude(h => h.Group)
                 .Include(u => u.HospitalMappings)
                     .ThenInclude(m => m.Roles)
                 .FirstOrDefaultAsync(u => u.Email == request.Identifier || u.Mobile == request.Identifier, cancellationToken);
@@ -115,6 +116,7 @@ public class LoginCommandHandler : IRequestHandler<LoginCommand, LoginResponse>
                     {
                         HospitalId = m.HospitalId,
                         HospitalName = m.Hospital?.HospitalName ?? "Unknown Hub",
+                        GroupName = m.Hospital?.Group?.GroupName ?? string.Empty,
                         RoleName = string.Join(", ", m.Roles.Select(r => r.RoleName).DefaultIfEmpty("User")),
                         IsDefault = m.IsDefault
                     }).ToList()

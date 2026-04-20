@@ -8,6 +8,7 @@ using _1Rad.Application.Features.Auth.Commands.SwitchContext;
 using _1Rad.Application.Features.Auth.Commands.ForgotPassword;
 using _1Rad.Application.Features.Auth.Commands.VerifyResetCode;
 using _1Rad.Application.Features.Auth.Commands.ResetPassword;
+using _1Rad.Application.Features.Auth.Queries.GetAuthorizedHospitals;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;

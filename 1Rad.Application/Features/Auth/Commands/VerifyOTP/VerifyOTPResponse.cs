@@ -21,5 +21,6 @@ public record UserDetailsDto(
 public record AuthorizedHospitalDto(
     Guid HospitalId, 
     string HospitalName, 
+    string GroupName,
     string RoleName, 
     bool IsDefault);

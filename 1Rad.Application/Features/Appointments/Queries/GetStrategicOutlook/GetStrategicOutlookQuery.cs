@@ -25,6 +25,13 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
     public async Task<StrategicOutlookDto> Handle(GetStrategicOutlookQuery request, CancellationToken cancellationToken)
     {
         var hospitalId = _userContext.HospitalId;
+        
+        // Validate that user has a hospital context
+        if (hospitalId == Guid.Empty)
+        {
+            throw new InvalidOperationException("User does not have an associated hospital. Please ensure your authentication token includes the hospital context (cid claim).");
+        }
+
         var today = (request.ReferenceDate ?? DateTime.Today).Date;
         var tomorrow = today.AddDays(1);
         var startOfWeek = today.AddDays(-6);
