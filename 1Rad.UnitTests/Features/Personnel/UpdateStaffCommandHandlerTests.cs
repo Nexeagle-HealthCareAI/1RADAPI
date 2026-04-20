@@ -117,7 +117,7 @@ public class UpdateStaffCommandHandlerTests
             Guid.NewGuid(),
             hospitalId,
             "Dr. John Smith",
-            new List<string> { "Doctor" });
+            new List<string> { "doctor" });
 
         // Act
         var result = await handler.Handle(command, CancellationToken.None);
@@ -147,7 +147,7 @@ public class UpdateStaffCommandHandlerTests
 
         var hospital1 = new Hospital { HospitalId = hospitalId1, HospitalName = "Hospital 1" };
         var hospital2 = new Hospital { HospitalId = hospitalId2, HospitalName = "Hospital 2" };
-        var role = new Role { RoleId = 1, RoleName = "Doctor" };
+        var role = new Role { RoleId = 1, RoleName = "doctor" };
 
         var mapping = new UserHospitalMapping
         {
@@ -170,7 +170,7 @@ public class UpdateStaffCommandHandlerTests
             userId,
             hospitalId2,
             "Dr. John Smith",
-            new List<string> { "Doctor" });
+            new List<string> { "doctor" });
 
         // Act
         var result = await handler.Handle(command, CancellationToken.None);
