@@ -49,7 +49,7 @@ public class RegisterStaffCommandHandlerTests
         var role = new Role
         {
             RoleId = roleId,
-            RoleName = "Doctor"
+            RoleName = "doctor"
         };
         _context.Hospitals.Add(hospital);
         _context.Roles.Add(role);
@@ -65,7 +65,7 @@ public class RegisterStaffCommandHandlerTests
             "john.doe@hospital.com",
             "+1234567890",
             "Password123!",
-            new List<string> { "Doctor" },
+            new List<string> { "doctor" },
             "Cardiology",
             "MD",
             "LIC123456");
@@ -119,7 +119,7 @@ public class RegisterStaffCommandHandlerTests
 
         var hospital1 = new Hospital { HospitalId = hospitalId1, HospitalName = "Hospital 1" };
         var hospital2 = new Hospital { HospitalId = hospitalId2, HospitalName = "Hospital 2" };
-        var role = new Role { RoleId = roleId, RoleName = "Doctor" };
+        var role = new Role { RoleId = roleId, RoleName = "doctor" };
 
         var existingMapping = new UserHospitalMapping
         {
@@ -145,7 +145,7 @@ public class RegisterStaffCommandHandlerTests
             "john.doe@hospital.com",
             "+1234567890",
             "Password123!",
-            new List<string> { "Doctor" });
+            new List<string> { "doctor" });
 
         // Act
         var result = await handler.Handle(command, CancellationToken.None);
@@ -182,7 +182,7 @@ public class RegisterStaffCommandHandlerTests
         };
 
         var hospital = new Hospital { HospitalId = hospitalId, HospitalName = "Hospital 1" };
-        var role = new Role { RoleId = roleId, RoleName = "Doctor" };
+        var role = new Role { RoleId = roleId, RoleName = "doctor" };
 
         var existingMapping = new UserHospitalMapping
         {
@@ -208,7 +208,7 @@ public class RegisterStaffCommandHandlerTests
             "john.doe@hospital.com",
             "+1234567890",
             "Password123!",
-            new List<string> { "Doctor" });
+            new List<string> { "doctor" });
 
         // Act
         var result = await handler.Handle(command, CancellationToken.None);

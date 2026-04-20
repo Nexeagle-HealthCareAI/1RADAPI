@@ -54,8 +54,8 @@ public class UpdateStaffCommandHandlerTests
         };
 
         var hospital = new Hospital { HospitalId = hospitalId, HospitalName = "Test Hospital" };
-        var oldRole = new Role { RoleId = oldRoleId, RoleName = "Doctor" };
-        var newRole = new Role { RoleId = newRoleId, RoleName = "Senior Doctor" };
+        var oldRole = new Role { RoleId = oldRoleId, RoleName = "doctor" };
+        var newRole = new Role { RoleId = newRoleId, RoleName = "senior doctor" };
 
         var mapping = new UserHospitalMapping
         {
@@ -78,7 +78,7 @@ public class UpdateStaffCommandHandlerTests
             userId,
             hospitalId,
             "Dr. John Smith",
-            new List<string> { "Senior Doctor" },
+            new List<string> { "senior doctor" },
             "Neurology",
             "MD, PhD",
             "LIC456");
@@ -198,9 +198,9 @@ public class UpdateStaffCommandHandlerTests
         };
 
         var hospital = new Hospital { HospitalId = hospitalId, HospitalName = "Test Hospital" };
-        var role1 = new Role { RoleId = 1, RoleName = "Doctor" };
-        var role2 = new Role { RoleId = 2, RoleName = "Surgeon" };
-        var role3 = new Role { RoleId = 3, RoleName = "Consultant" };
+        var role1 = new Role { RoleId = 1, RoleName = "doctor" };
+        var role2 = new Role { RoleId = 2, RoleName = "surgeon" };
+        var role3 = new Role { RoleId = 3, RoleName = "consultant" };
 
         var mapping = new UserHospitalMapping
         {
@@ -223,7 +223,7 @@ public class UpdateStaffCommandHandlerTests
             userId,
             hospitalId,
             "Dr. John Doe",
-            new List<string> { "Surgeon", "Consultant" });
+            new List<string> { "surgeon", "consultant" });
 
         // Act
         var result = await handler.Handle(command, CancellationToken.None);
