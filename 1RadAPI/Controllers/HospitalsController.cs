@@ -41,6 +41,26 @@ public class HospitalsController : ControllerBase
         if (!result.Success) return BadRequest(new { message = result.Error });
         return Ok(new { message = "Hospital metadata updated successfully." });
     }
+
+    [HttpPost("chain")]
+    public async Task<IActionResult> CreateChain([FromBody] CreateChainRequest request)
+    {
+        var userId = Guid.Parse(User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? Guid.Empty.ToString());
+        if (userId == Guid.Empty) return Unauthorized();
+
+        var result = await _mediator.Send(new CreateChainCommand(
+            userId,
+            request.ChainName,
+            request.HospitalName,
+            request.HospitalAddress,
+            request.GSTIN,
+            request.RegistrationNumber,
+            request.PAN,
+            request.NABHNumber));
+
+        if (!result.Success) return BadRequest(new { message = result.Error });
+        return Ok(result);
+    }
 }
 
 public record UpdateHospitalDetailsRequest(
@@ -50,3 +70,12 @@ public record UpdateHospitalDetailsRequest(
     string? RegistrationNumber,
     string? PAN,
     string? NABHNumber);
+
+public record CreateChainRequest(
+    string ChainName,
+    string HospitalName,
+    string HospitalAddress,
+    string? GSTIN = null,
+    string? RegistrationNumber = null,
+    string? PAN = null,
+    string? NABHNumber = null);
