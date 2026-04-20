@@ -1,4 +1,5 @@
 using _1Rad.Application.Features.Appointments.Queries.GetStrategicOutlook;
+using _1Rad.Application.Features.Referrers.Queries.ExportReferralIntelligence;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -7,7 +8,7 @@ namespace _1RadAPI.Controllers;
 
 [Authorize]
 [ApiController]
-[Route("api/[controller]")]
+[Route("api/v1/intelligence")]
 public class IntelligenceController : ControllerBase
 {
     private readonly IMediator _mediator;
