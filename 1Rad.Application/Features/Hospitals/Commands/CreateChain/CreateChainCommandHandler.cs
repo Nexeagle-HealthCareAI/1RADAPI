@@ -12,10 +12,12 @@ namespace _1Rad.Application.Features.Hospitals.Commands.CreateChain;
 public class CreateChainCommandHandler : IRequestHandler<CreateChainCommand, CreateChainResponse>
 {
     private readonly IApplicationDbContext _context;
+    private readonly IUserContext _userContext;
 
-    public CreateChainCommandHandler(IApplicationDbContext context)
+    public CreateChainCommandHandler(IApplicationDbContext context, IUserContext userContext)
     {
         _context = context;
+        _userContext = userContext;
     }
 
     public async Task<CreateChainResponse> Handle(CreateChainCommand request, CancellationToken cancellationToken)
@@ -26,15 +28,50 @@ public class CreateChainCommandHandler : IRequestHandler<CreateChainCommand, Cre
             var user = await _context.Users.FindAsync(new object[] { request.UserId }, cancellationToken);
             if (user == null) return new CreateChainResponse { Success = false, Error = "User identity not found." };
 
-            // 2. Create the Chain (Group)
-            var group = new HospitalGroup
-            {
-                GroupName = request.ChainName,
-                CreatedAt = DateTime.UtcNow
-            };
-            _context.HospitalGroups.Add(group);
+            // 2. Identify or Create the Institutional Group (Chain)
+            var currentGroupId = _userContext.GroupId;
+            HospitalGroup group = null;
 
-            // 3. Create the Primary Center (Hospital)
+            if (currentGroupId.HasValue)
+            {
+                group = await _context.HospitalGroups.FindAsync(new object[] { currentGroupId.Value }, cancellationToken);
+            }
+
+            if (group == null)
+            {
+                // Fallback: Check if user belongs to any hospital that has a group
+                var existingMapping = await _context.UserHospitalMappings
+                    .Include(m => m.Hospital)
+                    .Where(m => m.UserId == request.UserId && m.Hospital.GroupId != null)
+                    .FirstOrDefaultAsync(cancellationToken);
+
+                if (existingMapping != null)
+                {
+                    group = await _context.HospitalGroups.FindAsync(new object[] { existingMapping.Hospital.GroupId!.Value }, cancellationToken);
+                }
+            }
+
+            if (group != null)
+            {
+                // Institutional Brand Override: Update existing group name as specified by user
+                group.GroupName = request.ChainName;
+                _context.HospitalGroups.Update(group);
+            }
+            else
+            {
+                // Initial Root: Create new hospital group for the first-time chain
+                group = new HospitalGroup
+                {
+                    GroupName = request.ChainName,
+                    CreatedAt = DateTime.UtcNow
+                };
+                _context.HospitalGroups.Add(group);
+            }
+
+            // Ensure changes to group (new or updated) are tracked
+            await _context.SaveChangesAsync(cancellationToken);
+
+            // 3. Create the Centre node (Hospital)
             var hospital = new Hospital
             {
                 GroupId = group.GroupId,
@@ -53,17 +90,16 @@ public class CreateChainCommandHandler : IRequestHandler<CreateChainCommand, Cre
             var adminRole = await _context.Roles.FirstOrDefaultAsync(r => r.RoleName == "AdminDoctor", cancellationToken);
             if (adminRole == null)
             {
-                // Fallback to any role containing admin if AdminDoctor is missing
                 adminRole = await _context.Roles.FirstOrDefaultAsync(r => r.RoleName.Contains("Admin"), cancellationToken);
             }
 
-            if (adminRole == null) return new CreateChainResponse { Success = false, Error = "Administrative role protocols not found in system baseline." };
+            if (adminRole == null) return new CreateChainResponse { Success = false, Error = "Administrative role protocols not found." };
 
             var mapping = new UserHospitalMapping
             {
                 UserId = user.UserId,
                 HospitalId = hospital.HospitalId,
-                IsDefault = false // Maintain current default, but link to new node
+                IsDefault = false 
             };
             mapping.Roles.Add(adminRole);
             _context.UserHospitalMappings.Add(mapping);
