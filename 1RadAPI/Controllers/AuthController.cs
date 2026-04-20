@@ -157,6 +157,25 @@ public class AuthController : ControllerBase
     }
 
     /// <summary>
+    /// Hub Synchronization: Fetches all authorized hospital nodes for the current user.
+    /// </summary>
+    [Authorize]
+    [HttpGet("hubs")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> GetAuthorizedHospitals()
+    {
+        var userIdString = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value 
+                           ?? User.FindFirst(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub)?.Value;
+                           
+        if (string.IsNullOrEmpty(userIdString) || !Guid.TryParse(userIdString, out Guid userId))
+            return Unauthorized();
+
+        var result = await _mediator.Send(new GetAuthorizedHospitalsQuery(userId));
+        return result.Success ? Ok(result) : BadRequest(new { error = result.Error });
+    }
+
+    /// <summary>
     /// Recovery 1: Initiates password reset flow by sending an OTP.
     /// </summary>
     [HttpPost("forgot-password")]
