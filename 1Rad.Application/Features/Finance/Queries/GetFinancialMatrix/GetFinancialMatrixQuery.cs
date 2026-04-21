@@ -11,6 +11,7 @@ public class FinancialMatrixDto
     public List<MatrixItemDto> Daily { get; set; } = new();
     public List<MatrixItemDto> Monthly { get; set; } = new();
     public List<MatrixItemDto> Yearly { get; set; } = new();
+    public List<ModalityRevenueDto> ModalityBreakdown { get; set; } = new();
 }
 
 public class MatrixItemDto
@@ -20,6 +21,15 @@ public class MatrixItemDto
     public decimal Collected { get; set; }
     public decimal Pending { get; set; }
     public int RealizationRate { get; set; }
+}
+
+public class ModalityRevenueDto
+{
+    public string Modality { get; set; } = string.Empty;
+    public decimal DailyRevenue { get; set; }
+    public decimal MonthlyRevenue { get; set; }
+    public decimal YearlyRevenue { get; set; }
+    public int ContributionPercentage { get; set; }
 }
 
 public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrixQuery, FinancialMatrixDto>
@@ -33,15 +43,23 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
 
     public async Task<FinancialMatrixDto> Handle(GetFinancialMatrixQuery request, CancellationToken cancellationToken)
     {
-        // Optimization: Use Selective Projection to minimize memory footprint and AsNoTracking for read-only performance.
+        var hospitalId = _context.UserContext.HospitalId;
+
+        // Perform a domain join to link Invoices with Appointments for Modality context
         var invoiceData = await _context.Invoices
             .AsNoTracking()
-            .Where(i => i.HospitalId == _context.UserContext.HospitalId)
-            .Select(i => new { i.TotalAmount, i.PaidAmount, i.CreatedAt })
+            .Where(i => i.HospitalId == hospitalId)
+            .Join(_context.Appointments.AsNoTracking(), 
+                  i => i.AppointmentId, 
+                  a => a.AppointmentId, 
+                  (i, a) => new { i.TotalAmount, i.PaidAmount, i.CreatedAt, a.Modality })
             .ToListAsync(cancellationToken);
         
         if (!invoiceData.Any()) return new FinancialMatrixDto();
 
+        var totalLifeTimeInvoiced = invoiceData.Sum(i => i.TotalAmount);
+
+        // 1. Temporal Aggregation (Standard)
         var daily = invoiceData
             .GroupBy(i => i.CreatedAt.Date)
             .OrderByDescending(g => g.Key)
@@ -84,11 +102,32 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                     : 0
             }).ToList();
 
+        // 2. Modality Cross-Pivot Aggregation
+        var today = DateTime.UtcNow.Date;
+        var monthStart = new DateTime(today.Year, today.Month, 1);
+        var yearStart = new DateTime(today.Year, 1, 1);
+
+        var modalityBreakdown = invoiceData
+            .GroupBy(i => i.Modality)
+            .Select(g => new ModalityRevenueDto
+            {
+                Modality = (g.Key ?? "GENERIC").ToUpper(),
+                DailyRevenue = g.Where(i => i.CreatedAt.Date == today).Sum(i => i.TotalAmount),
+                MonthlyRevenue = g.Where(i => i.CreatedAt >= monthStart).Sum(i => i.TotalAmount),
+                YearlyRevenue = g.Where(i => i.CreatedAt >= yearStart).Sum(i => i.TotalAmount),
+                ContributionPercentage = totalLifeTimeInvoiced > 0 
+                    ? (int)(g.Sum(i => i.TotalAmount) / totalLifeTimeInvoiced * 100)
+                    : 0
+            })
+            .OrderByDescending(x => x.YearlyRevenue)
+            .ToList();
+
         return new FinancialMatrixDto
         {
             Daily = daily,
             Monthly = monthly,
-            Yearly = yearly
+            Yearly = yearly,
+            ModalityBreakdown = modalityBreakdown
         };
     }
 }
