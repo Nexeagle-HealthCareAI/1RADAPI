@@ -35,7 +35,6 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
         {
             AppointmentId = request.AppointmentId,
             PatientId = request.PatientId,
-            PatientName = patient.FullName,
             HospitalId = _context.UserContext.HospitalId,
             InvoiceId = $"INV-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString().Substring(0, 4).ToUpper()}",
             TotalAmount = request.Items.Sum(x => x.Amount * x.Quantity),

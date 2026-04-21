@@ -12,6 +12,7 @@ using _1Rad.Application.Features.Finance.Commands.SyncLocalStorageInvoices;
 using _1Rad.Application.Features.Finance.Queries.ExportFinancials;
 using _1Rad.Application.Features.Finance.Queries.GetFinancialMatrix;
 using _1Rad.Application.Features.Finance.Queries.GetPendingBillables;
+using _1Rad.Application.Features.Finance.Commands.RecordExpense;
 
 namespace _1RadAPI.Controllers;
 
@@ -103,5 +104,12 @@ public class FinanceController : ControllerBase
     {
         var result = await _mediator.Send(new GetPendingBillablesQuery { PatientId = patientId });
         return Ok(result);
+    }
+
+    [HttpPost("expense")]
+    public async Task<IActionResult> RecordExpense([FromBody] RecordExpenseCommand command)
+    {
+        var result = await _mediator.Send(command);
+        return Ok(new { id = result });
     }
 }

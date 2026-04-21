@@ -58,7 +58,6 @@ public class SyncLocalStorageInvoicesCommandHandler : IRequestHandler<SyncLocalS
             var invoice = new Invoice
             {
                 InvoiceId = legacy.InvoiceId,
-                PatientName = legacy.PatientName,
                 TotalAmount = legacy.TotalAmount,
                 PaidAmount = legacy.Status == "PAID" ? legacy.TotalAmount : 0,
                 Status = legacy.Status,

@@ -74,12 +74,29 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
                 financialYield = todayMissions.Sum(m => _modalityWeights.ContainsKey(m.Modality) ? _modalityWeights[m.Modality] : 80m);
             }
 
+            // --- 2.1 OPERATIONAL EXPENSES ---
+            decimal operationalExpenses = 0;
+            try
+            {
+                operationalExpenses = await _context.Expenses
+                    .Where(e => e.HospitalId == hospitalId && e.CreatedAt >= today && e.CreatedAt < tomorrow)
+                    .SumAsync(e => e.Amount, cancellationToken);
+            }
+            catch
+            {
+                operationalExpenses = 0;
+            }
+
+            var netProfit = financialYield - operationalExpenses;
+
             var avgLatency = 38 + (dailyMissions % 7);
 
             var kpis = new KpiSnapshot(
                 universalRegistryCount,
                 dailyMissions,
                 financialYield,
+                operationalExpenses,
+                netProfit,
                 avgLatency,
                 14.2
             );
@@ -189,7 +206,7 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
         {
             // Return empty/default outlook on error
             return new StrategicOutlookDto(
-                new KpiSnapshot(0, 0, 0, 0, 0),
+                new KpiSnapshot(0, 0, 0, 0, 0, 0, 0),
                 new List<ModalityMetric>(),
                 new List<ModalityRevenue>(),
                 Enumerable.Range(0, 7).Select(i => new VolumeDataPoint($"Day {i}", 0, false)).ToList(),

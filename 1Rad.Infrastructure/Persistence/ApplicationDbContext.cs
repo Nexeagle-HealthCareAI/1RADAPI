@@ -33,6 +33,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<ServiceCharge> ServiceCharges => Set<ServiceCharge>();
     public DbSet<Invoice> Invoices => Set<Invoice>();
     public DbSet<Payment> Payments => Set<Payment>();
+    public DbSet<Expense> Expenses => Set<Expense>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -222,7 +223,6 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.ToTable("Invoices", "dbo");
             entity.HasKey(e => e.Id);
             entity.Property(e => e.InvoiceId).IsRequired().HasMaxLength(50);
-            entity.Property(e => e.PatientName).IsRequired().HasMaxLength(255);
             entity.Property(e => e.TotalAmount).HasPrecision(18, 2);
             entity.Property(e => e.PaidAmount).HasPrecision(18, 2);
             entity.Property(e => e.Status).IsRequired().HasMaxLength(50);
@@ -268,6 +268,20 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
                 .WithMany(i => i.Payments)
                 .HasForeignKey(e => e.InvoiceId)
                 .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // Expense Configuration
+        modelBuilder.Entity<Expense>(entity =>
+        {
+            entity.ToTable("Expenses", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Description).IsRequired();
+            entity.Property(e => e.Category).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.Amount).HasPrecision(18, 2);
+
+            entity.HasOne(e => e.Hospital)
+                .WithMany()
+                .HasForeignKey(e => e.HospitalId);
         });
 
         // Tactical Global Query Filters for Multi-Facility Isolation

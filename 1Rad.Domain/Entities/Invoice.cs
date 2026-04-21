@@ -9,7 +9,6 @@ public class Invoice : BaseEntity, IHospitalContext
     
     public Guid? AppointmentId { get; set; }
     public Guid PatientId { get; set; }
-    public string PatientName { get; set; } = string.Empty;
     
     public decimal TotalAmount { get; set; }
     public decimal PaidAmount { get; set; }

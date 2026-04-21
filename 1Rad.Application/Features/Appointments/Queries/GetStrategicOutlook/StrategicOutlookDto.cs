@@ -18,6 +18,8 @@ public record KpiSnapshot(
     int UniversalRegistry,
     int DailyMissions,
     decimal FinancialYield,
+    decimal OperationalExpenses,
+    decimal NetProfit,
     int AverageLatencyMinutes,
     double GrowthPercentage
 );

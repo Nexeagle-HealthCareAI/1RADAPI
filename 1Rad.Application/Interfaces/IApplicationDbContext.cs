@@ -18,6 +18,7 @@ public interface IApplicationDbContext
     DbSet<ServiceCharge> ServiceCharges { get; }
     DbSet<Invoice> Invoices { get; }
     DbSet<Payment> Payments { get; }
+    DbSet<Expense> Expenses { get; }
     IUserContext UserContext { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken);
