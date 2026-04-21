@@ -4,8 +4,8 @@ namespace _1Rad.Domain.Entities;
 
 public class Invoice : BaseEntity, IHospitalContext
 {
-    public Guid InvoiceId { get; set; } = Guid.NewGuid();
-    public string DisplayId { get; set; } = string.Empty; // e.g., INV-2024-001
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public string InvoiceId { get; set; } = string.Empty; // e.g., INV-2024-001
     
     public Guid? AppointmentId { get; set; }
     public Guid PatientId { get; set; }

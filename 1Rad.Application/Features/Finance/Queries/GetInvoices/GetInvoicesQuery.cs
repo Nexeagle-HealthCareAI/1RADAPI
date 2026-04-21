@@ -52,7 +52,7 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
 
         if (!string.IsNullOrEmpty(request.Search))
         {
-            query = query.Where(i => i.PatientName.Contains(request.Search) || i.DisplayId.Contains(request.Search));
+            query = query.Where(i => i.PatientName.Contains(request.Search) || i.InvoiceId.Contains(request.Search));
         }
 
         if (request.StartDate.HasValue)
@@ -69,8 +69,8 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
             .OrderByDescending(i => i.CreatedAt)
             .Select(i => new InvoiceDto
             {
-                InvoiceId = i.InvoiceId,
-                DisplayId = i.DisplayId,
+                InvoiceId = i.Id,
+                DisplayId = i.InvoiceId,
                 PatientName = i.PatientName,
                 TotalAmount = i.TotalAmount,
                 PaidAmount = i.PaidAmount,

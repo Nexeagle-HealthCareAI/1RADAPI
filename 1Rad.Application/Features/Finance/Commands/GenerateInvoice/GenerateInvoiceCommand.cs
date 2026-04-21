@@ -37,7 +37,7 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
             PatientId = request.PatientId,
             PatientName = patient.FullName,
             HospitalId = _context.UserContext.HospitalId,
-            DisplayId = $"INV-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString().Substring(0, 4).ToUpper()}",
+            InvoiceId = $"INV-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString().Substring(0, 4).ToUpper()}",
             TotalAmount = request.Items.Sum(x => x.Amount * x.Quantity),
             PaidAmount = 0,
             Status = "PENDING",
@@ -57,6 +57,6 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
         _context.Invoices.Add(invoice);
         await _context.SaveChangesAsync(cancellationToken);
 
-        return invoice.InvoiceId;
+        return invoice.Id;
     }
 }
