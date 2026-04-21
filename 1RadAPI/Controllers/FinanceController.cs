@@ -10,6 +10,7 @@ using _1Rad.Application.Features.Finance.Commands.GenerateInvoice;
 using _1Rad.Application.Features.Finance.Commands.CollectPayment;
 using _1Rad.Application.Features.Finance.Commands.SyncLocalStorageInvoices;
 using _1Rad.Application.Features.Finance.Queries.ExportFinancials;
+using _1Rad.Application.Features.Finance.Queries.GetFinancialMatrix;
 
 namespace _1RadAPI.Controllers;
 
@@ -87,5 +88,12 @@ public class FinanceController : ControllerBase
         var result = await _mediator.Send(new ExportFinancialsQuery { StartDate = startDate, EndDate = endDate });
         var fileName = $"1Rad_Financials_{DateTime.Now:yyyyMMdd}.xlsx";
         return File(result, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", fileName);
+    }
+
+    [HttpGet("matrix")]
+    public async Task<IActionResult> GetMatrix()
+    {
+        var result = await _mediator.Send(new GetFinancialMatrixQuery());
+        return Ok(result);
     }
 }
