@@ -94,7 +94,7 @@ public class ExportFinancialsQueryHandler : IRequestHandler<ExportFinancialsQuer
         for (int i = 0; i < invoices.Count; i++)
         {
             var inv = invoices[i];
-            rawSheet.Cell(i + 2, 1).Value = inv.DisplayId;
+            rawSheet.Cell(i + 2, 1).Value = inv.InvoiceId;
             rawSheet.Cell(i + 2, 2).Value = inv.CreatedAt.ToString("dd-MMM-yyyy HH:mm");
             rawSheet.Cell(i + 2, 3).Value = inv.PatientName;
             rawSheet.Cell(i + 2, 4).Value = inv.TotalAmount;
