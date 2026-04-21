@@ -14,6 +14,8 @@ using _1Rad.Application.Features.Finance.Queries.GetFinancialMatrix;
 using _1Rad.Application.Features.Finance.Queries.GetPendingBillables;
 using _1Rad.Application.Features.Finance.Commands.RecordExpense;
 
+using _1Rad.Application.Features.Finance.Queries.GetExpenses;
+
 namespace _1RadAPI.Controllers;
 
 [Authorize]
@@ -103,6 +105,13 @@ public class FinanceController : ControllerBase
     public async Task<IActionResult> GetPendingBillables(Guid patientId)
     {
         var result = await _mediator.Send(new GetPendingBillablesQuery { PatientId = patientId });
+        return Ok(result);
+    }
+
+    [HttpGet("expenses")]
+    public async Task<IActionResult> GetExpenses([FromQuery] string? search, [FromQuery] string? category, [FromQuery] DateTime? startDate, [FromQuery] DateTime? endDate)
+    {
+        var result = await _mediator.Send(new GetExpensesQuery { Search = search, Category = category, StartDate = startDate, EndDate = endDate });
         return Ok(result);
     }
 
