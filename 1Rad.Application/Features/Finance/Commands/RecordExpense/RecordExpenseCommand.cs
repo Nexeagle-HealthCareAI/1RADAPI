@@ -10,6 +10,13 @@ public record RecordExpenseCommand : IRequest<Guid>
     public string Description { get; init; } = string.Empty;
     public string Category { get; init; } = string.Empty;
     public decimal Amount { get; init; }
+    public decimal TaxAmount { get; init; }
+    public DateTime? TransactionDate { get; init; }
+    public string? PaymentMode { get; init; }
+    public string? ReferenceNumber { get; init; }
+    public string? VendorName { get; init; }
+    public string? CostCenter { get; init; }
+    public string? Status { get; init; }
 }
 
 public class RecordExpenseCommandHandler : IRequestHandler<RecordExpenseCommand, Guid>
@@ -28,6 +35,13 @@ public class RecordExpenseCommandHandler : IRequestHandler<RecordExpenseCommand,
             Description = request.Description,
             Category = request.Category,
             Amount = request.Amount,
+            TaxAmount = request.TaxAmount,
+            PaymentMode = request.PaymentMode,
+            ReferenceNumber = request.ReferenceNumber,
+            VendorName = request.VendorName,
+            CostCenter = request.CostCenter,
+            Status = request.Status ?? "Paid",
+            TransactionDate = request.TransactionDate ?? DateTime.UtcNow,
             HospitalId = _context.UserContext.HospitalId,
             CreatedAt = DateTime.UtcNow
         };

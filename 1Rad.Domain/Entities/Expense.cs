@@ -8,6 +8,13 @@ public class Expense : BaseEntity, IHospitalContext
     public string Description { get; set; } = string.Empty;
     public string Category { get; set; } = string.Empty; // Maintenance, Staff, Utilities, Reagents
     public decimal Amount { get; set; }
+    public decimal TaxAmount { get; set; }
+    public string? PaymentMode { get; set; }
+    public string? ReferenceNumber { get; set; }
+    public string? VendorName { get; set; }
+    public string? CostCenter { get; set; }
+    public string Status { get; set; } = "Paid";
+    public DateTime TransactionDate { get; set; } = DateTime.UtcNow;
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     public Guid HospitalId { get; set; }

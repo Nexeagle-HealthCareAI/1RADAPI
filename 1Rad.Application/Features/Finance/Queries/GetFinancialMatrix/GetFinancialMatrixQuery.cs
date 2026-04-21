@@ -60,7 +60,7 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
         var expenseData = await _context.Expenses
             .AsNoTracking()
             .Where(e => e.HospitalId == hospitalId)
-            .Select(e => new { e.Amount, e.CreatedAt })
+            .Select(e => new { e.Amount, e.TransactionDate })
             .ToListAsync(cancellationToken);
         
         if (!invoiceData.Any() && !expenseData.Any()) return new FinancialMatrixDto();
@@ -76,7 +76,7 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 Invoiced = g.Sum(i => i.TotalAmount),
                 Collected = g.Sum(i => i.PaidAmount)
             })
-            .Concat(expenseData.GroupBy(e => e.CreatedAt.Date).Select(g => new { Date = g.Key, Invoiced = 0m, Collected = 0m })) // Ensure date coverage
+            .Concat(expenseData.GroupBy(e => e.TransactionDate.Date).Select(g => new { Date = g.Key, Invoiced = 0m, Collected = 0m })) // Ensure date coverage
             .GroupBy(x => x.Date)
             .OrderByDescending(g => g.Key)
             .Select(g => new MatrixItemDto
@@ -84,7 +84,7 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 Label = g.Key.ToString("dd-MMM-yyyy"),
                 Invoiced = g.Sum(x => x.Invoiced),
                 Collected = g.Sum(x => x.Collected),
-                Expenses = expenseData.Where(e => e.CreatedAt.Date == g.Key).Sum(e => e.Amount),
+                Expenses = expenseData.Where(e => e.TransactionDate.Date == g.Key).Sum(e => e.Amount),
                 Pending = g.Sum(x => x.Invoiced - x.Collected),
                 RealizationRate = g.Sum(x => x.Invoiced) > 0 
                     ? Math.Min(100, (int)(g.Sum(x => x.Collected) / g.Sum(x => x.Invoiced) * 100))
@@ -99,7 +99,7 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 Label = new DateTime(g.Key.Year, g.Key.Month, 1).ToString("MMMM yyyy"),
                 Invoiced = g.Sum(i => i.TotalAmount),
                 Collected = g.Sum(i => i.PaidAmount),
-                Expenses = expenseData.Where(e => e.CreatedAt.Year == g.Key.Year && e.CreatedAt.Month == g.Key.Month).Sum(e => e.Amount),
+                Expenses = expenseData.Where(e => e.TransactionDate.Year == g.Key.Year && e.TransactionDate.Month == g.Key.Month).Sum(e => e.Amount),
                 Pending = g.Sum(i => i.TotalAmount - i.PaidAmount),
                 RealizationRate = g.Sum(i => i.TotalAmount) > 0 
                     ? Math.Min(100, (int)(g.Sum(i => i.PaidAmount) / g.Sum(i => i.TotalAmount) * 100))
@@ -114,7 +114,7 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 Label = g.Key.ToString(),
                 Invoiced = g.Sum(i => i.TotalAmount),
                 Collected = g.Sum(i => i.PaidAmount),
-                Expenses = expenseData.Where(e => e.CreatedAt.Year == g.Key).Sum(e => e.Amount),
+                Expenses = expenseData.Where(e => e.TransactionDate.Year == g.Key).Sum(e => e.Amount),
                 Pending = g.Sum(i => i.TotalAmount - i.PaidAmount),
                 RealizationRate = g.Sum(i => i.TotalAmount) > 0 
                     ? Math.Min(100, (int)(g.Sum(i => i.PaidAmount) / g.Sum(i => i.TotalAmount) * 100))

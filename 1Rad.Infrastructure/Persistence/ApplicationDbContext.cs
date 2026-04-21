@@ -278,6 +278,13 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.Description).IsRequired();
             entity.Property(e => e.Category).IsRequired().HasMaxLength(100);
             entity.Property(e => e.Amount).HasPrecision(18, 2);
+            entity.Property(e => e.TaxAmount).HasPrecision(18, 2);
+            entity.Property(e => e.PaymentMode).HasMaxLength(50);
+            entity.Property(e => e.ReferenceNumber).HasMaxLength(100);
+            entity.Property(e => e.VendorName).HasMaxLength(200);
+            entity.Property(e => e.CostCenter).HasMaxLength(100);
+            entity.Property(e => e.Status).IsRequired().HasMaxLength(50).HasDefaultValue("Paid");
+            entity.Property(e => e.TransactionDate).IsRequired();
 
             entity.HasOne(e => e.Hospital)
                 .WithMany()
