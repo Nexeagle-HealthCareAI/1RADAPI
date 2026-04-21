@@ -22,7 +22,9 @@ public class ExportFinancialsQueryHandler : IRequestHandler<ExportFinancialsQuer
 
     public async Task<byte[]> Handle(ExportFinancialsQuery request, CancellationToken cancellationToken)
     {
-        var invoicesQuery = _context.Invoices.AsQueryable();
+        var invoicesQuery = _context.Invoices
+            .Where(i => i.HospitalId == _context.UserContext.HospitalId)
+            .AsQueryable();
 
         if (request.StartDate.HasValue)
             invoicesQuery = invoicesQuery.Where(i => i.CreatedAt >= request.StartDate.Value);

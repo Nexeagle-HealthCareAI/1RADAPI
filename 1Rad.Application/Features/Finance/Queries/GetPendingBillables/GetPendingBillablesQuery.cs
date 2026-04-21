@@ -30,13 +30,19 @@ public class GetPendingBillablesQueryHandler : IRequestHandler<GetPendingBillabl
 
     public async Task<List<PendingBillableDto>> Handle(GetPendingBillablesQuery request, CancellationToken cancellationToken)
     {
-        // 1. Get all appointments for the patient that don't have an invoice yet
-        var unbilledAppointments = await _context.Appointments
-            .Where(a => a.PatientId == request.PatientId && a.Status != "CANCELLED")
-            .Where(a => !_context.Invoices.Any(i => i.AppointmentId == a.AppointmentId && i.Status != "CANCELLED"))
+        // 1. Get all invoiced appointment IDs (materialized first to avoid LINQ translation error)
+        var invoicedAppointmentIds = await _context.Invoices
+            .Where(i => i.Status != "CANCELLED")
+            .Select(i => i.AppointmentId)
             .ToListAsync(cancellationToken);
 
-        // 2. Map and try to find prices from Service Registry
+        // 2. Get all appointments for the patient that don't have an invoice yet
+        var unbilledAppointments = await _context.Appointments
+            .Where(a => a.PatientId == request.PatientId && a.Status != "CANCELLED")
+            .Where(a => !invoicedAppointmentIds.Contains(a.AppointmentId))
+            .ToListAsync(cancellationToken);
+
+        // 3. Map and try to find prices from Service Registry
         var registry = await _context.ServiceCharges.ToListAsync(cancellationToken);
 
         var result = unbilledAppointments.Select(a => {

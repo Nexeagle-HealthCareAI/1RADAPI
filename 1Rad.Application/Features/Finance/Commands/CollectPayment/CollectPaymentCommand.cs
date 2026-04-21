@@ -26,7 +26,7 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
     {
         var invoice = await _context.Invoices
             .Include(i => i.Payments)
-            .FirstOrDefaultAsync(i => i.InvoiceId == request.InvoiceId, cancellationToken);
+            .FirstOrDefaultAsync(i => i.InvoiceId == request.InvoiceId && i.HospitalId == _context.UserContext.HospitalId, cancellationToken);
         
         if (invoice == null) throw new Exception("Invoice not found.");
         if (invoice.Status == "PAID") throw new Exception("Invoice is already settled.");

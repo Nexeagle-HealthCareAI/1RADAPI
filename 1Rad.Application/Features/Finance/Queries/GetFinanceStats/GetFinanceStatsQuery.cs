@@ -26,7 +26,9 @@ public class GetFinanceStatsQueryHandler : IRequestHandler<GetFinanceStatsQuery,
 
     public async Task<FinanceStatsDto> Handle(GetFinanceStatsQuery request, CancellationToken cancellationToken)
     {
-        var allInvoices = await _context.Invoices.ToListAsync(cancellationToken);
+        var allInvoices = await _context.Invoices
+            .Where(i => i.HospitalId == _context.UserContext.HospitalId)
+            .ToListAsync(cancellationToken);
         
         if (!allInvoices.Any()) return new FinanceStatsDto();
 

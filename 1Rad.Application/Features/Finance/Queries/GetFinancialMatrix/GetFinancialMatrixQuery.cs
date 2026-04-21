@@ -33,11 +33,16 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
 
     public async Task<FinancialMatrixDto> Handle(GetFinancialMatrixQuery request, CancellationToken cancellationToken)
     {
-        var invoices = await _context.Invoices.ToListAsync(cancellationToken);
+        // Optimization: Use Selective Projection to minimize memory footprint and AsNoTracking for read-only performance.
+        var invoiceData = await _context.Invoices
+            .AsNoTracking()
+            .Where(i => i.HospitalId == _context.UserContext.HospitalId)
+            .Select(i => new { i.TotalAmount, i.PaidAmount, i.CreatedAt })
+            .ToListAsync(cancellationToken);
         
-        if (!invoices.Any()) return new FinancialMatrixDto();
+        if (!invoiceData.Any()) return new FinancialMatrixDto();
 
-        var daily = invoices
+        var daily = invoiceData
             .GroupBy(i => i.CreatedAt.Date)
             .OrderByDescending(g => g.Key)
             .Select(g => new MatrixItemDto
@@ -47,11 +52,11 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 Collected = g.Sum(i => i.PaidAmount),
                 Pending = g.Sum(i => i.TotalAmount - i.PaidAmount),
                 RealizationRate = g.Sum(i => i.TotalAmount) > 0 
-                    ? (int)(g.Sum(i => i.PaidAmount) / g.Sum(i => i.TotalAmount) * 100) 
+                    ? Math.Min(100, (int)(g.Sum(i => i.PaidAmount) / g.Sum(i => i.TotalAmount) * 100))
                     : 0
-            }).Take(30).ToList(); // Last 30 days
+            }).Take(30).ToList();
 
-        var monthly = invoices
+        var monthly = invoiceData
             .GroupBy(i => new { i.CreatedAt.Year, i.CreatedAt.Month })
             .OrderByDescending(g => g.Key.Year).ThenByDescending(g => g.Key.Month)
             .Select(g => new MatrixItemDto
@@ -61,11 +66,11 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 Collected = g.Sum(i => i.PaidAmount),
                 Pending = g.Sum(i => i.TotalAmount - i.PaidAmount),
                 RealizationRate = g.Sum(i => i.TotalAmount) > 0 
-                    ? (int)(g.Sum(i => i.PaidAmount) / g.Sum(i => i.TotalAmount) * 100) 
+                    ? Math.Min(100, (int)(g.Sum(i => i.PaidAmount) / g.Sum(i => i.TotalAmount) * 100))
                     : 0
-            }).Take(12).ToList(); // Last 12 months
+            }).Take(12).ToList();
 
-        var yearly = invoices
+        var yearly = invoiceData
             .GroupBy(i => i.CreatedAt.Year)
             .OrderByDescending(g => g.Key)
             .Select(g => new MatrixItemDto
@@ -75,7 +80,7 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 Collected = g.Sum(i => i.PaidAmount),
                 Pending = g.Sum(i => i.TotalAmount - i.PaidAmount),
                 RealizationRate = g.Sum(i => i.TotalAmount) > 0 
-                    ? (int)(g.Sum(i => i.PaidAmount) / g.Sum(i => i.TotalAmount) * 100) 
+                    ? Math.Min(100, (int)(g.Sum(i => i.PaidAmount) / g.Sum(i => i.TotalAmount) * 100))
                     : 0
             }).ToList();
 

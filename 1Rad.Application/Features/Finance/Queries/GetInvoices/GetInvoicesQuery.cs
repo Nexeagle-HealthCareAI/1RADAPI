@@ -39,6 +39,7 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
     public async Task<List<InvoiceDto>> Handle(GetInvoicesQuery request, CancellationToken cancellationToken)
     {
         var query = _context.Invoices
+            .Where(i => i.HospitalId == _context.UserContext.HospitalId)
             .Include(i => i.Items)
             .AsQueryable();
 

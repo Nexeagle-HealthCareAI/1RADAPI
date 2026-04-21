@@ -39,6 +39,13 @@ public class SyncLocalStorageInvoicesCommandHandler : IRequestHandler<SyncLocalS
             var exists = await _context.Invoices.AnyAsync(i => i.DisplayId == legacy.InvoiceId, cancellationToken);
             if (exists) continue;
 
+            // Try to find patient by name in current hospital
+            var patient = await _context.Patients
+                .FirstOrDefaultAsync(p => p.FullName == legacy.PatientName && p.HospitalId == _context.UserContext.HospitalId, cancellationToken);
+            
+            // Skip if patient not found - don't create orphaned invoices
+            if (patient == null) continue;
+
             var invoice = new Invoice
             {
                 DisplayId = legacy.InvoiceId,
@@ -48,10 +55,7 @@ public class SyncLocalStorageInvoicesCommandHandler : IRequestHandler<SyncLocalS
                 Status = legacy.Status,
                 CreatedAt = legacy.CreatedAt,
                 HospitalId = _context.UserContext.HospitalId,
-                // We don't have Guid IDs for legacy appointments/patients easily here, 
-                // so we rely on PatientName for audit for now. 
-                // A better approach would match by Name/Mobile but that's risky for auto-sync.
-                PatientId = Guid.Empty // Or search for a match
+                PatientId = patient.PatientId // ✅ Use actual patient ID instead of Guid.Empty
             };
 
             foreach (var item in legacy.Items)
