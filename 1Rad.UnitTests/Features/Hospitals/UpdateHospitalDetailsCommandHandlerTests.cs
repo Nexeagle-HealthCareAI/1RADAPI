@@ -56,7 +56,8 @@ public class UpdateHospitalDetailsCommandHandlerTests
             "NEW789012",
             null,
             null,
-            null);
+            null,
+            false);
 
         // Act
         var result = await handler.Handle(command, CancellationToken.None);
@@ -86,7 +87,8 @@ public class UpdateHospitalDetailsCommandHandlerTests
             null,
             null,
             null,
-            null);
+            null,
+            false);
 
         // Act
         var result = await handler.Handle(command, CancellationToken.None);
@@ -122,7 +124,8 @@ public class UpdateHospitalDetailsCommandHandlerTests
             "ORIGINAL123",
             null,
             null,
-            null);
+            null,
+            false);
 
         // Act
         var result = await handler.Handle(command, CancellationToken.None);
@@ -162,7 +165,8 @@ public class UpdateHospitalDetailsCommandHandlerTests
             null,
             null,
             null,
-            null);
+            null,
+            false);
 
         // Act
         var result = await handler.Handle(command, CancellationToken.None);
