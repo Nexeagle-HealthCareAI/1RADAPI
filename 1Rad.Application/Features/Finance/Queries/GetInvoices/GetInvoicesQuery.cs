@@ -25,7 +25,12 @@ public class InvoiceDto
     public List<InvoiceItemDto> Items { get; set; } = new();
 }
 
-public record InvoiceItemDto(string Description, decimal Amount, int Quantity);
+public class InvoiceItemDto
+{
+    public string Description { get; set; } = string.Empty;
+    public decimal Amount { get; set; }
+    public int Quantity { get; set; }
+}
 
 public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<InvoiceDto>>
 {
@@ -38,23 +43,30 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
 
     public async Task<List<InvoiceDto>> Handle(GetInvoicesQuery request, CancellationToken cancellationToken)
     {
-        // Optimization: Use AsNoTracking andSelective Projection to prevent memory bloat.
-        // We also implement a Result Cap (Take 200) to ensure the API remains responsive as data grows.
+        // Defensive Check: If no hospital context is established, return an empty list rather than risking a cross-tenant query or a 500 error.
+        if (_context.UserContext.HospitalId == Guid.Empty)
+        {
+            return new List<InvoiceDto>();
+        }
+
         var query = _context.Invoices
             .AsNoTracking()
             .Where(i => i.HospitalId == _context.UserContext.HospitalId)
             .AsQueryable();
 
+        // Status Filtering
         if (!string.IsNullOrEmpty(request.Status) && request.Status != "ALL")
         {
             query = query.Where(i => i.Status == request.Status);
         }
 
+        // Search Filtering (Patient Name or Display ID)
         if (!string.IsNullOrEmpty(request.Search))
         {
             query = query.Where(i => i.PatientName.Contains(request.Search) || i.InvoiceId.Contains(request.Search));
         }
 
+        // Temporal Filtering
         if (request.StartDate.HasValue)
         {
             query = query.Where(i => i.CreatedAt >= request.StartDate.Value);
@@ -65,6 +77,7 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
             query = query.Where(i => i.CreatedAt <= request.EndDate.Value);
         }
 
+        // Execute Projection: Using standard property initialization to ensure safe SQL translation in EF Core.
         return await query
             .OrderByDescending(i => i.CreatedAt)
             .Select(i => new InvoiceDto
@@ -77,7 +90,12 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
                 BalanceAmount = i.TotalAmount - i.PaidAmount,
                 Status = i.Status,
                 CreatedAt = i.CreatedAt,
-                Items = i.Items.Select(it => new InvoiceItemDto(it.Description, it.Amount, it.Quantity)).ToList()
+                Items = i.Items.Select(it => new InvoiceItemDto
+                {
+                    Description = it.Description,
+                    Amount = it.Amount,
+                    Quantity = it.Quantity
+                }).ToList()
             })
             .Take(200) 
             .ToListAsync(cancellationToken);

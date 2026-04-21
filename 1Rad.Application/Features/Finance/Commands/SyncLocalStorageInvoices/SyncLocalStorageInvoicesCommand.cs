@@ -32,11 +32,20 @@ public class SyncLocalStorageInvoicesCommandHandler : IRequestHandler<SyncLocalS
 
     public async Task<int> Handle(SyncLocalStorageInvoicesCommand request, CancellationToken cancellationToken)
     {
+        // Defensive Check: Ensure the synchronization is being performed within a valid institutional context.
+        if (_context.UserContext.HospitalId == Guid.Empty)
+        {
+            return 0;
+        }
+
         int count = 0;
         foreach (var legacy in request.Invoices)
         {
-            // Avoid duplicates - Corrected mapping to new InvoiceId (string) property
-            var exists = await _context.Invoices.AnyAsync(i => i.InvoiceId == legacy.InvoiceId, cancellationToken);
+            // Avoid duplicates - Standard property-based verification
+            var exists = await _context.Invoices
+                .AsNoTracking()
+                .AnyAsync(i => i.InvoiceId == legacy.InvoiceId, cancellationToken);
+            
             if (exists) continue;
 
             // Try to find patient by name in current hospital
