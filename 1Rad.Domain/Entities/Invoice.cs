@@ -1,0 +1,30 @@
+using _1Rad.Domain.Common;
+
+namespace _1Rad.Domain.Entities;
+
+public class Invoice : BaseEntity, IHospitalContext
+{
+    public Guid InvoiceId { get; set; } = Guid.NewGuid();
+    public string DisplayId { get; set; } = string.Empty; // e.g., INV-2024-001
+    
+    public Guid? AppointmentId { get; set; }
+    public Guid PatientId { get; set; }
+    public string PatientName { get; set; } = string.Empty;
+    
+    public decimal TotalAmount { get; set; }
+    public decimal PaidAmount { get; set; }
+    public decimal BalanceAmount => TotalAmount - PaidAmount;
+    
+    public string Status { get; set; } = "PENDING"; // PENDING, PARTIAL, PAID, CANCELLED
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime? PaidAt { get; set; }
+    
+    public Guid HospitalId { get; set; }
+    
+    // Navigation
+    public Hospital Hospital { get; set; } = null!;
+    public Patient Patient { get; set; } = null!;
+    public Appointment? Appointment { get; set; }
+    public ICollection<InvoiceItem> Items { get; set; } = new List<InvoiceItem>();
+    public ICollection<Payment> Payments { get; set; } = new List<Payment>();
+}

@@ -30,6 +30,9 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<Patient> Patients => Set<Patient>();
     public DbSet<Referrer> Referrers => Set<Referrer>();
     public DbSet<Appointment> Appointments => Set<Appointment>();
+    public DbSet<ServiceCharge> ServiceCharges => Set<ServiceCharge>();
+    public DbSet<Invoice> Invoices => Set<Invoice>();
+    public DbSet<Payment> Payments => Set<Payment>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -196,6 +199,75 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.HasOne(e => e.Hospital)
                 .WithMany()
                 .HasForeignKey(e => e.HospitalId);
+        });
+
+        // ServiceCharge Configuration
+        modelBuilder.Entity<ServiceCharge>(entity =>
+        {
+            entity.ToTable("ServiceCharges", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Modality).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.ServiceName).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.Amount).HasPrecision(18, 2);
+
+            entity.HasOne(e => e.Hospital)
+                .WithMany()
+                .HasForeignKey(e => e.HospitalId);
+        });
+
+        // Invoice Configuration
+        modelBuilder.Entity<Invoice>(entity =>
+        {
+            entity.ToTable("Invoices", "dbo");
+            entity.HasKey(e => e.InvoiceId);
+            entity.Property(e => e.DisplayId).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.PatientName).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.TotalAmount).HasPrecision(18, 2);
+            entity.Property(e => e.PaidAmount).HasPrecision(18, 2);
+            entity.Property(e => e.Status).IsRequired().HasMaxLength(50);
+
+            entity.HasOne(e => e.Patient)
+                .WithMany()
+                .HasForeignKey(e => e.PatientId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(e => e.Appointment)
+                .WithMany()
+                .HasForeignKey(e => e.AppointmentId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.Hospital)
+                .WithMany()
+                .HasForeignKey(e => e.HospitalId);
+        });
+
+        // InvoiceItem Configuration
+        modelBuilder.Entity<InvoiceItem>(entity =>
+        {
+            entity.ToTable("InvoiceItems", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Description).IsRequired().HasMaxLength(500);
+            entity.Property(e => e.Amount).HasPrecision(18, 2);
+
+            entity.HasOne(e => e.Invoice)
+                .WithMany(i => i.Items)
+                .HasForeignKey(e => e.InvoiceId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // Payment Configuration
+        modelBuilder.Entity<Payment>(entity =>
+        {
+            entity.ToTable("Payments", "dbo");
+            entity.HasKey(e => e.PaymentId);
+            entity.Property(e => e.Amount).HasPrecision(18, 2);
+            entity.Property(e => e.PaymentMethod).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.TransactionReference).HasMaxLength(100);
+
+            entity.HasOne(e => e.Invoice)
+                .WithMany(i => i.Payments)
+                .HasForeignKey(e => e.InvoiceId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         // Tactical Global Query Filters for Multi-Facility Isolation

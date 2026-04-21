@@ -15,6 +15,9 @@ public interface IApplicationDbContext
     DbSet<Patient> Patients { get; }
     DbSet<Referrer> Referrers { get; }
     DbSet<Appointment> Appointments { get; }
+    DbSet<ServiceCharge> ServiceCharges { get; }
+    DbSet<Invoice> Invoices { get; }
+    DbSet<Payment> Payments { get; }
     IUserContext UserContext { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken);
