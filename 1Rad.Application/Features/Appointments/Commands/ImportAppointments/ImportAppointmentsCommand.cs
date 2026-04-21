@@ -113,7 +113,7 @@ public class ImportAppointmentsCommandHandler : IRequestHandler<ImportAppointmen
                         Service = modalityType ?? modality ?? "RECON",
                         Modality = modality ?? "X-RAY",
                         DateTime = appDate,
-                        Status = "COMPLETED", // Assuming imported clinical logs are historical/completed
+                        Status = "completed", // Assuming imported clinical logs are historical/completed
                         Type = "In-Patient",
                         Doctor = "Imported Source",
                         ReferredBy = referrerName ?? "Self",

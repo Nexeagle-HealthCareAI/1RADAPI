@@ -46,7 +46,7 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
             DateTime = request.DateTime,
             Type = request.Type,
             Doctor = request.Doctor,
-            Status = "BOOKED",
+            Status = "scheduled",
             ReferredBy = request.ReferredBy,
             ReferredContact = request.ReferredContact,
             Notes = request.Notes,
