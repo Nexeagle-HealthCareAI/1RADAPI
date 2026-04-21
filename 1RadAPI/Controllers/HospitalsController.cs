@@ -38,7 +38,8 @@ public class HospitalsController : ControllerBase
             request.GSTIN,
             request.RegistrationNumber,
             request.PAN,
-            request.NABHNumber));
+            request.NABHNumber,
+            request.IsAutoBillingEnabled));
 
         if (!result.Success) return BadRequest(new { message = result.Error });
         return Ok(new { message = "Hospital metadata updated successfully." });
@@ -78,7 +79,8 @@ public record UpdateHospitalDetailsRequest(
     string? GSTIN,
     string? RegistrationNumber,
     string? PAN,
-    string? NABHNumber);
+    string? NABHNumber,
+    bool IsAutoBillingEnabled = false);
 
 public record CreateChainRequest(
     string ChainName,

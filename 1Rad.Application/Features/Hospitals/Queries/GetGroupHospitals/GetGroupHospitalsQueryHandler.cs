@@ -46,7 +46,8 @@ public class GetGroupHospitalsQueryHandler : IRequestHandler<GetGroupHospitalsQu
                 h.RegistrationNumber,
                 h.PAN,
                 h.NABHNumber,
-                h.Status
+                h.Status,
+                false // IsAutoBillingEnabled - default to false
             ))
             .ToListAsync(cancellationToken);
     }

@@ -26,24 +26,30 @@ public class GetFinanceStatsQueryHandler : IRequestHandler<GetFinanceStatsQuery,
 
     public async Task<FinanceStatsDto> Handle(GetFinanceStatsQuery request, CancellationToken cancellationToken)
     {
-        var allInvoices = await _context.Invoices
-            .Where(i => i.HospitalId == _context.UserContext.HospitalId)
+        var hospitalId = _context.UserContext.HospitalId;
+
+        // Optimization: Use Selective Projection to fetch only necessary numeric/status fields.
+        // This prevents loading heavy navigation properties and full objects into memory.
+        var invoiceData = await _context.Invoices
+            .AsNoTracking()
+            .Where(i => i.HospitalId == hospitalId)
+            .Select(i => new { i.Status, i.TotalAmount, i.PaidAmount })
             .ToListAsync(cancellationToken);
         
-        if (!allInvoices.Any()) return new FinanceStatsDto();
+        if (!invoiceData.Any()) return new FinanceStatsDto();
 
-        var paidInvoices = allInvoices.Where(i => i.Status == "PAID").ToList();
-        var pendingInvoices = allInvoices.Where(i => i.Status != "PAID" && i.Status != "CANCELLED").ToList();
+        var paidInvoices = invoiceData.Where(i => i.Status == "PAID").ToList();
+        var pendingInvoices = invoiceData.Where(i => i.Status != "PAID" && i.Status != "CANCELLED").ToList();
 
-        var totalRev = allInvoices.Sum(i => i.PaidAmount);
-        var pendingRev = pendingInvoices.Sum(i => i.BalanceAmount);
+        var totalRev = invoiceData.Sum(i => i.PaidAmount);
+        var pendingRev = pendingInvoices.Sum(i => i.TotalAmount - i.PaidAmount);
         
         return new FinanceStatsDto
         {
             TotalRevenue = totalRev,
             PendingRevenue = pendingRev,
             PendingCount = pendingInvoices.Count,
-            RealizationRate = (int)((decimal)paidInvoices.Count / allInvoices.Count * 100),
+            RealizationRate = (int)((decimal)paidInvoices.Count / invoiceData.Count * 100),
             AverageTicket = paidInvoices.Any() ? paidInvoices.Average(i => i.TotalAmount) : 0
         };
     }

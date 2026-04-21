@@ -38,9 +38,11 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
 
     public async Task<List<InvoiceDto>> Handle(GetInvoicesQuery request, CancellationToken cancellationToken)
     {
+        // Optimization: Use AsNoTracking andSelective Projection to prevent memory bloat.
+        // We also implement a Result Cap (Take 200) to ensure the API remains responsive as data grows.
         var query = _context.Invoices
+            .AsNoTracking()
             .Where(i => i.HospitalId == _context.UserContext.HospitalId)
-            .Include(i => i.Items)
             .AsQueryable();
 
         if (!string.IsNullOrEmpty(request.Status) && request.Status != "ALL")
@@ -72,11 +74,12 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
                 PatientName = i.PatientName,
                 TotalAmount = i.TotalAmount,
                 PaidAmount = i.PaidAmount,
-                BalanceAmount = i.BalanceAmount,
+                BalanceAmount = i.TotalAmount - i.PaidAmount,
                 Status = i.Status,
                 CreatedAt = i.CreatedAt,
                 Items = i.Items.Select(it => new InvoiceItemDto(it.Description, it.Amount, it.Quantity)).ToList()
             })
+            .Take(200) 
             .ToListAsync(cancellationToken);
     }
 }
