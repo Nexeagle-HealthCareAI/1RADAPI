@@ -260,10 +260,9 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
         modelBuilder.Entity<Payment>(entity =>
         {
             entity.ToTable("Payments", "dbo");
-            entity.HasKey(e => e.PaymentId);
+            entity.HasKey(e => e.Id);
             entity.Property(e => e.Amount).HasPrecision(18, 2);
             entity.Property(e => e.PaymentMethod).IsRequired().HasMaxLength(50);
-            entity.Property(e => e.TransactionReference).HasMaxLength(100);
 
             entity.HasOne(e => e.Invoice)
                 .WithMany(i => i.Payments)

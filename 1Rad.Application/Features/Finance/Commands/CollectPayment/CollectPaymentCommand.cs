@@ -10,7 +10,6 @@ public record CollectPaymentCommand : IRequest<bool>
     public Guid InvoiceId { get; init; }
     public decimal Amount { get; init; }
     public string PaymentMethod { get; init; } = "CASH";
-    public string? Reference { get; init; }
 }
 
 public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentCommand, bool>
@@ -36,7 +35,6 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
             InvoiceId = request.InvoiceId,
             Amount = request.Amount,
             PaymentMethod = request.PaymentMethod,
-            TransactionReference = request.Reference,
             CreatedAt = DateTime.UtcNow
         };
 

@@ -28,6 +28,7 @@ public class ExportFinancialsQueryHandler : IRequestHandler<ExportFinancialsQuer
         var invoices = await _context.Invoices
             .AsNoTracking()
             .Where(i => i.HospitalId == _context.UserContext.HospitalId)
+            .Include(i => i.Patient)
             .Where(i => (!request.StartDate.HasValue || i.CreatedAt >= request.StartDate.Value) &&
                         (!request.EndDate.HasValue || i.CreatedAt <= request.EndDate.Value))
             .OrderByDescending(i => i.CreatedAt)
@@ -35,7 +36,7 @@ public class ExportFinancialsQueryHandler : IRequestHandler<ExportFinancialsQuer
             {
                 i.InvoiceId,
                 i.CreatedAt,
-                i.PatientName,
+                PatientName = i.Patient.FullName,
                 i.TotalAmount,
                 i.PaidAmount,
                 i.Status

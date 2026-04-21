@@ -52,6 +52,7 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
         var query = _context.Invoices
             .AsNoTracking()
             .Where(i => i.HospitalId == _context.UserContext.HospitalId)
+            .Include(i => i.Patient)
             .AsQueryable();
 
         // Status Filtering
@@ -63,7 +64,7 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
         // Search Filtering (Patient Name or Display ID)
         if (!string.IsNullOrEmpty(request.Search))
         {
-            query = query.Where(i => i.PatientName.Contains(request.Search) || i.InvoiceId.Contains(request.Search));
+            query = query.Where(i => i.Patient.FullName.Contains(request.Search) || i.InvoiceId.Contains(request.Search));
         }
 
         // Temporal Filtering
@@ -84,7 +85,7 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
             {
                 InvoiceId = i.Id,
                 DisplayId = i.InvoiceId,
-                PatientName = i.PatientName,
+                PatientName = i.Patient.FullName,
                 TotalAmount = i.TotalAmount,
                 PaidAmount = i.PaidAmount,
                 BalanceAmount = i.TotalAmount - i.PaidAmount,
