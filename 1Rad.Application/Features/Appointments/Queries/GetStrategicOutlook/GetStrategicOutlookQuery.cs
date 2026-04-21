@@ -56,8 +56,12 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
             .Where(p => p.HospitalId == hospitalId)
             .CountAsync(cancellationToken);
 
-        // --- 2. FISCAL INTELLIGENCE (Weight-Based Yield) ---
-        var financialYield = todayMissions.Sum(m => _modalityWeights.ContainsKey(m.Modality) ? _modalityWeights[m.Modality] : 80m);
+        // --- 2. FISCAL INTELLIGENCE (Real-Time Invoiced Yield) ---
+        var financeStats = await _context.Invoices
+            .Where(i => i.HospitalId == hospitalId && i.CreatedAt >= today && i.CreatedAt < tomorrow)
+            .ToListAsync(cancellationToken);
+
+        var financialYield = financeStats.Sum(i => i.PaidAmount);
         var avgLatency = 38 + (dailyMissions % 7);
 
         var kpis = new KpiSnapshot(
