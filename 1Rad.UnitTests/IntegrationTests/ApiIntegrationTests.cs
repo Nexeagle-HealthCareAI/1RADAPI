@@ -6,7 +6,7 @@ using _1Rad.Application.Features.Auth.Commands.SendOTP;
 using _1Rad.Application.Features.Auth.Commands.VerifyOTP;
 using _1Rad.Application.Features.Auth.Commands.IdentitySetup;
 using _1Rad.Application.Features.Auth.Commands.DeployInfrastructure;
-using _1Rad.Application.Features.Auth.Commands.RefreshToken;
+using _1Rad.Application.Features.Auth.Commands.TokenRefresh;
 using _1Rad.Application.Features.Auth.Commands.SwitchContext;
 using _1Rad.Application.Features.Auth.Commands.ForgotPassword;
 using _1Rad.Application.Features.Auth.Commands.VerifyResetCode;
@@ -200,8 +200,10 @@ public class ApiIntegrationTests
             "Test Service",
             "MRI",
             DateTime.UtcNow.AddDays(1),
-            "Dr. Test",
             "ROUTINE",
+            "Dr. Test",
+            "Referrer Name",
+            "9876543210",
             "Test Notes"
         );
 
