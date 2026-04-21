@@ -11,6 +11,7 @@ using _1Rad.Application.Features.Finance.Commands.CollectPayment;
 using _1Rad.Application.Features.Finance.Commands.SyncLocalStorageInvoices;
 using _1Rad.Application.Features.Finance.Queries.ExportFinancials;
 using _1Rad.Application.Features.Finance.Queries.GetFinancialMatrix;
+using _1Rad.Application.Features.Finance.Queries.GetPendingBillables;
 
 namespace _1RadAPI.Controllers;
 
@@ -94,6 +95,13 @@ public class FinanceController : ControllerBase
     public async Task<IActionResult> GetMatrix()
     {
         var result = await _mediator.Send(new GetFinancialMatrixQuery());
+        return Ok(result);
+    }
+
+    [HttpGet("pending-billables/{patientId}")]
+    public async Task<IActionResult> GetPendingBillables(Guid patientId)
+    {
+        var result = await _mediator.Send(new GetPendingBillablesQuery { PatientId = patientId });
         return Ok(result);
     }
 }
