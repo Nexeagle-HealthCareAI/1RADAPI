@@ -122,14 +122,14 @@ public class IntelligenceAndFinanceTests
 
         // Assert
         result.Should().NotBeNull();
-        result.KpiSnapshot.Should().NotBeNull();
+        result.Kpis.Should().NotBeNull();
         result.Modalities.Should().NotBeEmpty();
         result.RevenueBreakdown.Should().NotBeEmpty();
         result.VolumeTrends.Should().NotBeEmpty();
         result.Demographics.Should().NotBeNull();
         result.TopSources.Should().NotBeEmpty();
-        result.InstitutionalLoyalty.Should().NotBeNull();
-        result.ServiceFidelity.Should().NotBeNull();
+        result.Loyalty.Should().NotBeNull();
+        result.Fidelity.Should().NotBeNull();
     }
 
     [Fact]
@@ -143,11 +143,11 @@ public class IntelligenceAndFinanceTests
         var result = await handler.Handle(query, CancellationToken.None);
 
         // Assert
-        result.KpiSnapshot.RegistryCount.Should().BeGreaterThan(0);
-        result.KpiSnapshot.DailyMissions.Should().BeGreaterThanOrEqualTo(0);
-        result.KpiSnapshot.FinancialYield.Should().BeGreaterThanOrEqualTo(0);
-        result.KpiSnapshot.AvgLatency.Should().BeGreaterThan(0);
-        result.KpiSnapshot.GrowthRate.Should().BeGreaterThanOrEqualTo(0);
+        result.Kpis.UniversalRegistry.Should().BeGreaterThan(0);
+        result.Kpis.DailyMissions.Should().BeGreaterThanOrEqualTo(0);
+        result.Kpis.FinancialYield.Should().BeGreaterThanOrEqualTo(0);
+        result.Kpis.AverageLatencyMinutes.Should().BeGreaterThan(0);
+        result.Kpis.GrowthPercentage.Should().BeGreaterThanOrEqualTo(0);
     }
 
     [Fact]
@@ -182,8 +182,8 @@ public class IntelligenceAndFinanceTests
         // Assert
         foreach (var revenue in result.RevenueBreakdown)
         {
-            revenue.Label.Should().NotBeNullOrEmpty();
-            revenue.Amount.Should().BeGreaterThanOrEqualTo(0);
+            revenue.Modality.Should().NotBeNullOrEmpty();
+            revenue.Revenue.Should().BeGreaterThanOrEqualTo(0);
             revenue.Color.Should().NotBeNullOrEmpty();
         }
     }
@@ -218,13 +218,13 @@ public class IntelligenceAndFinanceTests
         var result = await handler.Handle(query, CancellationToken.None);
 
         // Assert
-        result.Demographics.GenderBrief.Should().NotBeNull();
-        result.Demographics.GenderBrief.Male.Should().BeGreaterThanOrEqualTo(0);
-        result.Demographics.GenderBrief.Female.Should().BeGreaterThanOrEqualTo(0);
-        result.Demographics.GenderBrief.Other.Should().BeGreaterThanOrEqualTo(0);
+        result.Demographics.Gender.Should().NotBeNull();
+        result.Demographics.Gender.Male.Should().BeGreaterThanOrEqualTo(0);
+        result.Demographics.Gender.Female.Should().BeGreaterThanOrEqualTo(0);
+        result.Demographics.Gender.Other.Should().BeGreaterThanOrEqualTo(0);
 
-        result.Demographics.AgeTiers.Should().NotBeEmpty();
-        foreach (var tier in result.Demographics.AgeTiers)
+        result.Demographics.AgeGroups.Should().NotBeEmpty();
+        foreach (var tier in result.Demographics.AgeGroups)
         {
             tier.Label.Should().NotBeNullOrEmpty();
             tier.Count.Should().BeGreaterThanOrEqualTo(0);
@@ -264,10 +264,10 @@ public class IntelligenceAndFinanceTests
         var result = await handler.Handle(query, CancellationToken.None);
 
         // Assert
-        result.InstitutionalLoyalty.NewPatients.Should().BeGreaterThanOrEqualTo(0);
-        result.InstitutionalLoyalty.ReturningPatients.Should().BeGreaterThanOrEqualTo(0);
-        result.InstitutionalLoyalty.ReturnPercentage.Should().BeGreaterThanOrEqualTo(0);
-        result.InstitutionalLoyalty.ReturnPercentage.Should().BeLessThanOrEqualTo(100);
+        result.Loyalty.NewTargets.Should().BeGreaterThanOrEqualTo(0);
+        result.Loyalty.ReturningPatients.Should().BeGreaterThanOrEqualTo(0);
+        result.Loyalty.RetentionRatio.Should().BeGreaterThanOrEqualTo(0);
+        result.Loyalty.RetentionRatio.Should().BeLessThanOrEqualTo(100);
     }
 
     [Fact]
@@ -281,10 +281,10 @@ public class IntelligenceAndFinanceTests
         var result = await handler.Handle(query, CancellationToken.None);
 
         // Assert
-        result.ServiceFidelity.TodayCount.Should().BeGreaterThanOrEqualTo(0);
-        result.ServiceFidelity.Avg30Day.Should().BeGreaterThanOrEqualTo(0);
-        result.ServiceFidelity.Trend.Should().BeOneOf("UP", "DOWN");
-        result.ServiceFidelity.PercentageChange.Should().NotBe(double.NaN);
+        result.Fidelity.CurrentVolume.Should().BeGreaterThanOrEqualTo(0);
+        result.Fidelity.Average30DayVolume.Should().BeGreaterThanOrEqualTo(0);
+        result.Fidelity.AdaptiveSignal.Should().BeOneOf("UP", "DOWN", "STABLE");
+        result.Fidelity.DeviationPercentage.Should().NotBe(double.NaN);
     }
 
     #endregion
@@ -374,8 +374,8 @@ public class IntelligenceAndFinanceTests
         var result = await handler.Handle(query, CancellationToken.None);
 
         // Assert
-        result.KpiSnapshot.DailyMissions.Should().Be(0);
-        result.KpiSnapshot.RegistryCount.Should().Be(0);
+        result.Kpis.DailyMissions.Should().Be(0);
+        result.Kpis.UniversalRegistry.Should().Be(0);
         result.Modalities.Should().BeEmpty();
     }
 
@@ -392,7 +392,7 @@ public class IntelligenceAndFinanceTests
 
         // Assert
         result.Should().NotBeNull();
-        result.KpiSnapshot.Should().NotBeNull();
+        result.Kpis.Should().NotBeNull();
     }
 
     [Fact]
@@ -408,7 +408,7 @@ public class IntelligenceAndFinanceTests
 
         // Assert
         result.Should().NotBeNull();
-        result.KpiSnapshot.DailyMissions.Should().Be(0);
+        result.Kpis.DailyMissions.Should().Be(0);
     }
 
     #endregion
@@ -427,7 +427,7 @@ public class IntelligenceAndFinanceTests
         var totalModalityCount = result.Modalities.Sum(m => m.Count);
 
         // Assert
-        totalModalityCount.Should().Be(result.KpiSnapshot.DailyMissions);
+        totalModalityCount.Should().Be(result.Kpis.DailyMissions);
     }
 
     [Fact]
@@ -444,7 +444,7 @@ public class IntelligenceAndFinanceTests
         result.Modalities.Should().HaveSameCount(result.RevenueBreakdown);
         foreach (var modality in result.Modalities)
         {
-            result.RevenueBreakdown.Should().Contain(r => r.Label == modality.Label);
+            result.RevenueBreakdown.Should().Contain(r => r.Modality == modality.Label);
         }
     }
 
@@ -457,12 +457,12 @@ public class IntelligenceAndFinanceTests
 
         // Act
         var result = await handler.Handle(query, CancellationToken.None);
-        var totalDemographics = result.Demographics.GenderBrief.Male 
-                              + result.Demographics.GenderBrief.Female 
-                              + result.Demographics.GenderBrief.Other;
+        var totalDemographics = result.Demographics.Gender.Male 
+                              + result.Demographics.Gender.Female 
+                              + result.Demographics.Gender.Other;
 
         // Assert
-        totalDemographics.Should().Be(result.KpiSnapshot.RegistryCount);
+        totalDemographics.Should().Be(result.Kpis.UniversalRegistry);
     }
 
     #endregion

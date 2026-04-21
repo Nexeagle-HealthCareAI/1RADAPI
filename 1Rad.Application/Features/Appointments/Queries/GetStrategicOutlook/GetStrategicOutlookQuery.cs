@@ -185,7 +185,7 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
 
             return new StrategicOutlookDto(kpis, modalities, revenueBreakdown, trend, new DemographicSnapshot(genderBrief, ageTiers), topSources, loyalty, fidelity);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             // Return empty/default outlook on error
             return new StrategicOutlookDto(
