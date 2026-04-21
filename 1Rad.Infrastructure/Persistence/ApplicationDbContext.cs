@@ -73,6 +73,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.RegistrationNumber).HasMaxLength(100);
             entity.Property(e => e.PAN).HasMaxLength(10);
             entity.Property(e => e.NABHNumber).HasMaxLength(100);
+            entity.Property(e => e.IsAutoBillingEnabled).HasDefaultValue(false);
 
             entity.HasOne(e => e.Group)
                 .WithMany(g => g.Hospitals)

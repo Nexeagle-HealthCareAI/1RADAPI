@@ -29,6 +29,7 @@ public class GetHospitalDetailsQueryHandler : IRequestHandler<GetHospitalDetails
             hospital.RegistrationNumber,
             hospital.PAN,
             hospital.NABHNumber,
-            hospital.Status);
+            hospital.Status,
+            hospital.IsAutoBillingEnabled);
     }
 }

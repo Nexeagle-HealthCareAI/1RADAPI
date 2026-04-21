@@ -12,4 +12,5 @@ public record HospitalDetailsDto(
     string? RegistrationNumber,
     string? PAN,
     string? NABHNumber,
-    string Status);
+    string Status,
+    bool IsAutoBillingEnabled);

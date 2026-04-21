@@ -9,4 +9,5 @@ public record UpdateHospitalDetailsCommand(
     string? GSTIN,
     string? RegistrationNumber,
     string? PAN,
-    string? NABHNumber) : IRequest<(bool Success, string? Error)>;
+    string? NABHNumber,
+    bool IsAutoBillingEnabled) : IRequest<(bool Success, string? Error)>;

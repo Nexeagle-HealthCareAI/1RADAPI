@@ -1,6 +1,7 @@
 using MediatR;
 using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Entities;
+using _1Rad.Domain.Exceptions;
 using Microsoft.EntityFrameworkCore;
 
 namespace _1Rad.Application.Features.Finance.Commands.GenerateInvoice;
@@ -28,7 +29,7 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
         var patient = await _context.Patients
             .FirstOrDefaultAsync(p => p.PatientId == request.PatientId, cancellationToken);
         
-        if (patient == null) throw new Exception("Patient not found.");
+        if (patient == null) throw new NotFoundException("Patient identity could not be verified in the active registry.", "PATIENT_NOT_FOUND");
 
         var invoice = new Invoice
         {

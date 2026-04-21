@@ -13,6 +13,7 @@ public class Hospital : BaseEntity
     public string? PAN { get; set; }
     public string? NABHNumber { get; set; }
     public string Status { get; set; } = "Active";
+    public bool IsAutoBillingEnabled { get; set; } = false;
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     // Navigation properties

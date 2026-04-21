@@ -42,6 +42,7 @@ public class GetAuthorizedHospitalsQueryHandler : IRequestHandler<GetAuthorizedH
                 HospitalName = m.Hospital.HospitalName,
                 GroupName = m.Hospital.Group?.GroupName ?? string.Empty,
                 IsDefault = m.IsDefault,
+                IsAutoBillingEnabled = m.Hospital.IsAutoBillingEnabled,
                 RoleNames = m.Roles.Select(r => r.RoleName).ToList()
             }).ToList();
 

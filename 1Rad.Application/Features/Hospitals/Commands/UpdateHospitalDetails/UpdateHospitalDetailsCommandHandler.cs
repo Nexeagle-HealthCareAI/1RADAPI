@@ -32,6 +32,7 @@ public class UpdateHospitalDetailsCommandHandler : IRequestHandler<UpdateHospita
         hospital.RegistrationNumber = request.RegistrationNumber;
         hospital.PAN = request.PAN;
         hospital.NABHNumber = request.NABHNumber;
+        hospital.IsAutoBillingEnabled = request.IsAutoBillingEnabled;
 
         try
         {
