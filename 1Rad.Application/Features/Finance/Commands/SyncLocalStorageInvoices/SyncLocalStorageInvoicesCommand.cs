@@ -35,8 +35,8 @@ public class SyncLocalStorageInvoicesCommandHandler : IRequestHandler<SyncLocalS
         int count = 0;
         foreach (var legacy in request.Invoices)
         {
-            // Avoid duplicates
-            var exists = await _context.Invoices.AnyAsync(i => i.DisplayId == legacy.InvoiceId, cancellationToken);
+            // Avoid duplicates - Corrected mapping to new InvoiceId (string) property
+            var exists = await _context.Invoices.AnyAsync(i => i.InvoiceId == legacy.InvoiceId, cancellationToken);
             if (exists) continue;
 
             // Try to find patient by name in current hospital
@@ -48,14 +48,14 @@ public class SyncLocalStorageInvoicesCommandHandler : IRequestHandler<SyncLocalS
 
             var invoice = new Invoice
             {
-                DisplayId = legacy.InvoiceId,
+                InvoiceId = legacy.InvoiceId,
                 PatientName = legacy.PatientName,
                 TotalAmount = legacy.TotalAmount,
                 PaidAmount = legacy.Status == "PAID" ? legacy.TotalAmount : 0,
                 Status = legacy.Status,
                 CreatedAt = legacy.CreatedAt,
                 HospitalId = _context.UserContext.HospitalId,
-                PatientId = patient.PatientId // ✅ Use actual patient ID instead of Guid.Empty
+                PatientId = patient.PatientId
             };
 
             foreach (var item in legacy.Items)
