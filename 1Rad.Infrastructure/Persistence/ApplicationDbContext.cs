@@ -36,6 +36,9 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<Expense> Expenses => Set<Expense>();
     public DbSet<PrescriptionProtocol> PrescriptionProtocols => Set<PrescriptionProtocol>();
     public DbSet<StudyAsset> StudyAssets => Set<StudyAsset>();
+    public DbSet<ReportTemplate> ReportTemplates => Set<ReportTemplate>();
+    public DbSet<ReportingKeyword> ReportingKeywords => Set<ReportingKeyword>();
+    public DbSet<DiagnosticReport> DiagnosticReports => Set<DiagnosticReport>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -327,6 +330,33 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             
             entity.HasOne(e => e.Appointment)
                 .WithMany(a => a.StudyAssets)
+                .HasForeignKey(e => e.AppointmentId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // Clinical Reporting Configurations
+        modelBuilder.Entity<ReportTemplate>(entity =>
+        {
+            entity.ToTable("ReportTemplates", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.Modality).HasMaxLength(50);
+        });
+
+        modelBuilder.Entity<ReportingKeyword>(entity =>
+        {
+            entity.ToTable("ReportingKeywords", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Trigger).IsRequired().HasMaxLength(50);
+            entity.HasIndex(e => new { e.DoctorId, e.Trigger }).IsUnique();
+        });
+
+        modelBuilder.Entity<DiagnosticReport>(entity =>
+        {
+            entity.ToTable("DiagnosticReports", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.HasOne(e => e.Appointment)
+                .WithMany()
                 .HasForeignKey(e => e.AppointmentId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
