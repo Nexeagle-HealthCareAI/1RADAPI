@@ -45,6 +45,9 @@ namespace _1RadAPI.Controllers
         {
             try
             {
+                if (request == null)
+                    return BadRequest(new { success = false, error = "PROTOCOL FAILURE: Null request payload detected." });
+
                 if (request.File == null || request.File.Length == 0)
                     return BadRequest(new { success = false, error = "PROTOCOL FAILURE: No clinical binary stream detected." });
 
@@ -64,18 +67,30 @@ namespace _1RadAPI.Controllers
                     return StatusCode(500, new { success = false, error = $"AZURE STORAGE FAILURE: Could not stream clinical asset to the cloud. {ex.Message}" });
                 }
 
-                var asset = new StudyAsset
-                {
-                    Id = Guid.NewGuid(),
-                    AppointmentId = request.AppointmentId,
-                    BlobUrl = blobUrl,
-                    FileName = fileName,
-                    FileType = extension.Replace(".", ""),
-                    UploadedAt = DateTime.UtcNow,
-                    HospitalId = _userContext.HospitalId
-                };
+                // Tactical: Check for existing asset to prevent duplicates (Upsert logic)
+                var existingAsset = await _context.StudyAssets
+                    .FirstOrDefaultAsync(a => a.AppointmentId == request.AppointmentId && a.FileName == fileName);
 
-                _context.StudyAssets.Add(asset);
+                if (existingAsset != null)
+                {
+                    existingAsset.BlobUrl = blobUrl;
+                    existingAsset.FileType = extension.Replace(".", "");
+                    existingAsset.UploadedAt = DateTime.UtcNow;
+                }
+                else
+                {
+                    var asset = new StudyAsset
+                    {
+                        Id = Guid.NewGuid(),
+                        AppointmentId = request.AppointmentId,
+                        BlobUrl = blobUrl,
+                        FileName = fileName,
+                        FileType = extension.Replace(".", ""),
+                        UploadedAt = DateTime.UtcNow,
+                        HospitalId = _userContext.HospitalId
+                    };
+                    _context.StudyAssets.Add(asset);
+                }
                 
                 // Auto-update status to IN_PROGRESS if first asset
                 var appointment = await _context.Appointments.FindAsync(request.AppointmentId);

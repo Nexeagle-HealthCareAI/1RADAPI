@@ -116,10 +116,11 @@ public class ExceptionHandlingMiddleware
         _logger.LogError(exception, "Unhandled exception: {Message}", exception.Message);
 
         var isDevelopment = _env.IsDevelopment();
+        var msg = exception.Message ?? "";
         var errorMessage = isDevelopment 
-            ? exception.Message 
-            : (exception.Message.Contains("CONFIG_MISSING") || exception.Message.Contains("FAILURE:") || exception.Message.Contains("SqlException") || exception.Message.Contains("DbUpdateException")
-                ? exception.Message 
+            ? msg 
+            : (msg.Contains("CONFIG_MISSING") || msg.Contains("FAILURE") || msg.Contains("Exception") || msg.Contains("Error") || msg.Contains("Sql") || msg.Contains("DbUpdate") || msg.Contains("Azure")
+                ? msg 
                 : "An unexpected error occurred. Our team has been notified. Please try again later.");
 
         var errorResponse = new

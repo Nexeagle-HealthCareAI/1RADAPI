@@ -60,6 +60,7 @@ namespace _1RadAPI.Controllers
             Guid.TryParse(appointmentId, out var guidId);
             
             var report = await _context.DiagnosticReports
+                .Include(r => r.Appointment)
                 .FirstOrDefaultAsync(r => (guidId != Guid.Empty && r.AppointmentId == guidId) || r.Appointment.DisplayId == appointmentId);
 
             return Ok(new { success = true, data = report });
