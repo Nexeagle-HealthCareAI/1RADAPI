@@ -191,12 +191,12 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
         {
             entity.ToTable("Appointments", "dbo");
             entity.HasKey(e => e.AppointmentId);
-            entity.Property(e => e.DisplayId).IsRequired().HasMaxLength(50);
-            entity.Property(e => e.PatientName).IsRequired().HasMaxLength(255);
-            entity.Property(e => e.Service).IsRequired().HasMaxLength(255);
-            entity.Property(e => e.Modality).IsRequired().HasMaxLength(50);
-            entity.Property(e => e.Type).IsRequired().HasMaxLength(50);
-            entity.Property(e => e.Status).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.DisplayId).HasMaxLength(50);
+            entity.Property(e => e.PatientName).HasMaxLength(255);
+            entity.Property(e => e.Service).HasMaxLength(255);
+            entity.Property(e => e.Modality).HasMaxLength(50);
+            entity.Property(e => e.Type).HasMaxLength(50);
+            entity.Property(e => e.Status).HasMaxLength(50);
             
             entity.HasOne(e => e.Patient)
                 .WithMany()
