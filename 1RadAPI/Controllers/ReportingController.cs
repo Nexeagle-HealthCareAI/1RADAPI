@@ -57,11 +57,10 @@ namespace _1RadAPI.Controllers
         [HttpGet("report/{appointmentId}")]
         public async Task<IActionResult> GetReport(string appointmentId)
         {
-            _ = Guid.TryParse(appointmentId, out var guidId);
+            Guid.TryParse(appointmentId, out var guidId);
+            
             var report = await _context.DiagnosticReports
-                .FirstOrDefaultAsync(r => r.AppointmentId == guidId || r.Appointment.DisplayId == appointmentId);
-
-            if (report == null) return NotFound(new { success = false, error = "No existing report found for this mission." });
+                .FirstOrDefaultAsync(r => (guidId != Guid.Empty && r.AppointmentId == guidId) || r.Appointment.DisplayId == appointmentId);
 
             return Ok(new { success = true, data = report });
         }

@@ -27,10 +27,12 @@ namespace _1RadAPI.Controllers
         }
 
         [HttpGet("{appointmentId}/assets")]
-        public async Task<IActionResult> GetStudyAssets(Guid appointmentId)
+        public async Task<IActionResult> GetStudyAssets(string appointmentId)
         {
+            Guid.TryParse(appointmentId, out var guidId);
+
             var assets = await _context.StudyAssets
-                .Where(a => a.AppointmentId == appointmentId)
+                .Where(a => (guidId != Guid.Empty && a.AppointmentId == guidId) || a.Appointment.DisplayId == appointmentId)
                 .OrderByDescending(a => a.UploadedAt)
                 .ToListAsync();
 
