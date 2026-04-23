@@ -228,6 +228,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.ToTable("Invoices", "dbo");
             entity.HasKey(e => e.Id);
             entity.Property(e => e.InvoiceId).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.PatientName).IsRequired().HasMaxLength(255);
             entity.Property(e => e.TotalAmount).HasPrecision(18, 2);
             entity.Property(e => e.PaidAmount).HasPrecision(18, 2);
             entity.Property(e => e.Status).IsRequired().HasMaxLength(50);

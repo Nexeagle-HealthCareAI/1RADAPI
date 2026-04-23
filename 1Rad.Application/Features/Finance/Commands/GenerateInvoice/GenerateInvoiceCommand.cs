@@ -92,8 +92,9 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
             {
                 AppointmentId = request.AppointmentId,
                 PatientId = request.PatientId,
+                PatientName = patient.FullName ?? "UNKNOWN PATIENT",
                 HospitalId = hospitalId,
-                InvoiceId = $"INV-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString().Substring(0, 4).ToUpper()}",
+                InvoiceId = $"INV-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString().Substring(0, 8).ToUpper()}",
                 TotalAmount = request.Items.Sum(x => x.Amount * x.Quantity),
                 PaidAmount = 0,
                 Status = "PENDING",
@@ -115,32 +116,18 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
 
             return invoice.Id;
         }
-        catch (ArgumentException)
+        catch (ArgumentException) { throw; }
+        catch (KeyNotFoundException) { throw; }
+        catch (UnauthorizedAccessException) { throw; }
+        catch (InvalidOperationException) { throw; }
+        catch (DbUpdateException dex)
         {
-            throw;
-        }
-        catch (KeyNotFoundException)
-        {
-            throw;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            throw;
-        }
-        catch (InvalidOperationException)
-        {
-            throw;
+            var innerMsg = dex.InnerException?.Message ?? dex.Message;
+            throw new Exception($"Database synchronization failure: {innerMsg}", dex);
         }
         catch (Exception ex)
         {
-            var messages = new List<string>();
-            var current = ex;
-            while (current != null)
-            {
-                messages.Add($"{current.GetType().Name}: {current.Message}");
-                current = current.InnerException;
-            }
-            throw new Exception($"[FINANCE_ERR] {string.Join(" | ", messages)}", ex);
+            throw new Exception($"Failed to generate invoice: {ex.Message}", ex);
         }
     }
 }
