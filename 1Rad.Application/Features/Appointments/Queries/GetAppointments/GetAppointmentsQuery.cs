@@ -17,48 +17,62 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
 
     public async Task<List<AppointmentDto>> Handle(GetAppointmentsQuery request, CancellationToken cancellationToken)
     {
-        var query = _context.Appointments
-            .Include(a => a.Patient)
-            .AsNoTracking();
-
-        if (!string.IsNullOrEmpty(request.Status) && request.Status != "ALL")
+        try
         {
-            query = query.Where(a => a.Status == request.Status);
-        }
+            // Validate hospital context
+            if (_context.UserContext.HospitalId == Guid.Empty)
+            {
+                return new List<AppointmentDto>();
+            }
 
-        if (!string.IsNullOrEmpty(request.SearchQuery))
+            var query = _context.Appointments
+                .Include(a => a.Patient)
+                .Where(a => a.HospitalId == _context.UserContext.HospitalId)
+                .AsNoTracking();
+
+            if (!string.IsNullOrEmpty(request.Status) && request.Status != "ALL")
+            {
+                query = query.Where(a => a.Status == request.Status);
+            }
+
+            if (!string.IsNullOrEmpty(request.SearchQuery))
+            {
+                var search = request.SearchQuery.ToLower();
+                query = query.Where(a => 
+                    (a.PatientName != null && a.PatientName.ToLower().Contains(search)) || 
+                    (a.Mobile != null && a.Mobile.Contains(search)) || 
+                    (a.DisplayId != null && a.DisplayId.ToLower().Contains(search)));
+            }
+
+            return await query
+                .OrderByDescending(a => a.DateTime)
+                .Select(a => new AppointmentDto(
+                    a.AppointmentId,
+                    a.DisplayId ?? string.Empty,
+                    a.PatientId,
+                    a.PatientName ?? "Unknown",
+                    a.Mobile ?? string.Empty,
+                    a.Patient != null ? (a.Patient.Age?.ToString() ?? "0") : "0",
+                    a.Patient != null ? (a.Patient.Gender ?? "Unknown") : "Unknown",
+                    a.Patient != null ? (a.Patient.PatientIdentifier ?? string.Empty) : string.Empty,
+                    a.Service,
+                    a.Modality,
+                    a.DateTime,
+                    a.Type,
+                    a.Doctor ?? string.Empty,
+                    a.Status,
+                    a.ReferredBy ?? string.Empty,
+                    a.ReferredContact ?? string.Empty,
+                    a.Notes ?? string.Empty,
+                    a.TechnicianComments ?? string.Empty,
+                    a.TechnicianId,
+                    a.ScannedAt
+                ))
+                .ToListAsync(cancellationToken);
+        }
+        catch (Exception ex)
         {
-            var search = request.SearchQuery.ToLower();
-            query = query.Where(a => 
-                (a.PatientName != null && a.PatientName.ToLower().Contains(search)) || 
-                (a.Mobile != null && a.Mobile.Contains(search)) || 
-                (a.DisplayId != null && a.DisplayId.ToLower().Contains(search)));
+            throw new Exception($"Failed to retrieve appointments: {ex.Message}", ex);
         }
-
-        return await query
-            .OrderByDescending(a => a.DateTime)
-            .Select(a => new AppointmentDto(
-                a.AppointmentId,
-                a.DisplayId ?? string.Empty,
-                a.PatientId,
-                a.PatientName ?? "Unknown",
-                a.Mobile ?? string.Empty,
-                a.Patient.Age ?? "0",
-                a.Patient.Gender ?? "Unknown",
-                a.Patient.PatientIdentifier ?? string.Empty,
-                a.Service,
-                a.Modality,
-                a.DateTime,
-                a.Type,
-                a.Doctor,
-                a.Status,
-                a.ReferredBy,
-                a.ReferredContact,
-                a.Notes,
-                a.TechnicianComments,
-                a.TechnicianId,
-                a.ScannedAt
-            ))
-            .ToListAsync(cancellationToken);
     }
 }
