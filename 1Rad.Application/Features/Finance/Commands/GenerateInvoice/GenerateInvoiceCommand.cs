@@ -131,14 +131,16 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
         {
             throw;
         }
-        catch (DbUpdateException dex)
-        {
-            var innerMsg = dex.InnerException?.Message ?? dex.Message;
-            throw new Exception($"Database update failed during invoice generation: {innerMsg}", dex);
-        }
         catch (Exception ex)
         {
-            throw new Exception($"Failed to generate invoice: {ex.Message}", ex);
+            var messages = new List<string>();
+            var current = ex;
+            while (current != null)
+            {
+                messages.Add($"{current.GetType().Name}: {current.Message}");
+                current = current.InnerException;
+            }
+            throw new Exception($"[FINANCE_ERR] {string.Join(" | ", messages)}", ex);
         }
     }
 }
