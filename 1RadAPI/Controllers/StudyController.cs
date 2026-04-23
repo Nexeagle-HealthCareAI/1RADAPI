@@ -71,15 +71,17 @@ namespace _1RadAPI.Controllers
                 var existingAsset = await _context.StudyAssets
                     .FirstOrDefaultAsync(a => a.AppointmentId == request.AppointmentId && a.FileName == fileName);
 
+                StudyAsset asset;
                 if (existingAsset != null)
                 {
                     existingAsset.BlobUrl = blobUrl;
                     existingAsset.FileType = extension.Replace(".", "");
                     existingAsset.UploadedAt = DateTime.UtcNow;
+                    asset = existingAsset;
                 }
                 else
                 {
-                    var asset = new StudyAsset
+                    asset = new StudyAsset
                     {
                         Id = Guid.NewGuid(),
                         AppointmentId = request.AppointmentId,
