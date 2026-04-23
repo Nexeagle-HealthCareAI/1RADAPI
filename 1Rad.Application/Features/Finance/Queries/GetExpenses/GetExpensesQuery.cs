@@ -39,59 +39,66 @@ public class GetExpensesQueryHandler : IRequestHandler<GetExpensesQuery, List<Ex
 
     public async Task<List<ExpenseDto>> Handle(GetExpensesQuery request, CancellationToken cancellationToken)
     {
-        if (_context.UserContext.HospitalId == Guid.Empty)
+        try
         {
-            return new List<ExpenseDto>();
-        }
-
-        var query = _context.Expenses
-            .AsNoTracking()
-            .Where(e => e.HospitalId == _context.UserContext.HospitalId)
-            .AsQueryable();
-
-        // Category Filtering
-        if (!string.IsNullOrEmpty(request.Category) && request.Category != "ALL")
-        {
-            query = query.Where(e => e.Category == request.Category);
-        }
-
-        // Search Filtering
-        if (!string.IsNullOrEmpty(request.Search))
-        {
-            query = query.Where(e => e.Description.Contains(request.Search) || 
-                                     e.VendorName.Contains(request.Search) || 
-                                     e.ReferenceNumber.Contains(request.Search));
-        }
-
-        // Temporal Filtering
-        if (request.StartDate.HasValue)
-        {
-            query = query.Where(e => e.TransactionDate >= request.StartDate.Value);
-        }
-
-        if (request.EndDate.HasValue)
-        {
-            query = query.Where(e => e.TransactionDate <= request.EndDate.Value);
-        }
-
-        return await query
-            .OrderByDescending(e => e.TransactionDate)
-            .Select(e => new ExpenseDto
+            if (_context.UserContext.HospitalId == Guid.Empty)
             {
-                Id = e.Id,
-                Description = e.Description,
-                Category = e.Category,
-                Amount = e.Amount,
-                TaxAmount = e.TaxAmount,
-                PaymentMode = e.PaymentMode,
-                ReferenceNumber = e.ReferenceNumber,
-                VendorName = e.VendorName,
-                CostCenter = e.CostCenter,
-                Status = e.Status,
-                TransactionDate = e.TransactionDate,
-                CreatedAt = e.CreatedAt
-            })
-            .Take(200)
-            .ToListAsync(cancellationToken);
+                return new List<ExpenseDto>();
+            }
+
+            var query = _context.Expenses
+                .AsNoTracking()
+                .Where(e => e.HospitalId == _context.UserContext.HospitalId)
+                .AsQueryable();
+
+            // Category Filtering
+            if (!string.IsNullOrEmpty(request.Category) && request.Category != "ALL")
+            {
+                query = query.Where(e => e.Category == request.Category);
+            }
+
+            // Search Filtering
+            if (!string.IsNullOrEmpty(request.Search))
+            {
+                query = query.Where(e => e.Description.Contains(request.Search) || 
+                                         e.VendorName.Contains(request.Search) || 
+                                         e.ReferenceNumber.Contains(request.Search));
+            }
+
+            // Temporal Filtering
+            if (request.StartDate.HasValue)
+            {
+                query = query.Where(e => e.TransactionDate >= request.StartDate.Value);
+            }
+
+            if (request.EndDate.HasValue)
+            {
+                query = query.Where(e => e.TransactionDate <= request.EndDate.Value);
+            }
+
+            return await query
+                .OrderByDescending(e => e.TransactionDate)
+                .Select(e => new ExpenseDto
+                {
+                    Id = e.Id,
+                    Description = e.Description,
+                    Category = e.Category,
+                    Amount = e.Amount,
+                    TaxAmount = e.TaxAmount,
+                    PaymentMode = e.PaymentMode,
+                    ReferenceNumber = e.ReferenceNumber,
+                    VendorName = e.VendorName,
+                    CostCenter = e.CostCenter,
+                    Status = e.Status,
+                    TransactionDate = e.TransactionDate,
+                    CreatedAt = e.CreatedAt
+                })
+                .Take(200)
+                .ToListAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            throw new Exception($"Failed to retrieve expenses: {ex.Message}", ex);
+        }
     }
 }

@@ -35,6 +35,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<Payment> Payments => Set<Payment>();
     public DbSet<Expense> Expenses => Set<Expense>();
     public DbSet<PrescriptionProtocol> PrescriptionProtocols => Set<PrescriptionProtocol>();
+    public DbSet<StudyAsset> StudyAssets => Set<StudyAsset>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -313,6 +314,21 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
                 .WithMany()
                 .HasForeignKey(e => e.HospitalId)
                 .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // StudyAsset Configuration
+        modelBuilder.Entity<StudyAsset>(entity =>
+        {
+            entity.ToTable("StudyAssets", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.BlobUrl).IsRequired();
+            entity.Property(e => e.FileName).IsRequired().HasMaxLength(500);
+            entity.Property(e => e.FileType).HasMaxLength(50);
+            
+            entity.HasOne(e => e.Appointment)
+                .WithMany(a => a.StudyAssets)
+                .HasForeignKey(e => e.AppointmentId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         // Tactical Global Query Filters for Multi-Facility Isolation

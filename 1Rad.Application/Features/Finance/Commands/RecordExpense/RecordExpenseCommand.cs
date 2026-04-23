@@ -30,25 +30,67 @@ public class RecordExpenseCommandHandler : IRequestHandler<RecordExpenseCommand,
 
     public async Task<Guid> Handle(RecordExpenseCommand request, CancellationToken cancellationToken)
     {
-        var expense = new Expense
+        try
         {
-            Description = request.Description,
-            Category = request.Category,
-            Amount = request.Amount,
-            TaxAmount = request.TaxAmount,
-            PaymentMode = request.PaymentMode,
-            ReferenceNumber = request.ReferenceNumber,
-            VendorName = request.VendorName,
-            CostCenter = request.CostCenter,
-            Status = request.Status ?? "Paid",
-            TransactionDate = request.TransactionDate ?? DateTime.UtcNow,
-            HospitalId = _context.UserContext.HospitalId,
-            CreatedAt = DateTime.UtcNow
-        };
+            // Validate hospital context
+            if (_context.UserContext.HospitalId == Guid.Empty)
+            {
+                throw new UnauthorizedAccessException("Hospital context is required to record expenses.");
+            }
 
-        _context.Expenses.Add(expense);
-        await _context.SaveChangesAsync(cancellationToken);
+            // Validate inputs
+            if (string.IsNullOrWhiteSpace(request.Description))
+            {
+                throw new ArgumentException("Description is required.", nameof(request.Description));
+            }
 
-        return expense.Id;
+            if (string.IsNullOrWhiteSpace(request.Category))
+            {
+                throw new ArgumentException("Category is required.", nameof(request.Category));
+            }
+
+            if (request.Amount <= 0)
+            {
+                throw new ArgumentException("Amount must be greater than zero.", nameof(request.Amount));
+            }
+
+            if (request.TaxAmount < 0)
+            {
+                throw new ArgumentException("Tax amount cannot be negative.", nameof(request.TaxAmount));
+            }
+
+            var expense = new Expense
+            {
+                Description = request.Description,
+                Category = request.Category,
+                Amount = request.Amount,
+                TaxAmount = request.TaxAmount,
+                PaymentMode = request.PaymentMode,
+                ReferenceNumber = request.ReferenceNumber,
+                VendorName = request.VendorName,
+                CostCenter = request.CostCenter,
+                Status = request.Status ?? "Paid",
+                TransactionDate = request.TransactionDate ?? DateTime.UtcNow,
+                HospitalId = _context.UserContext.HospitalId,
+                CreatedAt = DateTime.UtcNow
+            };
+
+            _context.Expenses.Add(expense);
+            await _context.SaveChangesAsync(cancellationToken);
+
+            return expense.Id;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            throw;
+        }
+        catch (ArgumentException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw new Exception($"Failed to record expense: {ex.Message}", ex);
+        }
     }
 }

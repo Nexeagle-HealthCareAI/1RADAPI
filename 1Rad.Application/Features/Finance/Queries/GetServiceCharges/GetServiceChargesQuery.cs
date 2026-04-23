@@ -25,14 +25,31 @@ public class GetServiceChargesQueryHandler : IRequestHandler<GetServiceChargesQu
 
     public async Task<List<ServiceChargeDto>> Handle(GetServiceChargesQuery request, CancellationToken cancellationToken)
     {
-        return await _context.ServiceCharges
-            .Select(s => new ServiceChargeDto
+        try
+        {
+            // Validate hospital context
+            if (_context.UserContext.HospitalId == Guid.Empty)
             {
-                Id = s.Id,
-                Modality = s.Modality,
-                ServiceName = s.ServiceName,
-                Amount = s.Amount
-            })
-            .ToListAsync(cancellationToken);
+                return new List<ServiceChargeDto>();
+            }
+
+            return await _context.ServiceCharges
+                .AsNoTracking()
+                .Where(s => s.HospitalId == _context.UserContext.HospitalId)
+                .Select(s => new ServiceChargeDto
+                {
+                    Id = s.Id,
+                    Modality = s.Modality,
+                    ServiceName = s.ServiceName,
+                    Amount = s.Amount
+                })
+                .OrderBy(s => s.Modality)
+                .ThenBy(s => s.ServiceName)
+                .ToListAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            throw new Exception($"Failed to retrieve service charges: {ex.Message}", ex);
+        }
     }
 }

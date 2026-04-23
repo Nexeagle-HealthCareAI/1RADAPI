@@ -52,7 +52,10 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
                 a.Status,
                 a.ReferredBy,
                 a.ReferredContact,
-                a.Notes
+                a.Notes,
+                a.TechnicianComments,
+                a.TechnicianId,
+                a.ScannedAt
             ))
             .ToListAsync(cancellationToken);
     }

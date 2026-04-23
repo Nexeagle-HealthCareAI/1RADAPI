@@ -17,5 +17,8 @@ public record AppointmentDto(
     string Status,
     string ReferredBy,
     string ReferredContact,
-    string Notes
+    string Notes,
+    string TechnicianComments,
+    Guid? TechnicianId,
+    DateTime? ScannedAt
 );

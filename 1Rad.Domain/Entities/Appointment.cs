@@ -20,10 +20,14 @@ public class Appointment : BaseEntity, IHospitalContext
     public string ReferredBy { get; set; } = string.Empty;
     public string ReferredContact { get; set; } = string.Empty;
     public string Notes { get; set; } = string.Empty;
+    public string TechnicianComments { get; set; } = string.Empty;
+    public Guid? TechnicianId { get; set; }
+    public DateTime? ScannedAt { get; set; }
     
     public Guid HospitalId { get; set; }
     
     // Navigation
     public Hospital Hospital { get; set; } = null!;
     public Patient Patient { get; set; } = null!;
+    public ICollection<StudyAsset> StudyAssets { get; set; } = new List<StudyAsset>();
 }
