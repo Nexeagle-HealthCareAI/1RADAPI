@@ -63,7 +63,7 @@ namespace _1RadAPI.Controllers
                 var protocol = await _context.PrescriptionProtocols
                     .FirstOrDefaultAsync(p => p.DoctorId == request.DoctorId && p.HospitalId == hospitalId);
 
-                string letterheadUrl = protocol?.LetterheadBlobUrl;
+                string? letterheadUrl = protocol?.LetterheadBlobUrl;
 
                 if (request.LetterheadFile != null)
                 {
@@ -132,6 +132,6 @@ namespace _1RadAPI.Controllers
         public int FontSize { get; set; }
         public string FontColor { get; set; }
         public string FontFamily { get; set; }
-        public IFormFile LetterheadFile { get; set; }
+        public IFormFile? LetterheadFile { get; set; }
     }
 }

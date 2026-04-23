@@ -28,22 +28,22 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
         {
             var search = request.SearchQuery.ToLower();
             query = query.Where(a => 
-                a.PatientName.ToLower().Contains(search) || 
-                a.Mobile.Contains(search) || 
-                a.DisplayId.ToLower().Contains(search));
+                (a.PatientName != null && a.PatientName.ToLower().Contains(search)) || 
+                (a.Mobile != null && a.Mobile.Contains(search)) || 
+                (a.DisplayId != null && a.DisplayId.ToLower().Contains(search)));
         }
 
         return await query
             .OrderByDescending(a => a.DateTime)
             .Select(a => new AppointmentDto(
                 a.AppointmentId,
-                a.DisplayId,
+                a.DisplayId ?? string.Empty,
                 a.PatientId,
-                a.PatientName,
-                a.Mobile,
-                a.Patient.Age,
-                a.Patient.Gender,
-                a.Patient.PatientIdentifier,
+                a.PatientName ?? "Unknown",
+                a.Mobile ?? string.Empty,
+                a.Patient != null ? a.Patient.Age : "0",
+                a.Patient != null ? a.Patient.Gender : "Unknown",
+                a.Patient != null ? a.Patient.PatientIdentifier : string.Empty,
                 a.Service,
                 a.Modality,
                 a.DateTime,
