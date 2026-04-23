@@ -34,11 +34,11 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<Invoice> Invoices => Set<Invoice>();
     public DbSet<Payment> Payments => Set<Payment>();
     public DbSet<Expense> Expenses => Set<Expense>();
-    public DbSet<PrescriptionProtocol> PrescriptionProtocols => Set<PrescriptionProtocol>();
-    public DbSet<StudyAsset> StudyAssets => Set<StudyAsset>();
+    public DbSet<DiagnosticReport> DiagnosticReports => Set<DiagnosticReport>();
     public DbSet<ReportTemplate> ReportTemplates => Set<ReportTemplate>();
     public DbSet<ReportingKeyword> ReportingKeywords => Set<ReportingKeyword>();
-    public DbSet<DiagnosticReport> DiagnosticReports => Set<DiagnosticReport>();
+    public DbSet<StudyAsset> StudyAssets => Set<StudyAsset>();
+    public DbSet<PrescriptionProtocol> PrescriptionProtocols => Set<PrescriptionProtocol>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -272,6 +272,105 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.HasOne(e => e.Invoice)
                 .WithMany(i => i.Payments)
                 .HasForeignKey(e => e.InvoiceId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // DiagnosticReport Configuration
+        modelBuilder.Entity<DiagnosticReport>(entity =>
+        {
+            entity.ToTable("DiagnosticReports", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Findings).IsRequired();
+            entity.Property(e => e.Impression).IsRequired();
+            entity.Property(e => e.ReportPdfUrl).HasMaxLength(500);
+
+            entity.HasOne(e => e.Appointment)
+                .WithMany()
+                .HasForeignKey(e => e.AppointmentId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(e => e.Doctor)
+                .WithMany()
+                .HasForeignKey(e => e.DoctorId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(e => e.Template)
+                .WithMany()
+                .HasForeignKey(e => e.TemplateId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        // ReportTemplate Configuration
+        modelBuilder.Entity<ReportTemplate>(entity =>
+        {
+            entity.ToTable("ReportTemplates", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.Modality).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.Content).IsRequired();
+
+            entity.HasOne(e => e.Doctor)
+                .WithMany()
+                .HasForeignKey(e => e.DoctorId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.Hospital)
+                .WithMany()
+                .HasForeignKey(e => e.HospitalId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // ReportingKeyword Configuration
+        modelBuilder.Entity<ReportingKeyword>(entity =>
+        {
+            entity.ToTable("ReportingKeywords", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Trigger).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.ReplacementText).IsRequired();
+
+            entity.HasOne(e => e.Doctor)
+                .WithMany()
+                .HasForeignKey(e => e.DoctorId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(e => e.Hospital)
+                .WithMany()
+                .HasForeignKey(e => e.HospitalId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // StudyAsset Configuration
+        modelBuilder.Entity<StudyAsset>(entity =>
+        {
+            entity.ToTable("StudyAssets", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.BlobUrl).IsRequired().HasMaxLength(500);
+            entity.Property(e => e.FileName).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.FileType).IsRequired().HasMaxLength(50);
+
+            entity.HasOne(e => e.Appointment)
+                .WithMany()
+                .HasForeignKey(e => e.AppointmentId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // PrescriptionProtocol Configuration
+        modelBuilder.Entity<PrescriptionProtocol>(entity =>
+        {
+            entity.ToTable("PrescriptionProtocols", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.FontColor).HasMaxLength(50);
+            entity.Property(e => e.FontFamily).HasMaxLength(100);
+            entity.Property(e => e.LetterheadBlobUrl).HasMaxLength(500);
+
+            entity.HasOne(e => e.Doctor)
+                .WithMany()
+                .HasForeignKey(e => e.DoctorId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(e => e.Hospital)
+                .WithMany()
+                .HasForeignKey(e => e.HospitalId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
 

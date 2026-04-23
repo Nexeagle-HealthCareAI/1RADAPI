@@ -19,6 +19,11 @@ public interface IApplicationDbContext
     DbSet<Invoice> Invoices { get; }
     DbSet<Payment> Payments { get; }
     DbSet<Expense> Expenses { get; }
+    DbSet<DiagnosticReport> DiagnosticReports { get; }
+    DbSet<ReportTemplate> ReportTemplates { get; }
+    DbSet<ReportingKeyword> ReportingKeywords { get; }
+    DbSet<StudyAsset> StudyAssets { get; }
+    DbSet<PrescriptionProtocol> PrescriptionProtocols { get; }
     IUserContext UserContext { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken);

@@ -49,6 +49,7 @@ namespace _1Rad.Domain.Entities
         
         public bool IsFinalized { get; set; } = false;
         public DateTime? FinalizedAt { get; set; }
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public string ReportPdfUrl { get; set; } = string.Empty;
         
         public Guid HospitalId { get; set; }

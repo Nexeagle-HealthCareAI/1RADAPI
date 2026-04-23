@@ -65,12 +65,12 @@ namespace _1RadAPI.Controllers
 
                 string letterheadUrl = protocol?.LetterheadBlobUrl;
 
-                if (request.Letterhead != null)
+                if (request.LetterheadFile != null)
                 {
                     try
                     {
-                        using var stream = request.Letterhead.OpenReadStream();
-                        letterheadUrl = await _blobService.UploadFileAsync(stream, request.Letterhead.FileName, request.Letterhead.ContentType);
+                        using var stream = request.LetterheadFile.OpenReadStream();
+                        letterheadUrl = await _blobService.UploadFileAsync(stream, request.LetterheadFile.FileName, request.LetterheadFile.ContentType);
                     }
                     catch (Exception ex)
                     {
