@@ -118,7 +118,9 @@ public class ExceptionHandlingMiddleware
         var isDevelopment = _env.IsDevelopment();
         var errorMessage = isDevelopment 
             ? exception.Message 
-            : "An unexpected error occurred. Our team has been notified. Please try again later.";
+            : (exception.Message.Contains("CONFIG_MISSING") || exception.Message.Contains("FAILURE:") || exception.Message.Contains("SqlException") || exception.Message.Contains("DbUpdateException")
+                ? exception.Message 
+                : "An unexpected error occurred. Our team has been notified. Please try again later.");
 
         var errorResponse = new
         {

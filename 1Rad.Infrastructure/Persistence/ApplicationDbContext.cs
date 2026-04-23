@@ -360,6 +360,12 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
         {
             entity.ToTable("PrescriptionProtocols", "dbo");
             entity.HasKey(e => e.Id);
+            
+            entity.Property(e => e.HeaderMargin).HasPrecision(18, 2);
+            entity.Property(e => e.LeftMargin).HasPrecision(18, 2);
+            entity.Property(e => e.RightMargin).HasPrecision(18, 2);
+            entity.Property(e => e.BottomMargin).HasPrecision(18, 2);
+            
             entity.Property(e => e.FontColor).HasMaxLength(50);
             entity.Property(e => e.FontFamily).HasMaxLength(100);
             entity.Property(e => e.LetterheadBlobUrl).HasMaxLength(500);
@@ -367,7 +373,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.HasOne(e => e.Doctor)
                 .WithMany()
                 .HasForeignKey(e => e.DoctorId)
-                .OnDelete(DeleteBehavior.Restrict);
+                .OnDelete(DeleteBehavior.Cascade);
 
             entity.HasOne(e => e.Hospital)
                 .WithMany()
@@ -394,29 +400,6 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.HasOne(e => e.Hospital)
                 .WithMany()
                 .HasForeignKey(e => e.HospitalId);
-        });
-
-        // PrescriptionProtocol Configuration
-        modelBuilder.Entity<PrescriptionProtocol>(entity =>
-        {
-            entity.ToTable("PrescriptionProtocols", "dbo");
-            entity.HasKey(e => e.Id);
-            entity.Property(e => e.HeaderMargin).HasPrecision(18, 2);
-            entity.Property(e => e.LeftMargin).HasPrecision(18, 2);
-            entity.Property(e => e.RightMargin).HasPrecision(18, 2);
-            entity.Property(e => e.BottomMargin).HasPrecision(18, 2);
-            entity.Property(e => e.FontColor).HasMaxLength(50);
-            entity.Property(e => e.FontFamily).HasMaxLength(100);
-            
-            entity.HasOne(e => e.Doctor)
-                .WithMany()
-                .HasForeignKey(e => e.DoctorId)
-                .OnDelete(DeleteBehavior.Cascade);
-
-            entity.HasOne(e => e.Hospital)
-                .WithMany()
-                .HasForeignKey(e => e.HospitalId)
-                .OnDelete(DeleteBehavior.Restrict);
         });
 
         // StudyAsset Configuration

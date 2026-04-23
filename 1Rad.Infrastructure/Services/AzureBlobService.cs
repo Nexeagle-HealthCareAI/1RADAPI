@@ -16,6 +16,11 @@ namespace _1Rad.Infrastructure.Services
         public AzureBlobService(IConfiguration configuration)
         {
             var connectionString = configuration.GetConnectionString("AzureBlobStorage");
+            if (string.IsNullOrEmpty(connectionString))
+            {
+                // Tactical: If connection string is missing, we must fail fast with a clear diagnostic
+                throw new InvalidOperationException("AZURE_STORAGE_CONFIG_MISSING: The 'AzureBlobStorage' connection string is not configured in appsettings.json or Azure environment variables.");
+            }
             _blobServiceClient = new BlobServiceClient(connectionString);
             _containerName = configuration["AzureBlobStorage:ContainerName"] ?? "prescriptions";
         }
