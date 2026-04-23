@@ -22,6 +22,7 @@ public static class DependencyInjection
         services.AddScoped<IJwtProvider, JwtProvider>();
         services.AddScoped<IPasswordHasher, PasswordHasher>();
         services.AddScoped<IOtpService, OtpService>();
+        services.AddScoped<IBlobService, AzureBlobService>();
         services.AddHttpContextAccessor();
         services.AddScoped<IUserContext, UserContext>();
 
