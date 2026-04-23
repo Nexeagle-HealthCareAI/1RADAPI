@@ -32,7 +32,10 @@ namespace _1RadAPI.Controllers
                 var protocol = await _context.PrescriptionProtocols
                     .FirstOrDefaultAsync(p => p.DoctorId == doctorId && p.HospitalId == hospitalId);
 
-                if (protocol == null) return NotFound(new { success = false, error = "PROTOCOL NOT FOUND: No branding profile detected for this consultant." });
+                if (protocol == null) 
+                {
+                    return Ok(new { success = true, data = (object?)null, message = "No custom branding profile found. Using system defaults." });
+                }
 
                 return Ok(new { success = true, data = protocol });
             }
