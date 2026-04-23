@@ -8,7 +8,7 @@ using System.Threading.Tasks;
 
 namespace _1RadAPI.Controllers
 {
-    [Route("api/[controller]")]
+    [Route("api/v1/[controller]")]
     [ApiController]
     public class PrescriptionController : ControllerBase
     {

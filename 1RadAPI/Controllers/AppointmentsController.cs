@@ -27,6 +27,13 @@ public class AppointmentsController : ControllerBase
         return Ok(result);
     }
 
+    [HttpGet("{id}")]
+    public async Task<IActionResult> GetById(string id)
+    {
+        var result = await _mediator.Send(new GetAppointmentByIdQuery(id));
+        return result != null ? Ok(result) : NotFound();
+    }
+
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateAppointmentCommand command)
     {
