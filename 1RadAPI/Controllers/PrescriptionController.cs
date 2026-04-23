@@ -130,8 +130,8 @@ namespace _1RadAPI.Controllers
         public float RightMargin { get; set; }
         public float BottomMargin { get; set; }
         public int FontSize { get; set; }
-        public string FontColor { get; set; }
-        public string FontFamily { get; set; }
-        public IFormFile? LetterheadFile { get; set; }
+        public string? FontColor { get; set; }
+        public string? FontFamily { get; set; }
+        public IFormFile? LetterheadFile { get; set; } = null;
     }
 }
