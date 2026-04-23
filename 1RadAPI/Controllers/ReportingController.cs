@@ -55,10 +55,11 @@ namespace _1RadAPI.Controllers
 
         // --- REPORT PERSISTENCE ---
         [HttpGet("report/{appointmentId}")]
-        public async Task<IActionResult> GetReport(Guid appointmentId)
+        public async Task<IActionResult> GetReport(string appointmentId)
         {
+            _ = Guid.TryParse(appointmentId, out var guidId);
             var report = await _context.DiagnosticReports
-                .FirstOrDefaultAsync(r => r.AppointmentId == appointmentId);
+                .FirstOrDefaultAsync(r => r.AppointmentId == guidId || r.Appointment.DisplayId == appointmentId);
 
             if (report == null) return NotFound(new { success = false, error = "No existing report found for this mission." });
 
@@ -73,15 +74,25 @@ namespace _1RadAPI.Controllers
                 var hospitalId = _userContext.HospitalId;
                 var doctorId = _userContext.UserId;
 
+                _ = Guid.TryParse(request.AppointmentId, out var guidId);
                 var report = await _context.DiagnosticReports
-                    .FirstOrDefaultAsync(r => r.AppointmentId == request.AppointmentId);
+                    .FirstOrDefaultAsync(r => r.AppointmentId == guidId || r.Appointment.DisplayId == request.AppointmentId);
 
                 if (report == null)
                 {
+                    // If we didn't find the report by string ID, we need the real Guid to create it
+                    var finalGuid = guidId;
+                    if (finalGuid == Guid.Empty)
+                    {
+                        var appt = await _context.Appointments.FirstOrDefaultAsync(a => a.DisplayId == request.AppointmentId);
+                        if (appt == null) return BadRequest(new { success = false, error = "VALIDATION FAILURE: Unknown mission identifier." });
+                        finalGuid = appt.AppointmentId;
+                    }
+
                     report = new DiagnosticReport
                     {
                         Id = Guid.NewGuid(),
-                        AppointmentId = request.AppointmentId,
+                        AppointmentId = finalGuid,
                         DoctorId = doctorId,
                         HospitalId = hospitalId,
                         TemplateId = request.TemplateId,
@@ -107,7 +118,9 @@ namespace _1RadAPI.Controllers
                 // If finalized, update the appointment status
                 if (request.IsFinalized)
                 {
-                    var appointment = await _context.Appointments.FindAsync(request.AppointmentId);
+                    _ = Guid.TryParse(request.AppointmentId, out var finalGuid);
+                    var appointment = await _context.Appointments
+                        .FirstOrDefaultAsync(a => a.AppointmentId == finalGuid || a.DisplayId == request.AppointmentId);
                     if (appointment != null)
                     {
                         appointment.Status = "REPORTED";
@@ -127,7 +140,7 @@ namespace _1RadAPI.Controllers
 
     public class ReportRequest
     {
-        public Guid AppointmentId { get; set; }
+        public string AppointmentId { get; set; }
         public Guid? TemplateId { get; set; }
         public string Findings { get; set; }
         public string Impression { get; set; }

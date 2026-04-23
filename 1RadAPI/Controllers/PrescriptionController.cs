@@ -23,7 +23,13 @@ namespace _1RadAPI.Controllers
             _userContext = userContext;
         }
 
-        [HttpGet("{doctorId}")]
+        [HttpGet("me")]
+        public async Task<IActionResult> GetMyProtocol()
+        {
+            return await GetProtocol(_userContext.UserId);
+        }
+
+        [HttpGet("{doctorId:guid}")]
         public async Task<IActionResult> GetProtocol(Guid doctorId)
         {
             try

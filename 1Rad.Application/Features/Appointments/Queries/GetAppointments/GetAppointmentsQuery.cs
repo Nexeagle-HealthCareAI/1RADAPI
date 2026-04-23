@@ -44,35 +44,34 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
                     (a.DisplayId != null && a.DisplayId.ToLower().Contains(search)));
             }
 
-            // Materialize the data first to avoid NULL value issues in SQL translation
+            // Project to DTO directly in the query to avoid entity materialization issues
             var appointments = await query
                 .OrderByDescending(a => a.DateTime)
+                .Select(a => new AppointmentDto(
+                    a.AppointmentId,
+                    a.DisplayId ?? string.Empty,
+                    a.PatientId,
+                    a.PatientName ?? "Unknown",
+                    a.Mobile ?? string.Empty,
+                    a.Patient != null ? (a.Patient.Age != null ? a.Patient.Age.ToString() : "0") : "0",
+                    a.Patient != null ? (a.Patient.Gender ?? "Unknown") : "Unknown",
+                    a.Patient != null ? (a.Patient.PatientIdentifier ?? string.Empty) : string.Empty,
+                    a.Service ?? string.Empty,
+                    a.Modality ?? string.Empty,
+                    a.DateTime,
+                    a.Type ?? "BOOKED",
+                    a.Doctor ?? string.Empty,
+                    a.Status ?? "BOOKED",
+                    a.ReferredBy ?? string.Empty,
+                    a.ReferredContact ?? string.Empty,
+                    a.Notes ?? string.Empty,
+                    a.TechnicianComments ?? string.Empty,
+                    a.TechnicianId,
+                    a.ScannedAt
+                ))
                 .ToListAsync(cancellationToken);
 
-            // Map to DTO after materialization to safely handle NULL values
-            return appointments.Select(a => new AppointmentDto(
-                a.AppointmentId,
-                a.DisplayId ?? string.Empty,
-                a.PatientId,
-                a.PatientName ?? "Unknown",
-                a.Mobile ?? string.Empty,
-                a.Patient != null ? (a.Patient.Age?.ToString() ?? "0") : "0",
-                a.Patient != null ? (a.Patient.Gender ?? "Unknown") : "Unknown",
-                a.Patient != null ? (a.Patient.PatientIdentifier ?? string.Empty) : string.Empty,
-                a.Service ?? string.Empty,
-                a.Modality ?? string.Empty,
-                a.DateTime,
-                a.Type ?? "BOOKED",
-                a.Doctor ?? string.Empty,
-                a.Status ?? "BOOKED",
-                a.ReferredBy ?? string.Empty,
-                a.ReferredContact ?? string.Empty,
-                a.Notes ?? string.Empty,
-                a.TechnicianComments ?? string.Empty,
-                a.TechnicianId,
-                a.ScannedAt
-            ))
-            .ToList();
+            return appointments;
         }
         catch (Exception ex)
         {

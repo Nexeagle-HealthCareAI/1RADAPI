@@ -6,8 +6,8 @@ public class Hospital : BaseEntity
 {
     public Guid HospitalId { get; set; } = Guid.NewGuid();
     public Guid? GroupId { get; set; }
-    public string HospitalName { get; set; } = string.Empty;
-    public string HospitalAddress { get; set; } = string.Empty;
+    public string? HospitalName { get; set; } = string.Empty;
+    public string? HospitalAddress { get; set; } = string.Empty;
     public string? GSTIN { get; set; }
     public string? RegistrationNumber { get; set; }
     public string? PAN { get; set; }

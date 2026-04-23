@@ -48,11 +48,12 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
             }
 
             var patient = await _context.Patients
+                .IgnoreQueryFilters()
                 .FirstOrDefaultAsync(p => p.PatientId == request.PatientId, cancellationToken);
             
             if (patient == null)
             {
-                throw new KeyNotFoundException($"Patient with ID '{request.PatientId}' not found in the system.");
+                throw new KeyNotFoundException($"Patient with ID '{request.PatientId}' not found in the system (Checked global registry).");
             }
 
             var hospitalId = _context.UserContext.HospitalId;
@@ -73,11 +74,12 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
             if (request.AppointmentId.HasValue)
             {
                 var appointment = await _context.Appointments
+                    .IgnoreQueryFilters()
                     .FirstOrDefaultAsync(a => a.AppointmentId == request.AppointmentId.Value, cancellationToken);
                 
                 if (appointment == null)
                 {
-                    throw new KeyNotFoundException($"Appointment with ID '{request.AppointmentId}' not found.");
+                    throw new KeyNotFoundException($"Appointment with ID '{request.AppointmentId}' not found in global registry.");
                 }
 
                 if (appointment.PatientId != request.PatientId)
@@ -128,6 +130,11 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
         catch (InvalidOperationException)
         {
             throw;
+        }
+        catch (DbUpdateException dex)
+        {
+            var innerMsg = dex.InnerException?.Message ?? dex.Message;
+            throw new Exception($"Database update failed during invoice generation: {innerMsg}", dex);
         }
         catch (Exception ex)
         {
