@@ -17,7 +17,9 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
 
     public async Task<List<AppointmentDto>> Handle(GetAppointmentsQuery request, CancellationToken cancellationToken)
     {
-        var query = _context.Appointments.AsNoTracking();
+        var query = _context.Appointments
+            .Include(a => a.Patient)
+            .AsNoTracking();
 
         if (!string.IsNullOrEmpty(request.Status) && request.Status != "ALL")
         {
@@ -41,9 +43,9 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
                 a.PatientId,
                 a.PatientName ?? "Unknown",
                 a.Mobile ?? string.Empty,
-                a.Patient != null ? a.Patient.Age : "0",
-                a.Patient != null ? a.Patient.Gender : "Unknown",
-                a.Patient != null ? a.Patient.PatientIdentifier : string.Empty,
+                a.Patient.Age ?? "0",
+                a.Patient.Gender ?? "Unknown",
+                a.Patient.PatientIdentifier ?? string.Empty,
                 a.Service,
                 a.Modality,
                 a.DateTime,
