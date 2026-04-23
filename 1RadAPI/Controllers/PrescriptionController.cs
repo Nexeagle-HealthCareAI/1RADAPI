@@ -134,10 +134,10 @@ namespace _1RadAPI.Controllers
     public class PrescriptionRequest
     {
         public Guid DoctorId { get; set; }
-        public float HeaderMargin { get; set; }
-        public float LeftMargin { get; set; }
-        public float RightMargin { get; set; }
-        public float BottomMargin { get; set; }
+        public decimal HeaderMargin { get; set; }
+        public decimal LeftMargin { get; set; }
+        public decimal RightMargin { get; set; }
+        public decimal BottomMargin { get; set; }
         public int FontSize { get; set; }
         public string? FontColor { get; set; }
         public string? FontFamily { get; set; }
