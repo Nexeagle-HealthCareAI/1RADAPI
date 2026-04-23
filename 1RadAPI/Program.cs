@@ -17,6 +17,18 @@ builder.Services.AddControllers();
 builder.Services.AddFluentValidationAutoValidation()
                 .AddFluentValidationClientsideAdapters();
 
+// Tactical: Increase payload capacity for large DICOM/ZIP clinical assets (500MB)
+builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(options =>
+{
+    options.MultipartBodyLengthLimit = 524288000; // 500MB
+    options.ValueLengthLimit = 524288000;
+});
+
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.Limits.MaxRequestBodySize = 524288000; // 500MB
+});
+
 builder.Services.AddEndpointsApiExplorer();
 
 // Enhanced Swagger with Security Definitions

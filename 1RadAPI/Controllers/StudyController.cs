@@ -38,6 +38,7 @@ namespace _1RadAPI.Controllers
         }
 
         [HttpPost("upload")]
+        [DisableRequestSizeLimit]
         public async Task<IActionResult> UploadStudyAsset([FromForm] StudyUploadRequest request)
         {
             try
