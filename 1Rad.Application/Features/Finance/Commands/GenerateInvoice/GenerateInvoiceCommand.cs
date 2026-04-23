@@ -31,11 +31,19 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
         
         if (patient == null) throw new NotFoundException("Patient identity could not be verified in the active registry.", "PATIENT_NOT_FOUND");
 
+        var hospitalId = _context.UserContext.HospitalId;
+        
+        // Fallback to patient's hospital ID if context is missing (common in some automated background tasks)
+        if (hospitalId == Guid.Empty)
+        {
+            hospitalId = patient.HospitalId;
+        }
+
         var invoice = new Invoice
         {
             AppointmentId = request.AppointmentId,
             PatientId = request.PatientId,
-            HospitalId = _context.UserContext.HospitalId,
+            HospitalId = hospitalId,
             InvoiceId = $"INV-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString().Substring(0, 4).ToUpper()}",
             TotalAmount = request.Items.Sum(x => x.Amount * x.Quantity),
             PaidAmount = 0,
