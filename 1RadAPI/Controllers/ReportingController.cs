@@ -41,6 +41,44 @@ namespace _1RadAPI.Controllers
             return Ok(new { success = true, data = templates });
         }
 
+        [HttpPost("template")]
+        public async Task<IActionResult> UpsertTemplate([FromBody] ReportTemplate template)
+        {
+            var hospitalId = _userContext.HospitalId;
+            var doctorId = _userContext.UserId;
+
+            var existing = await _context.ReportTemplates
+                .FirstOrDefaultAsync(t => t.Id == template.Id);
+
+            if (existing == null)
+            {
+                template.HospitalId = hospitalId;
+                template.DoctorId = doctorId;
+                _context.ReportTemplates.Add(template);
+            }
+            else
+            {
+                existing.Name = template.Name;
+                existing.Modality = template.Modality;
+                existing.Content = template.Content;
+                existing.IsStructured = template.IsStructured;
+            }
+
+            await _context.SaveChangesAsync(default);
+            return Ok(new { success = true, data = template });
+        }
+
+        [HttpDelete("template/{id}")]
+        public async Task<IActionResult> DeleteTemplate(Guid id)
+        {
+            var template = await _context.ReportTemplates.FindAsync(id);
+            if (template == null) return NotFound();
+
+            _context.ReportTemplates.Remove(template);
+            await _context.SaveChangesAsync(default);
+            return Ok(new { success = true });
+        }
+
         // --- KEYWORD INTELLIGENCE ---
         [HttpGet("keywords")]
         public async Task<IActionResult> GetKeywords()
@@ -51,6 +89,42 @@ namespace _1RadAPI.Controllers
                 .ToListAsync();
 
             return Ok(new { success = true, data = keywords });
+        }
+
+        [HttpPost("keyword")]
+        public async Task<IActionResult> UpsertKeyword([FromBody] ReportingKeyword keyword)
+        {
+            var hospitalId = _userContext.HospitalId;
+            var doctorId = _userContext.UserId;
+
+            var existing = await _context.ReportingKeywords
+                .FirstOrDefaultAsync(k => k.Id == keyword.Id);
+
+            if (existing == null)
+            {
+                keyword.HospitalId = hospitalId;
+                keyword.DoctorId = doctorId;
+                _context.ReportingKeywords.Add(keyword);
+            }
+            else
+            {
+                existing.Trigger = keyword.Trigger;
+                existing.ReplacementText = keyword.ReplacementText;
+            }
+
+            await _context.SaveChangesAsync(default);
+            return Ok(new { success = true, data = keyword });
+        }
+
+        [HttpDelete("keyword/{id}")]
+        public async Task<IActionResult> DeleteKeyword(Guid id)
+        {
+            var keyword = await _context.ReportingKeywords.FindAsync(id);
+            if (keyword == null) return NotFound();
+
+            _context.ReportingKeywords.Remove(keyword);
+            await _context.SaveChangesAsync(default);
+            return Ok(new { success = true });
         }
 
         // --- REPORT PERSISTENCE ---

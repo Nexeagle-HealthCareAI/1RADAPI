@@ -1,74 +1,48 @@
 using _1Rad.Application.Features.Finance.Commands.GenerateInvoice;
-using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Entities;
-using _1Rad.UnitTests.Helpers;
 using Microsoft.EntityFrameworkCore;
-using Moq;
 using Xunit;
 
 namespace _1Rad.UnitTests.Features.Finance;
 
-public class GenerateInvoiceCommandHandlerTests
+public class GenerateInvoiceCommandHandlerTests : BaseHandlerTest
 {
-    private readonly Mock<IApplicationDbContext> _mockContext;
-    private readonly Mock<IUserContext> _mockUserContext;
-    private readonly Mock<DbSet<Patient>> _mockPatientSet;
-    private readonly Mock<DbSet<Appointment>> _mockAppointmentSet;
-    private readonly Mock<DbSet<Invoice>> _mockInvoiceSet;
     private readonly GenerateInvoiceCommandHandler _handler;
-    private readonly Guid _hospitalId = Guid.NewGuid();
-    private readonly Guid _patientId = Guid.NewGuid();
-    private readonly Guid _appointmentId = Guid.NewGuid();
 
     public GenerateInvoiceCommandHandlerTests()
     {
-        _mockContext = new Mock<IApplicationDbContext>();
-        _mockUserContext = new Mock<IUserContext>();
-        _mockPatientSet = new Mock<DbSet<Patient>>();
-        _mockAppointmentSet = new Mock<DbSet<Appointment>>();
-        _mockInvoiceSet = new Mock<DbSet<Invoice>>();
-
-        _mockUserContext.Setup(x => x.HospitalId).Returns(_hospitalId);
-        _mockContext.Setup(x => x.UserContext).Returns(_mockUserContext.Object);
-        _mockContext.Setup(x => x.Patients).Returns(_mockPatientSet.Object);
-        _mockContext.Setup(x => x.Appointments).Returns(_mockAppointmentSet.Object);
-        _mockContext.Setup(x => x.Invoices).Returns(_mockInvoiceSet.Object);
-
-        _handler = new GenerateInvoiceCommandHandler(_mockContext.Object);
+        _handler = new GenerateInvoiceCommandHandler(Context);
     }
 
     [Fact]
     public async Task Handle_ValidInvoiceWithAppointment_CreatesInvoiceSuccessfully()
     {
         // Arrange
+        var patientId = Guid.NewGuid();
+        var appointmentId = Guid.NewGuid();
+        
         var patient = new Patient
         {
-            PatientId = _patientId,
+            PatientId = patientId,
             FullName = "John Doe",
-            HospitalId = _hospitalId
+            HospitalId = HospitalId
         };
 
         var appointment = new Appointment
         {
-            AppointmentId = _appointmentId,
-            PatientId = _patientId,
-            HospitalId = _hospitalId
+            AppointmentId = appointmentId,
+            PatientId = patientId,
+            HospitalId = HospitalId
         };
 
-        var patients = new List<Patient> { patient }.AsQueryable();
-        var appointments = new List<Appointment> { appointment }.AsQueryable();
-
-        SetupMockDbSet(_mockPatientSet, patients);
-        SetupMockDbSet(_mockAppointmentSet, appointments);
-
-        Invoice capturedInvoice = null!;
-        _mockInvoiceSet.Setup(x => x.Add(It.IsAny<Invoice>()))
-            .Callback<Invoice>(i => capturedInvoice = i);
+        Context.Patients.Add(patient);
+        Context.Appointments.Add(appointment);
+        await Context.SaveChangesAsync();
 
         var command = new GenerateInvoiceCommand
         {
-            AppointmentId = _appointmentId,
-            PatientId = _patientId,
+            AppointmentId = appointmentId,
+            PatientId = patientId,
             Items = new List<InvoiceItemDto>
             {
                 new("X-Ray Chest", 500m, 1),
@@ -81,36 +55,38 @@ public class GenerateInvoiceCommandHandlerTests
 
         // Assert
         Assert.NotEqual(Guid.Empty, result);
-        Assert.NotNull(capturedInvoice);
-        Assert.Equal(_patientId, capturedInvoice.PatientId);
-        Assert.Equal(_appointmentId, capturedInvoice.AppointmentId);
-        Assert.Equal("John Doe", capturedInvoice.PatientName);
-        Assert.Equal(800m, capturedInvoice.TotalAmount);
-        Assert.Equal(0m, capturedInvoice.PaidAmount);
-        Assert.Equal("PENDING", capturedInvoice.Status);
-        Assert.Equal(2, capturedInvoice.Items.Count);
-        Assert.StartsWith("INV-", capturedInvoice.InvoiceId);
-        _mockContext.Verify(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+        
+        var invoice = await Context.Invoices.FindAsync(result);
+        Assert.NotNull(invoice);
+        Assert.Equal(patientId, invoice.PatientId);
+        Assert.Equal(appointmentId, invoice.AppointmentId);
+        Assert.Equal("John Doe", invoice.PatientName);
+        Assert.Equal(800m, invoice.TotalAmount);
+        Assert.Equal(0m, invoice.PaidAmount);
+        Assert.Equal("PENDING", invoice.Status);
+        Assert.Equal(2, invoice.Items.Count);
+        Assert.StartsWith("INV-", invoice.InvoiceId);
     }
 
     [Fact]
     public async Task Handle_ValidInvoiceWithoutAppointment_CreatesInvoiceSuccessfully()
     {
         // Arrange
+        var patientId = Guid.NewGuid();
         var patient = new Patient
         {
-            PatientId = _patientId,
+            PatientId = patientId,
             FullName = "Jane Smith",
-            HospitalId = _hospitalId
+            HospitalId = HospitalId
         };
 
-        var patients = new List<Patient> { patient }.AsQueryable();
-        SetupMockDbSet(_mockPatientSet, patients);
+        Context.Patients.Add(patient);
+        await Context.SaveChangesAsync();
 
         var command = new GenerateInvoiceCommand
         {
             AppointmentId = null,
-            PatientId = _patientId,
+            PatientId = patientId,
             Items = new List<InvoiceItemDto>
             {
                 new("MRI Scan", 3000m, 1)
@@ -122,9 +98,11 @@ public class GenerateInvoiceCommandHandlerTests
 
         // Assert
         Assert.NotEqual(Guid.Empty, result);
-        _mockInvoiceSet.Verify(x => x.Add(It.Is<Invoice>(i => 
-            i.AppointmentId == null && 
-            i.TotalAmount == 3000m)), Times.Once);
+        
+        var invoice = await Context.Invoices.FindAsync(result);
+        Assert.NotNull(invoice);
+        Assert.Null(invoice.AppointmentId);
+        Assert.Equal(3000m, invoice.TotalAmount);
     }
 
     [Fact]
@@ -133,7 +111,7 @@ public class GenerateInvoiceCommandHandlerTests
         // Arrange
         var command = new GenerateInvoiceCommand
         {
-            PatientId = _patientId,
+            PatientId = Guid.NewGuid(),
             Items = new List<InvoiceItemDto>()
         };
 
@@ -149,7 +127,7 @@ public class GenerateInvoiceCommandHandlerTests
         // Arrange
         var command = new GenerateInvoiceCommand
         {
-            PatientId = _patientId,
+            PatientId = Guid.NewGuid(),
             Items = null!
         };
 
@@ -164,7 +142,7 @@ public class GenerateInvoiceCommandHandlerTests
         // Arrange
         var command = new GenerateInvoiceCommand
         {
-            PatientId = _patientId,
+            PatientId = Guid.NewGuid(),
             Items = new List<InvoiceItemDto>
             {
                 new("X-Ray", 0m, 1) // Invalid amount
@@ -183,7 +161,7 @@ public class GenerateInvoiceCommandHandlerTests
         // Arrange
         var command = new GenerateInvoiceCommand
         {
-            PatientId = _patientId,
+            PatientId = Guid.NewGuid(),
             Items = new List<InvoiceItemDto>
             {
                 new("X-Ray", -100m, 1)
@@ -201,7 +179,7 @@ public class GenerateInvoiceCommandHandlerTests
         // Arrange
         var command = new GenerateInvoiceCommand
         {
-            PatientId = _patientId,
+            PatientId = Guid.NewGuid(),
             Items = new List<InvoiceItemDto>
             {
                 new("X-Ray", 500m, 0) // Invalid quantity
@@ -218,12 +196,9 @@ public class GenerateInvoiceCommandHandlerTests
     public async Task Handle_PatientNotFound_ThrowsKeyNotFoundException()
     {
         // Arrange
-        var patients = new List<Patient>().AsQueryable();
-        SetupMockDbSet(_mockPatientSet, patients);
-
         var command = new GenerateInvoiceCommand
         {
-            PatientId = _patientId,
+            PatientId = Guid.NewGuid(),
             Items = new List<InvoiceItemDto>
             {
                 new("X-Ray", 500m, 1)
@@ -240,19 +215,20 @@ public class GenerateInvoiceCommandHandlerTests
     public async Task Handle_PatientFromDifferentHospital_ThrowsUnauthorizedAccessException()
     {
         // Arrange
+        var patientId = Guid.NewGuid();
         var patient = new Patient
         {
-            PatientId = _patientId,
+            PatientId = patientId,
             FullName = "John Doe",
             HospitalId = Guid.NewGuid() // Different hospital
         };
 
-        var patients = new List<Patient> { patient }.AsQueryable();
-        SetupMockDbSet(_mockPatientSet, patients);
+        Context.Patients.Add(patient);
+        await Context.SaveChangesAsync();
 
         var command = new GenerateInvoiceCommand
         {
-            PatientId = _patientId,
+            PatientId = patientId,
             Items = new List<InvoiceItemDto>
             {
                 new("X-Ray", 500m, 1)
@@ -269,23 +245,21 @@ public class GenerateInvoiceCommandHandlerTests
     public async Task Handle_AppointmentNotFound_ThrowsKeyNotFoundException()
     {
         // Arrange
+        var patientId = Guid.NewGuid();
         var patient = new Patient
         {
-            PatientId = _patientId,
+            PatientId = patientId,
             FullName = "John Doe",
-            HospitalId = _hospitalId
+            HospitalId = HospitalId
         };
 
-        var patients = new List<Patient> { patient }.AsQueryable();
-        var appointments = new List<Appointment>().AsQueryable();
-
-        SetupMockDbSet(_mockPatientSet, patients);
-        SetupMockDbSet(_mockAppointmentSet, appointments);
+        Context.Patients.Add(patient);
+        await Context.SaveChangesAsync();
 
         var command = new GenerateInvoiceCommand
         {
-            AppointmentId = _appointmentId,
-            PatientId = _patientId,
+            AppointmentId = Guid.NewGuid(),
+            PatientId = patientId,
             Items = new List<InvoiceItemDto>
             {
                 new("X-Ray", 500m, 1)
@@ -302,30 +276,31 @@ public class GenerateInvoiceCommandHandlerTests
     public async Task Handle_AppointmentPatientMismatch_ThrowsInvalidOperationException()
     {
         // Arrange
+        var patientId = Guid.NewGuid();
+        var appointmentId = Guid.NewGuid();
+        
         var patient = new Patient
         {
-            PatientId = _patientId,
+            PatientId = patientId,
             FullName = "John Doe",
-            HospitalId = _hospitalId
+            HospitalId = HospitalId
         };
 
         var appointment = new Appointment
         {
-            AppointmentId = _appointmentId,
+            AppointmentId = appointmentId,
             PatientId = Guid.NewGuid(), // Different patient
-            HospitalId = _hospitalId
+            HospitalId = HospitalId
         };
 
-        var patients = new List<Patient> { patient }.AsQueryable();
-        var appointments = new List<Appointment> { appointment }.AsQueryable();
-
-        SetupMockDbSet(_mockPatientSet, patients);
-        SetupMockDbSet(_mockAppointmentSet, appointments);
+        Context.Patients.Add(patient);
+        Context.Appointments.Add(appointment);
+        await Context.SaveChangesAsync();
 
         var command = new GenerateInvoiceCommand
         {
-            AppointmentId = _appointmentId,
-            PatientId = _patientId,
+            AppointmentId = appointmentId,
+            PatientId = patientId,
             Items = new List<InvoiceItemDto>
             {
                 new("X-Ray", 500m, 1)
@@ -342,23 +317,20 @@ public class GenerateInvoiceCommandHandlerTests
     public async Task Handle_MultipleItems_CalculatesTotalCorrectly()
     {
         // Arrange
+        var patientId = Guid.NewGuid();
         var patient = new Patient
         {
-            PatientId = _patientId,
+            PatientId = patientId,
             FullName = "John Doe",
-            HospitalId = _hospitalId
+            HospitalId = HospitalId
         };
 
-        var patients = new List<Patient> { patient }.AsQueryable();
-        SetupMockDbSet(_mockPatientSet, patients);
-
-        Invoice capturedInvoice = null!;
-        _mockInvoiceSet.Setup(x => x.Add(It.IsAny<Invoice>()))
-            .Callback<Invoice>(i => capturedInvoice = i);
+        Context.Patients.Add(patient);
+        await Context.SaveChangesAsync();
 
         var command = new GenerateInvoiceCommand
         {
-            PatientId = _patientId,
+            PatientId = patientId,
             Items = new List<InvoiceItemDto>
             {
                 new("X-Ray", 500m, 2),      // 1000
@@ -368,36 +340,35 @@ public class GenerateInvoiceCommandHandlerTests
         };
 
         // Act
-        await _handler.Handle(command, CancellationToken.None);
+        var result = await _handler.Handle(command, CancellationToken.None);
 
         // Assert
-        Assert.Equal(4900m, capturedInvoice.TotalAmount);
-        Assert.Equal(3, capturedInvoice.Items.Count);
+        var invoice = await Context.Invoices.FindAsync(result);
+        Assert.NotNull(invoice);
+        Assert.Equal(4900m, invoice.TotalAmount);
+        Assert.Equal(3, invoice.Items.Count);
     }
 
     [Fact]
     public async Task Handle_EmptyHospitalContext_UsesPatientHospitalId()
     {
         // Arrange
-        _mockUserContext.Setup(x => x.HospitalId).Returns(Guid.Empty);
+        MockUserContext.Setup(x => x.HospitalId).Returns(Guid.Empty);
 
+        var patientId = Guid.NewGuid();
         var patient = new Patient
         {
-            PatientId = _patientId,
+            PatientId = patientId,
             FullName = "John Doe",
-            HospitalId = _hospitalId
+            HospitalId = HospitalId
         };
 
-        var patients = new List<Patient> { patient }.AsQueryable();
-        SetupMockDbSet(_mockPatientSet, patients);
-
-        Invoice capturedInvoice = null!;
-        _mockInvoiceSet.Setup(x => x.Add(It.IsAny<Invoice>()))
-            .Callback<Invoice>(i => capturedInvoice = i);
+        Context.Patients.Add(patient);
+        await Context.SaveChangesAsync();
 
         var command = new GenerateInvoiceCommand
         {
-            PatientId = _patientId,
+            PatientId = patientId,
             Items = new List<InvoiceItemDto>
             {
                 new("X-Ray", 500m, 1)
@@ -405,27 +376,11 @@ public class GenerateInvoiceCommandHandlerTests
         };
 
         // Act
-        await _handler.Handle(command, CancellationToken.None);
+        var result = await _handler.Handle(command, CancellationToken.None);
 
         // Assert
-        Assert.Equal(_hospitalId, capturedInvoice.HospitalId);
-    }
-
-    private void SetupMockDbSet<T>(Mock<DbSet<T>> mockSet, IQueryable<T> data) where T : class
-    {
-        mockSet.As<IAsyncEnumerable<T>>()
-            .Setup(m => m.GetAsyncEnumerator(It.IsAny<CancellationToken>()))
-            .Returns(new TestAsyncEnumerator<T>(data.GetEnumerator()));
-
-        mockSet.As<IQueryable<T>>()
-            .Setup(m => m.Provider)
-            .Returns(new TestAsyncQueryProvider<T>(data.Provider));
-
-        mockSet.As<IQueryable<T>>().Setup(m => m.Expression).Returns(data.Expression);
-        mockSet.As<IQueryable<T>>().Setup(m => m.ElementType).Returns(data.ElementType);
-        mockSet.As<IQueryable<T>>().Setup(m => m.GetEnumerator()).Returns(data.GetEnumerator());
-        
-        // Support for IgnoreQueryFilters
-        mockSet.Setup(m => m.IgnoreQueryFilters()).Returns(mockSet.Object);
+        var invoice = await Context.Invoices.FindAsync(result);
+        Assert.NotNull(invoice);
+        Assert.Equal(HospitalId, invoice.HospitalId);
     }
 }
