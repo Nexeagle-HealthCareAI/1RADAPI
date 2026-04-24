@@ -13,6 +13,7 @@ namespace _1RadAPI.Controllers
 {
     [Route("api/v1/[controller]")]
     [ApiController]
+    [Microsoft.AspNetCore.Authorization.Authorize]
     public class StudyController : ControllerBase
     {
         private readonly IApplicationDbContext _context;
@@ -68,12 +69,17 @@ namespace _1RadAPI.Controllers
                 }
 
                 // Tactical: Verify appointment existence and retrieve HospitalId
-                var appointment = await _context.Appointments.FindAsync(request.AppointmentId);
+                // Use IgnoreQueryFilters to ensure acquisition works regardless of session context
+                var appointment = await _context.Appointments
+                    .IgnoreQueryFilters()
+                    .FirstOrDefaultAsync(a => a.AppointmentId == request.AppointmentId);
+
                 if (appointment == null)
                     return NotFound(new { success = false, error = "MISSION NOT FOUND: Target appointment does not exist." });
 
                 // Tactical: Check for existing asset to prevent duplicates (Upsert logic)
                 var existingAsset = await _context.StudyAssets
+                    .IgnoreQueryFilters()
                     .FirstOrDefaultAsync(a => a.AppointmentId == request.AppointmentId && a.FileName == fileName);
 
                 StudyAsset asset;
