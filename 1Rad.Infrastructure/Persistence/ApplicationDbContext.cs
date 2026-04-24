@@ -274,6 +274,10 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
                 .WithMany(i => i.Payments)
                 .HasForeignKey(e => e.InvoiceId)
                 .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(e => e.Hospital)
+                .WithMany()
+                .HasForeignKey(e => e.HospitalId);
         });
 
         // DiagnosticReport Configuration

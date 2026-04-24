@@ -68,7 +68,8 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
                 InvoiceId = request.InvoiceId,
                 Amount = request.Amount,
                 PaymentMethod = request.PaymentMethod,
-                CreatedAt = DateTime.UtcNow
+                CreatedAt = DateTime.UtcNow,
+                HospitalId = _context.UserContext.HospitalId
             };
 
             _context.Payments.Add(payment);
