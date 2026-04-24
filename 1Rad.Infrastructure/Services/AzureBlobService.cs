@@ -31,7 +31,8 @@ namespace _1Rad.Infrastructure.Services
             var containerClient = _blobServiceClient.GetBlobContainerClient(targetContainer);
             await containerClient.CreateIfNotExistsAsync(PublicAccessType.Blob);
 
-            var blobClient = containerClient.GetBlobClient($"{Guid.NewGuid()}_{fileName}");
+            var sanitizedFileName = fileName.Replace(" ", "_");
+            var blobClient = containerClient.GetBlobClient($"{Guid.NewGuid()}_{sanitizedFileName}");
             
             var blobHttpHeader = new BlobHttpHeaders { ContentType = contentType };
             
