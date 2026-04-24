@@ -25,9 +25,10 @@ namespace _1Rad.Infrastructure.Services
             _containerName = configuration["AzureBlobStorage:ContainerName"] ?? "prescriptions";
         }
 
-        public async Task<string> UploadFileAsync(Stream fileStream, string fileName, string contentType)
+        public async Task<string> UploadFileAsync(Stream fileStream, string fileName, string contentType, string? containerName = null)
         {
-            var containerClient = _blobServiceClient.GetBlobContainerClient(_containerName);
+            var targetContainer = containerName ?? _containerName;
+            var containerClient = _blobServiceClient.GetBlobContainerClient(targetContainer);
             await containerClient.CreateIfNotExistsAsync(PublicAccessType.Blob);
 
             var blobClient = containerClient.GetBlobClient($"{Guid.NewGuid()}_{fileName}");
@@ -39,13 +40,15 @@ namespace _1Rad.Infrastructure.Services
             return blobClient.Uri.ToString();
         }
 
-        public async Task DeleteFileAsync(string fileUrl)
+        public async Task DeleteFileAsync(string fileUrl, string? containerName = null)
         {
             if (string.IsNullOrEmpty(fileUrl)) return;
 
             var uri = new Uri(fileUrl);
             var blobName = Path.GetFileName(uri.LocalPath);
-            var containerClient = _blobServiceClient.GetBlobContainerClient(_containerName);
+            
+            var targetContainer = containerName ?? _containerName;
+            var containerClient = _blobServiceClient.GetBlobContainerClient(targetContainer);
             var blobClient = containerClient.GetBlobClient(blobName);
 
             await blobClient.DeleteIfExistsAsync();

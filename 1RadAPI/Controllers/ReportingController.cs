@@ -75,26 +75,25 @@ namespace _1RadAPI.Controllers
                 var doctorId = _userContext.UserId;
 
                 _ = Guid.TryParse(request.AppointmentId, out var guidId);
+                
+                // Tactical: Always fetch the appointment to ensure correct context (HospitalId)
+                var appointment = await _context.Appointments
+                    .FirstOrDefaultAsync(a => a.AppointmentId == guidId || a.DisplayId == request.AppointmentId);
+                
+                if (appointment == null) 
+                    return BadRequest(new { success = false, error = "VALIDATION FAILURE: The target mission for this report does not exist." });
+
                 var report = await _context.DiagnosticReports
-                    .FirstOrDefaultAsync(r => r.AppointmentId == guidId || r.Appointment.DisplayId == request.AppointmentId);
+                    .FirstOrDefaultAsync(r => r.AppointmentId == appointment.AppointmentId);
 
                 if (report == null)
                 {
-                    // If we didn't find the report by string ID, we need the real Guid to create it
-                    var finalGuid = guidId;
-                    if (finalGuid == Guid.Empty)
-                    {
-                        var appt = await _context.Appointments.FirstOrDefaultAsync(a => a.DisplayId == request.AppointmentId);
-                        if (appt == null) return BadRequest(new { success = false, error = "VALIDATION FAILURE: Unknown mission identifier." });
-                        finalGuid = appt.AppointmentId;
-                    }
-
                     report = new DiagnosticReport
                     {
                         Id = Guid.NewGuid(),
-                        AppointmentId = finalGuid,
+                        AppointmentId = appointment.AppointmentId,
                         DoctorId = doctorId,
-                        HospitalId = hospitalId,
+                        HospitalId = appointment.HospitalId, // Inherit from appointment to prevent FK conflict
                         TemplateId = request.TemplateId,
                         Findings = request.Findings,
                         Impression = request.Impression,

@@ -5,7 +5,7 @@ namespace _1Rad.Application.Interfaces
 {
     public interface IBlobService
     {
-        Task<string> UploadFileAsync(Stream fileStream, string fileName, string contentType);
-        Task DeleteFileAsync(string fileUrl);
+        Task<string> UploadFileAsync(Stream fileStream, string fileName, string contentType, string? containerName = null);
+        Task DeleteFileAsync(string fileUrl, string? containerName = null);
     }
 }

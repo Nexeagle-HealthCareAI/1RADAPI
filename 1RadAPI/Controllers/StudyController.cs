@@ -56,16 +56,21 @@ namespace _1RadAPI.Controllers
                 var contentType = request.File.ContentType;
                 var extension = Path.GetExtension(fileName).ToLower();
 
-                // Tactical Upload to diagnostic-studies container
+                // Tactical Upload to 'dicom-files' container for clinical isolation
                 string blobUrl;
                 try
                 {
-                    blobUrl = await _blobService.UploadFileAsync(stream, fileName, contentType);
+                    blobUrl = await _blobService.UploadFileAsync(stream, fileName, contentType, "dicom-files");
                 }
                 catch (Exception ex)
                 {
                     return StatusCode(500, new { success = false, error = $"AZURE STORAGE FAILURE: Could not stream clinical asset to the cloud. {ex.Message}" });
                 }
+
+                // Tactical: Verify appointment existence and retrieve HospitalId
+                var appointment = await _context.Appointments.FindAsync(request.AppointmentId);
+                if (appointment == null)
+                    return NotFound(new { success = false, error = "MISSION NOT FOUND: Target appointment does not exist." });
 
                 // Tactical: Check for existing asset to prevent duplicates (Upsert logic)
                 var existingAsset = await _context.StudyAssets
@@ -89,14 +94,13 @@ namespace _1RadAPI.Controllers
                         FileName = fileName,
                         FileType = extension.Replace(".", ""),
                         UploadedAt = DateTime.UtcNow,
-                        HospitalId = _userContext.HospitalId
+                        HospitalId = appointment.HospitalId // Inherit from appointment to prevent FK conflict
                     };
                     _context.StudyAssets.Add(asset);
                 }
                 
                 // Auto-update status to IN_PROGRESS if first asset
-                var appointment = await _context.Appointments.FindAsync(request.AppointmentId);
-                if (appointment != null && appointment.Status != "SCANNED")
+                if (appointment.Status != "SCANNED" && appointment.Status != "REPORTED")
                 {
                     appointment.Status = "IN_PROGRESS";
                 }

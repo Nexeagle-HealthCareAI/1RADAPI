@@ -50,7 +50,9 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
             ReferredBy = request.ReferredBy,
             ReferredContact = request.ReferredContact,
             Notes = request.Notes,
-            HospitalId = _context.UserContext.HospitalId
+            HospitalId = _context.UserContext.HospitalId != Guid.Empty 
+                ? _context.UserContext.HospitalId 
+                : patient.HospitalId
         };
 
         _context.Appointments.Add(appointment);
