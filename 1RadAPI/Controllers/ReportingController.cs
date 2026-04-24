@@ -115,15 +115,9 @@ namespace _1RadAPI.Controllers
                 }
 
                 // If finalized, update the appointment status
-                if (request.IsFinalized)
+                if (request.IsFinalized && appointment != null)
                 {
-                    _ = Guid.TryParse(request.AppointmentId, out var finalGuid);
-                    var appointment = await _context.Appointments
-                        .FirstOrDefaultAsync(a => a.AppointmentId == finalGuid || a.DisplayId == request.AppointmentId);
-                    if (appointment != null)
-                    {
-                        appointment.Status = "REPORTED";
-                    }
+                    appointment.Status = "REPORTED";
                 }
 
                 await _context.SaveChangesAsync(default);

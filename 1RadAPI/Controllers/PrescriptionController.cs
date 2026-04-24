@@ -36,6 +36,7 @@ namespace _1RadAPI.Controllers
             {
                 var hospitalId = _userContext.HospitalId;
                 var protocol = await _context.PrescriptionProtocols
+                    .Include(p => p.Doctor)
                     .FirstOrDefaultAsync(p => p.DoctorId == doctorId && p.HospitalId == hospitalId);
 
                 if (protocol == null) 
