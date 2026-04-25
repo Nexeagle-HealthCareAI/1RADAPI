@@ -41,7 +41,7 @@ namespace _1RadAPI.Controllers
             return Ok(new { success = true, data = templates });
         }
 
-        [HttpPost("template")]
+        [HttpPost("templates/upsert")]
         public async Task<IActionResult> UpsertTemplate([FromBody] ReportTemplate template)
         {
             var hospitalId = _userContext.HospitalId;
@@ -68,7 +68,7 @@ namespace _1RadAPI.Controllers
             return Ok(new { success = true, data = template });
         }
 
-        [HttpDelete("template/{id}")]
+        [HttpDelete("templates/{id}")]
         public async Task<IActionResult> DeleteTemplate(Guid id)
         {
             var hospitalId = _userContext.HospitalId;
@@ -96,7 +96,7 @@ namespace _1RadAPI.Controllers
             return Ok(new { success = true, data = keywords });
         }
 
-        [HttpPost("keyword")]
+        [HttpPost("keywords/upsert")]
         public async Task<IActionResult> UpsertKeyword([FromBody] ReportingKeyword keyword)
         {
             var hospitalId = _userContext.HospitalId;
@@ -121,7 +121,7 @@ namespace _1RadAPI.Controllers
             return Ok(new { success = true, data = keyword });
         }
 
-        [HttpDelete("keyword/{id}")]
+        [HttpDelete("keywords/{id}")]
         public async Task<IActionResult> DeleteKeyword(Guid id)
         {
             var doctorId = _userContext.UserId;
