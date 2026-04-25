@@ -71,8 +71,13 @@ namespace _1RadAPI.Controllers
         [HttpDelete("template/{id}")]
         public async Task<IActionResult> DeleteTemplate(Guid id)
         {
-            var template = await _context.ReportTemplates.FindAsync(id);
-            if (template == null) return NotFound();
+            var hospitalId = _userContext.HospitalId;
+            var doctorId = _userContext.UserId;
+
+            var template = await _context.ReportTemplates
+                .FirstOrDefaultAsync(t => t.Id == id && t.HospitalId == hospitalId && (t.DoctorId == null || t.DoctorId == doctorId));
+
+            if (template == null) return NotFound(new { success = false, error = "ACCESS_DENIED: Template not found or unauthorized." });
 
             _context.ReportTemplates.Remove(template);
             await _context.SaveChangesAsync(default);
@@ -119,8 +124,11 @@ namespace _1RadAPI.Controllers
         [HttpDelete("keyword/{id}")]
         public async Task<IActionResult> DeleteKeyword(Guid id)
         {
-            var keyword = await _context.ReportingKeywords.FindAsync(id);
-            if (keyword == null) return NotFound();
+            var doctorId = _userContext.UserId;
+            var keyword = await _context.ReportingKeywords
+                .FirstOrDefaultAsync(k => k.Id == id && k.DoctorId == doctorId);
+
+            if (keyword == null) return NotFound(new { success = false, error = "ACCESS_DENIED: Keyword not found or unauthorized." });
 
             _context.ReportingKeywords.Remove(keyword);
             await _context.SaveChangesAsync(default);
