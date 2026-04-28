@@ -85,14 +85,11 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowedOrigins", policy =>
     {
-        var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() 
-            ?? new[] { "http://localhost:5173","http://localhost:8081" ,"https://gray-tree-058a09500.1.azurestaticapps.net" };
-        
-        policy.WithOrigins(allowedOrigins.Select(o => o.TrimEnd('/')).ToArray())
+        policy.SetIsOriginAllowed(origin => true) // Allow any origin to resolve CORS preflight issues
               .AllowAnyMethod()
               .AllowAnyHeader()
               .AllowCredentials()
-              .SetPreflightMaxAge(TimeSpan.FromMinutes(10)); // Cache preflight requests
+              .SetPreflightMaxAge(TimeSpan.FromMinutes(10));
     });
 });
 
