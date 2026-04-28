@@ -20,6 +20,7 @@ public interface IApplicationDbContext
     DbSet<Payment> Payments { get; }
     DbSet<Expense> Expenses { get; }
     DbSet<DiagnosticReport> DiagnosticReports { get; }
+    DbSet<DiagnosticReportField> DiagnosticReportFields { get; }
     DbSet<ReportTemplate> ReportTemplates { get; }
     DbSet<ReportingKeyword> ReportingKeywords { get; }
     DbSet<StudyAsset> StudyAssets { get; }

@@ -34,6 +34,8 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<Invoice> Invoices => Set<Invoice>();
     public DbSet<Payment> Payments => Set<Payment>();
     public DbSet<Expense> Expenses => Set<Expense>();
+    public DbSet<DiagnosticReport> DiagnosticReports => Set<DiagnosticReport>();
+    public DbSet<ReportTemplate> ReportTemplates => Set<ReportTemplate>();
     public DbSet<ReportingKeyword> ReportingKeywords => Set<ReportingKeyword>();
     public DbSet<DiagnosticReportField> DiagnosticReportFields => Set<DiagnosticReportField>();
     public DbSet<StudyAsset> StudyAssets => Set<StudyAsset>();
