@@ -12,6 +12,7 @@ public record SaveReportCommand : IRequest<DiagnosticReport>
     public string Findings { get; init; } = string.Empty;
     public string Impression { get; init; } = string.Empty;
     public string Advice { get; init; } = string.Empty;
+    public string ReportingMode { get; init; } = "Structured";
     public bool IsFinalized { get; init; }
 }
 
@@ -81,6 +82,7 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
                 Findings = request.Findings,
                 Impression = request.Impression,
                 Advice = request.Advice,
+                ReportingMode = request.ReportingMode,
                 IsFinalized = request.IsFinalized,
                 FinalizedAt = request.IsFinalized ? DateTime.UtcNow : null,
                 CreatedAt = DateTime.UtcNow
@@ -101,6 +103,7 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
             report.Findings = request.Findings;
             report.Impression = request.Impression;
             report.Advice = request.Advice;
+            report.ReportingMode = request.ReportingMode;
             report.IsFinalized = request.IsFinalized;
             report.FinalizedAt = request.IsFinalized ? DateTime.UtcNow : report.FinalizedAt;
         }

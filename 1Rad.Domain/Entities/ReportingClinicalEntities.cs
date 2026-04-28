@@ -51,6 +51,7 @@ namespace _1Rad.Domain.Entities
         public DateTime? FinalizedAt { get; set; }
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public string ReportPdfUrl { get; set; } = string.Empty;
+        public string ReportingMode { get; set; } = "Structured"; // Structured or Narrative Editor
         
         public Guid HospitalId { get; set; }
         

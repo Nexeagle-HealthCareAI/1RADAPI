@@ -53,6 +53,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.Email).IsRequired().HasMaxLength(255);
             entity.Property(e => e.Mobile).IsRequired().HasMaxLength(20);
             entity.Property(e => e.PasswordHash).IsRequired();
+            entity.Property(e => e.PreferredReportingMode).HasMaxLength(50).HasDefaultValue("Structured");
             entity.Property(e => e.Status).HasConversion<string>();
             entity.HasIndex(e => e.Email).IsUnique();
             entity.HasIndex(e => e.Mobile).IsUnique();
@@ -287,6 +288,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Findings).IsRequired();
             entity.Property(e => e.Impression).IsRequired();
+            entity.Property(e => e.ReportingMode).HasMaxLength(50).HasDefaultValue("Structured");
             entity.Property(e => e.ReportPdfUrl).HasMaxLength(500);
 
             entity.HasOne(e => e.Appointment)

@@ -1,5 +1,6 @@
 using _1Rad.Application.Features.Personnel.Commands.RegisterStaff;
 using _1Rad.Application.Features.Personnel.Commands.RemoveStaff;
+using _1Rad.Application.Features.Personnel.Commands.UpdatePreference;
 using _1Rad.Application.Features.Personnel.Commands.UpdateStaff;
 using _1Rad.Application.Features.Personnel.Queries.GetHospitalPersonnel;
 using _1Rad.Application.Interfaces;
@@ -54,6 +55,13 @@ public class PersonnelController : ControllerBase
         return success 
             ? Ok(new { message = "Staff updated successfully." }) 
             : BadRequest(new { message = error });
+    }
+
+    [HttpPatch("preferences")]
+    public async Task<IActionResult> UpdatePreference([FromBody] UpdatePreferenceCommand command)
+    {
+        var result = await _mediator.Send(command);
+        return result ? Ok(new { success = true }) : BadRequest(new { message = "Failed to update preference." });
     }
 
     [HttpDelete("{id}")]

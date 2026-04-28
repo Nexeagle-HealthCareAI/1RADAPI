@@ -15,6 +15,7 @@ public class User : BaseEntity
     public string? Specialization { get; set; }
     public string? Degree { get; set; }
     public string? LicenseNo { get; set; }
+    public string PreferredReportingMode { get; set; } = "Structured"; // Structured or Narrative Editor
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     
     // Navigation properties
