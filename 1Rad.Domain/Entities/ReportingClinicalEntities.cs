@@ -40,7 +40,7 @@ namespace _1Rad.Domain.Entities
     {
         public Guid Id { get; set; } = Guid.NewGuid();
         public Guid AppointmentId { get; set; }
-        public Guid DoctorId { get; set; }
+        public Guid? DoctorId { get; set; }
         public Guid? TemplateId { get; set; }
         
         public string Findings { get; set; } = string.Empty; // Can be JSON for structured
@@ -54,7 +54,7 @@ namespace _1Rad.Domain.Entities
         public string ReportingMode { get; set; } = "Structured"; // Structured or Narrative Editor
         public int? FieldCount { get; set; } = 0;
         
-        public Guid HospitalId { get; set; }
+        public Guid? HospitalId { get; set; }
         
         // Navigation
         public Appointment Appointment { get; set; } = null!;
