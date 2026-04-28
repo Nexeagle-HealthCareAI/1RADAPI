@@ -111,27 +111,31 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
                 var structuredData = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(request.Findings);
                 if (structuredData != null)
                 {
-                    // Clear existing fields for this report
-                    report.Fields.Clear();
+                    // SURGICAL SYNCHRONIZATION: Remove existing fields to avoid collection state confusion
+                    if (report.Fields.Any())
+                    {
+                        _context.DiagnosticReportFields.RemoveRange(report.Fields);
+                    }
                     
                     foreach (var field in structuredData)
                     {
-                        report.Fields.Add(new DiagnosticReportField
+                        var newField = new DiagnosticReportField
                         {
                             Id = Guid.NewGuid(),
                             ReportId = report.Id,
                             FieldName = field.Key,
-                            FieldValue = field.Value ?? string.Empty, // Protect against null values
-                            SectionName = "Findings", // Default section
-                            CreatedAt = DateTime.UtcNow
-                        });
+                            FieldValue = field.Value ?? string.Empty,
+                            SectionName = "Findings",
+                            CreatedAt = DateTime.UtcNow,
+                            SortOrder = 0
+                        };
+                        _context.DiagnosticReportFields.Add(newField);
                     }
                     report.FieldCount = structuredData.Count;
                 }
             }
             catch (Exception ex)
             {
-                // Log error but don't fail the whole save unless critical
                 System.Diagnostics.Debug.WriteLine($"[SHREDDING_ERROR] {ex.Message}");
             }
         }
@@ -142,7 +146,20 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
             appointment.Status = "REPORTED";
         }
 
-        await _context.SaveChangesAsync(cancellationToken);
+        try 
+        {
+            await _context.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException ex)
+        {
+            // Log details for debugging
+            foreach (var entry in ex.Entries)
+            {
+                var entityName = entry.Entity.GetType().Name;
+                System.Diagnostics.Debug.WriteLine($"[CONCURRENCY_ERROR] Entity: {entityName}, State: {entry.State}");
+            }
+            throw; // Re-throw to inform the user/caller
+        }
 
         return report;
     }
