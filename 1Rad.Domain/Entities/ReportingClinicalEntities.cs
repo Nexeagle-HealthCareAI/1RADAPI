@@ -1,6 +1,7 @@
 using _1Rad.Domain.Common;
 using System;
 using System.Collections.Generic;
+using System.Text.Json.Serialization;
 
 namespace _1Rad.Domain.Entities
 {
@@ -75,6 +76,7 @@ namespace _1Rad.Domain.Entities
         public DateTime? CreatedAt { get; set; } = DateTime.UtcNow;
 
         // Navigation
+        [JsonIgnore]
         public DiagnosticReport Report { get; set; } = null!;
     }
 }
