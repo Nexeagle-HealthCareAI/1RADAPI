@@ -58,9 +58,13 @@ namespace _1Rad.Domain.Entities
         public Guid HospitalId { get; set; }
         
         // Navigation
+        [JsonIgnore]
         public Appointment Appointment { get; set; } = null!;
+        [JsonIgnore]
         public User Doctor { get; set; } = null!;
+        [JsonIgnore]
         public Hospital Hospital { get; set; } = null!;
+        [JsonIgnore]
         public ReportTemplate? Template { get; set; }
         public ICollection<DiagnosticReportField> Fields { get; set; } = new List<DiagnosticReportField>();
     }

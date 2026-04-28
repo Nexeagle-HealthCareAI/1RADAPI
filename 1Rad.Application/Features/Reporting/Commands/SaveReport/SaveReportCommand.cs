@@ -161,6 +161,19 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
             throw; // Re-throw to inform the user/caller
         }
 
+        // TACTICAL: Break circular references for serialization without relying on attributes
+        report.Appointment = null!;
+        report.Doctor = null!;
+        report.Hospital = null!;
+        report.Template = null!;
+        if (report.Fields != null)
+        {
+            foreach (var f in report.Fields)
+            {
+                f.Report = null!;
+            }
+        }
+
         return report;
     }
 }
