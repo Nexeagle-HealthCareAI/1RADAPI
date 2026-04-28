@@ -41,11 +41,6 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
             throw new ArgumentException("Findings are required.", nameof(request.Findings));
         }
 
-        if (string.IsNullOrWhiteSpace(request.Impression))
-        {
-            throw new ArgumentException("Impression is required.", nameof(request.Impression));
-        }
-
         _ = Guid.TryParse(request.AppointmentId, out var guidId);
         
         // Fetch the appointment to ensure correct context (HospitalId)
