@@ -1,11 +1,13 @@
-using _1Rad.Application.Interfaces;
-using _1Rad.Domain.Entities;
+using _1Rad.Application.Features.Reporting.Commands.DeleteKeyword;
+using _1Rad.Application.Features.Reporting.Commands.DeleteTemplate;
+using _1Rad.Application.Features.Reporting.Commands.SaveReport;
+using _1Rad.Application.Features.Reporting.Commands.UpsertKeyword;
+using _1Rad.Application.Features.Reporting.Commands.UpsertTemplate;
+using _1Rad.Application.Features.Reporting.Queries.GetKeywords;
+using _1Rad.Application.Features.Reporting.Queries.GetReport;
+using _1Rad.Application.Features.Reporting.Queries.GetTemplates;
+using MediatR;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
 
 namespace _1RadAPI.Controllers
 {
@@ -13,213 +15,194 @@ namespace _1RadAPI.Controllers
     [ApiController]
     public class ReportingController : ControllerBase
     {
-        private readonly IApplicationDbContext _context;
-        private readonly IUserContext _userContext;
+        private readonly IMediator _mediator;
 
-        public ReportingController(IApplicationDbContext context, IUserContext userContext)
+        public ReportingController(IMediator mediator)
         {
-            _context = context;
-            _userContext = userContext;
+            _mediator = mediator;
         }
 
-        // --- TEMPLATE COMMANDS ---
+        // --- TEMPLATE QUERIES & COMMANDS ---
+        
+        /// <summary>
+        /// Get report templates for the current hospital and doctor
+        /// </summary>
         [HttpGet("templates")]
-        public async Task<IActionResult> GetTemplates([FromQuery] string modality = null)
-        {
-            var hospitalId = _userContext.HospitalId;
-            var doctorId = _userContext.UserId;
-
-            var query = _context.ReportTemplates
-                .Where(t => t.HospitalId == hospitalId && (t.DoctorId == null || t.DoctorId == doctorId));
-
-            if (!string.IsNullOrEmpty(modality) && modality != "ALL")
-            {
-                query = query.Where(t => t.Modality == modality);
-            }
-
-            var templates = await query.ToListAsync();
-            return Ok(new { success = true, data = templates });
-        }
-
-        [HttpPost("templates/upsert")]
-        public async Task<IActionResult> UpsertTemplate([FromBody] ReportTemplate template)
-        {
-            var hospitalId = _userContext.HospitalId;
-            var doctorId = _userContext.UserId;
-
-            var existing = await _context.ReportTemplates
-                .FirstOrDefaultAsync(t => t.Id == template.Id);
-
-            if (existing == null)
-            {
-                template.HospitalId = hospitalId;
-                template.DoctorId = doctorId;
-                _context.ReportTemplates.Add(template);
-            }
-            else
-            {
-                existing.Name = template.Name;
-                existing.Modality = template.Modality;
-                existing.Content = template.Content;
-                existing.IsStructured = template.IsStructured;
-            }
-
-            await _context.SaveChangesAsync(default);
-            return Ok(new { success = true, data = template });
-        }
-
-        [HttpDelete("templates/{id}")]
-        public async Task<IActionResult> DeleteTemplate(Guid id)
-        {
-            var hospitalId = _userContext.HospitalId;
-            var doctorId = _userContext.UserId;
-
-            var template = await _context.ReportTemplates
-                .FirstOrDefaultAsync(t => t.Id == id && t.HospitalId == hospitalId && (t.DoctorId == null || t.DoctorId == doctorId));
-
-            if (template == null) return NotFound(new { success = false, error = "ACCESS_DENIED: Template not found or unauthorized." });
-
-            _context.ReportTemplates.Remove(template);
-            await _context.SaveChangesAsync(default);
-            return Ok(new { success = true });
-        }
-
-        // --- KEYWORD INTELLIGENCE ---
-        [HttpGet("keywords")]
-        public async Task<IActionResult> GetKeywords()
-        {
-            var doctorId = _userContext.UserId;
-            var keywords = await _context.ReportingKeywords
-                .Where(k => k.DoctorId == doctorId)
-                .ToListAsync();
-
-            return Ok(new { success = true, data = keywords });
-        }
-
-        [HttpPost("keywords/upsert")]
-        public async Task<IActionResult> UpsertKeyword([FromBody] ReportingKeyword keyword)
-        {
-            var hospitalId = _userContext.HospitalId;
-            var doctorId = _userContext.UserId;
-
-            var existing = await _context.ReportingKeywords
-                .FirstOrDefaultAsync(k => k.Id == keyword.Id);
-
-            if (existing == null)
-            {
-                keyword.HospitalId = hospitalId;
-                keyword.DoctorId = doctorId;
-                _context.ReportingKeywords.Add(keyword);
-            }
-            else
-            {
-                existing.Trigger = keyword.Trigger;
-                existing.ReplacementText = keyword.ReplacementText;
-            }
-
-            await _context.SaveChangesAsync(default);
-            return Ok(new { success = true, data = keyword });
-        }
-
-        [HttpDelete("keywords/{id}")]
-        public async Task<IActionResult> DeleteKeyword(Guid id)
-        {
-            var doctorId = _userContext.UserId;
-            var keyword = await _context.ReportingKeywords
-                .FirstOrDefaultAsync(k => k.Id == id && k.DoctorId == doctorId);
-
-            if (keyword == null) return NotFound(new { success = false, error = "ACCESS_DENIED: Keyword not found or unauthorized." });
-
-            _context.ReportingKeywords.Remove(keyword);
-            await _context.SaveChangesAsync(default);
-            return Ok(new { success = true });
-        }
-
-        // --- REPORT PERSISTENCE ---
-        [HttpGet("report/{appointmentId}")]
-        public async Task<IActionResult> GetReport(string appointmentId)
-        {
-            Guid.TryParse(appointmentId, out var guidId);
-            
-            var report = await _context.DiagnosticReports
-                .Include(r => r.Appointment)
-                .FirstOrDefaultAsync(r => (guidId != Guid.Empty && r.AppointmentId == guidId) || r.Appointment.DisplayId == appointmentId);
-
-            return Ok(new { success = true, data = report });
-        }
-
-        [HttpPost("save")]
-        public async Task<IActionResult> SaveReport([FromBody] ReportRequest request)
+        public async Task<IActionResult> GetTemplates([FromQuery] string? modality = null)
         {
             try
             {
-                var hospitalId = _userContext.HospitalId;
-                var doctorId = _userContext.UserId;
+                var query = new GetTemplatesQuery { Modality = modality };
+                var templates = await _mediator.Send(query);
+                return Ok(new { success = true, data = templates });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, error = $"Failed to retrieve templates: {ex.Message}" });
+            }
+        }
 
-                _ = Guid.TryParse(request.AppointmentId, out var guidId);
-                
-                // Tactical: Always fetch the appointment to ensure correct context (HospitalId)
-                var appointment = await _context.Appointments
-                    .FirstOrDefaultAsync(a => a.AppointmentId == guidId || a.DisplayId == request.AppointmentId);
-                
-                if (appointment == null) 
-                    return BadRequest(new { success = false, error = "VALIDATION FAILURE: The target mission for this report does not exist." });
+        /// <summary>
+        /// Create or update a report template
+        /// </summary>
+        [HttpPost("templates/upsert")]
+        public async Task<IActionResult> UpsertTemplate([FromBody] UpsertTemplateCommand command)
+        {
+            try
+            {
+                var template = await _mediator.Send(command);
+                return Ok(new { success = true, data = template });
+            }
+            catch (ArgumentException ex)
+            {
+                return BadRequest(new { success = false, error = ex.Message });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return StatusCode(403, new { success = false, error = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, error = $"Failed to save template: {ex.Message}" });
+            }
+        }
 
-                var report = await _context.DiagnosticReports
-                    .FirstOrDefaultAsync(r => r.AppointmentId == appointment.AppointmentId);
+        /// <summary>
+        /// Delete a report template
+        /// </summary>
+        [HttpDelete("templates/{id}")]
+        public async Task<IActionResult> DeleteTemplate(Guid id)
+        {
+            try
+            {
+                var command = new DeleteTemplateCommand { Id = id };
+                await _mediator.Send(command);
+                return Ok(new { success = true });
+            }
+            catch (KeyNotFoundException ex)
+            {
+                return NotFound(new { success = false, error = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, error = $"Failed to delete template: {ex.Message}" });
+            }
+        }
 
-                if (report == null)
-                {
-                    report = new DiagnosticReport
-                    {
-                        Id = Guid.NewGuid(),
-                        AppointmentId = appointment.AppointmentId,
-                        DoctorId = doctorId,
-                        HospitalId = appointment.HospitalId, // Inherit from appointment to prevent FK conflict
-                        TemplateId = request.TemplateId,
-                        Findings = request.Findings,
-                        Impression = request.Impression,
-                        Advice = request.Advice,
-                        IsFinalized = request.IsFinalized,
-                        FinalizedAt = request.IsFinalized ? DateTime.UtcNow : null,
-                        CreatedAt = DateTime.UtcNow
-                    };
-                    _context.DiagnosticReports.Add(report);
-                }
-                else
-                {
-                    report.TemplateId = request.TemplateId;
-                    report.Findings = request.Findings;
-                    report.Impression = request.Impression;
-                    report.Advice = request.Advice;
-                    report.IsFinalized = request.IsFinalized;
-                    report.FinalizedAt = request.IsFinalized ? DateTime.UtcNow : report.FinalizedAt;
-                }
+        // --- KEYWORD INTELLIGENCE ---
+        
+        /// <summary>
+        /// Get reporting keywords for the current doctor
+        /// </summary>
+        [HttpGet("keywords")]
+        public async Task<IActionResult> GetKeywords()
+        {
+            try
+            {
+                var query = new GetKeywordsQuery();
+                var keywords = await _mediator.Send(query);
+                return Ok(new { success = true, data = keywords });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, error = $"Failed to retrieve keywords: {ex.Message}" });
+            }
+        }
 
-                // If finalized, update the appointment status
-                if (request.IsFinalized && appointment != null)
-                {
-                    appointment.Status = "REPORTED";
-                }
+        /// <summary>
+        /// Create or update a reporting keyword
+        /// </summary>
+        [HttpPost("keywords/upsert")]
+        public async Task<IActionResult> UpsertKeyword([FromBody] UpsertKeywordCommand command)
+        {
+            try
+            {
+                var keyword = await _mediator.Send(command);
+                return Ok(new { success = true, data = keyword });
+            }
+            catch (ArgumentException ex)
+            {
+                return BadRequest(new { success = false, error = ex.Message });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return StatusCode(403, new { success = false, error = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, error = $"Failed to save keyword: {ex.Message}" });
+            }
+        }
 
-                await _context.SaveChangesAsync(default);
+        /// <summary>
+        /// Delete a reporting keyword
+        /// </summary>
+        [HttpDelete("keywords/{id}")]
+        public async Task<IActionResult> DeleteKeyword(Guid id)
+        {
+            try
+            {
+                var command = new DeleteKeywordCommand { Id = id };
+                await _mediator.Send(command);
+                return Ok(new { success = true });
+            }
+            catch (KeyNotFoundException ex)
+            {
+                return NotFound(new { success = false, error = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, error = $"Failed to delete keyword: {ex.Message}" });
+            }
+        }
 
+        // --- REPORT PERSISTENCE ---
+        
+        /// <summary>
+        /// Get diagnostic report by appointment ID
+        /// </summary>
+        [HttpGet("report/{appointmentId}")]
+        public async Task<IActionResult> GetReport(string appointmentId)
+        {
+            try
+            {
+                var query = new GetReportQuery { AppointmentId = appointmentId };
+                var report = await _mediator.Send(query);
                 return Ok(new { success = true, data = report });
             }
             catch (Exception ex)
             {
-                return StatusCode(500, new { success = false, error = $"REPORT PERSISTENCE FAILURE: {ex.Message}" });
+                return StatusCode(500, new { success = false, error = $"Failed to retrieve report: {ex.Message}" });
             }
         }
-    }
 
-    public class ReportRequest
-    {
-        public string AppointmentId { get; set; }
-        public Guid? TemplateId { get; set; }
-        public string Findings { get; set; }
-        public string Impression { get; set; }
-        public string Advice { get; set; }
-        public bool IsFinalized { get; set; }
+        /// <summary>
+        /// Save or update a diagnostic report
+        /// </summary>
+        [HttpPost("save")]
+        public async Task<IActionResult> SaveReport([FromBody] SaveReportCommand command)
+        {
+            try
+            {
+                var report = await _mediator.Send(command);
+                return Ok(new { success = true, data = report });
+            }
+            catch (ArgumentException ex)
+            {
+                return BadRequest(new { success = false, error = ex.Message });
+            }
+            catch (KeyNotFoundException ex)
+            {
+                return NotFound(new { success = false, error = ex.Message });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return StatusCode(403, new { success = false, error = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, error = $"Failed to save report: {ex.Message}" });
+            }
+        }
     }
 }
