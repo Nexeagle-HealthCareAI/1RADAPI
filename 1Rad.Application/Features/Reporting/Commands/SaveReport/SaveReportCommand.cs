@@ -13,6 +13,7 @@ public record SaveReportCommand : IRequest<DiagnosticReport>
     public string Impression { get; init; } = string.Empty;
     public string Advice { get; init; } = string.Empty;
     public bool IsFinalized { get; init; }
+    public string ReportingMode { get; init; } = "Structured";
 }
 
 public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, DiagnosticReport>
@@ -66,6 +67,7 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
         }
 
         var report = await _context.DiagnosticReports
+            .Include(r => r.Fields)
             .FirstOrDefaultAsync(r => r.AppointmentId == appointment.AppointmentId, cancellationToken);
 
         if (report == null)
@@ -76,12 +78,13 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
                 Id = Guid.NewGuid(),
                 AppointmentId = appointment.AppointmentId,
                 DoctorId = doctorId,
-                HospitalId = appointment.HospitalId, // Inherit from appointment to prevent FK conflict
+                HospitalId = appointment.HospitalId,
                 TemplateId = request.TemplateId,
                 Findings = request.Findings,
                 Impression = request.Impression,
                 Advice = request.Advice,
                 IsFinalized = request.IsFinalized,
+                ReportingMode = request.ReportingMode,
                 FinalizedAt = request.IsFinalized ? DateTime.UtcNow : null,
                 CreatedAt = DateTime.UtcNow
             };
@@ -91,7 +94,6 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
         else
         {
             // Update existing report
-            // Verify ownership
             if (report.DoctorId != doctorId)
             {
                 throw new UnauthorizedAccessException("You do not have permission to modify this report.");
@@ -102,7 +104,41 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
             report.Impression = request.Impression;
             report.Advice = request.Advice;
             report.IsFinalized = request.IsFinalized;
+            report.ReportingMode = request.ReportingMode;
             report.FinalizedAt = request.IsFinalized ? DateTime.UtcNow : report.FinalizedAt;
+        }
+
+        // --- JSON SHREDDING LOGIC (Relational Evolution) ---
+        if (request.ReportingMode == "Structured" && !string.IsNullOrWhiteSpace(request.Findings))
+        {
+            try 
+            {
+                var structuredData = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(request.Findings);
+                if (structuredData != null)
+                {
+                    // Clear existing fields for this report
+                    report.Fields.Clear();
+                    
+                    foreach (var field in structuredData)
+                    {
+                        report.Fields.Add(new DiagnosticReportField
+                        {
+                            Id = Guid.NewGuid(),
+                            ReportId = report.Id,
+                            FieldName = field.Key,
+                            FieldValue = field.Value ?? string.Empty, // Protect against null values
+                            SectionName = "Findings", // Default section
+                            CreatedAt = DateTime.UtcNow
+                        });
+                    }
+                    report.FieldCount = structuredData.Count;
+                }
+            }
+            catch (Exception ex)
+            {
+                // Log error but don't fail the whole save unless critical
+                System.Diagnostics.Debug.WriteLine($"[SHREDDING_ERROR] {ex.Message}");
+            }
         }
 
         // If finalized, update the appointment status
