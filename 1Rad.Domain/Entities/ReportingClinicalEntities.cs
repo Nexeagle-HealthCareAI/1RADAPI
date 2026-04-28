@@ -52,7 +52,7 @@ namespace _1Rad.Domain.Entities
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public string ReportPdfUrl { get; set; } = string.Empty;
         public string ReportingMode { get; set; } = "Structured"; // Structured or Narrative Editor
-        public int FieldCount { get; set; } = 0;
+        public int? FieldCount { get; set; } = 0;
         
         public Guid HospitalId { get; set; }
         
@@ -70,7 +70,7 @@ namespace _1Rad.Domain.Entities
         public string? SectionName { get; set; }
         public string FieldName { get; set; } = string.Empty;
         public string FieldValue { get; set; } = string.Empty;
-        public int SortOrder { get; set; } = 0;
+        public int? SortOrder { get; set; } = 0;
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
         // Navigation
