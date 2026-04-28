@@ -2,6 +2,7 @@ using MediatR;
 using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
+using System.Text.Json;
 
 namespace _1Rad.Application.Features.Reporting.Commands.SaveReport;
 
@@ -36,86 +37,89 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
             throw new ArgumentException("Appointment ID is required.", nameof(request.AppointmentId));
         }
 
-        if (string.IsNullOrWhiteSpace(request.Findings))
-        {
-            throw new ArgumentException("Findings are required.", nameof(request.Findings));
-        }
-
-        if (string.IsNullOrWhiteSpace(request.Impression))
-        {
-            throw new ArgumentException("Impression is required.", nameof(request.Impression));
-        }
-
         _ = Guid.TryParse(request.AppointmentId, out var guidId);
         
-        // Fetch the appointment to ensure correct context (HospitalId)
         var appointment = await _context.Appointments
-            .FirstOrDefaultAsync(a => 
-                a.AppointmentId == guidId || 
-                a.DisplayId == request.AppointmentId, 
-                cancellationToken);
+            .FirstOrDefaultAsync(a => a.AppointmentId == guidId || a.DisplayId == request.AppointmentId, cancellationToken);
         
-        if (appointment == null)
-        {
-            throw new KeyNotFoundException($"Appointment with ID '{request.AppointmentId}' not found.");
-        }
-
-        // Verify hospital context
-        if (appointment.HospitalId != hospitalId)
-        {
-            throw new UnauthorizedAccessException("You do not have permission to create a report for this appointment.");
-        }
+        if (appointment == null) throw new KeyNotFoundException($"Appointment '{request.AppointmentId}' not found.");
+        if (appointment.HospitalId != hospitalId) throw new UnauthorizedAccessException("Unauthorized context.");
 
         var report = await _context.DiagnosticReports
+            .Include(r => r.Fields)
             .FirstOrDefaultAsync(r => r.AppointmentId == appointment.AppointmentId, cancellationToken);
 
         if (report == null)
         {
-            // Create new report
             report = new DiagnosticReport
             {
                 Id = Guid.NewGuid(),
                 AppointmentId = appointment.AppointmentId,
                 DoctorId = doctorId,
-                HospitalId = appointment.HospitalId, // Inherit from appointment to prevent FK conflict
-                TemplateId = request.TemplateId,
-                Findings = request.Findings,
-                Impression = request.Impression,
-                Advice = request.Advice,
-                ReportingMode = request.ReportingMode,
-                IsFinalized = request.IsFinalized,
-                FinalizedAt = request.IsFinalized ? DateTime.UtcNow : null,
+                HospitalId = appointment.HospitalId,
                 CreatedAt = DateTime.UtcNow
             };
-            
             _context.DiagnosticReports.Add(report);
+        }
+        else if (report.DoctorId != doctorId)
+        {
+            throw new UnauthorizedAccessException("Unauthorized modification.");
+        }
+
+        // 1. Basic Metadata Update
+        report.TemplateId = request.TemplateId;
+        report.Findings = request.Findings;
+        report.Impression = request.Impression;
+        report.Advice = request.Advice;
+        report.ReportingMode = request.ReportingMode;
+        report.IsFinalized = request.IsFinalized;
+        report.FinalizedAt = request.IsFinalized ? DateTime.UtcNow : report.FinalizedAt;
+
+        // 2. Relational Field Shredding (Structured Evolution)
+        if (request.ReportingMode == "Structured" && !string.IsNullOrWhiteSpace(request.Findings) && request.Findings.StartsWith("{"))
+        {
+            // Clear existing fields for fresh sync
+            _context.DiagnosticReportFields.RemoveRange(report.Fields);
+            report.Fields.Clear();
+
+            try
+            {
+                var structuredData = JsonSerializer.Deserialize<Dictionary<string, string>>(request.Findings);
+                if (structuredData != null)
+                {
+                    foreach (var kvp in structuredData)
+                    {
+                        if (string.IsNullOrWhiteSpace(kvp.Value)) continue;
+                        
+                        report.Fields.Add(new DiagnosticReportField
+                        {
+                            Id = Guid.NewGuid(),
+                            ReportId = report.Id,
+                            FieldName = kvp.Key,
+                            FieldValue = kvp.Value,
+                            CreatedAt = DateTime.UtcNow
+                        });
+                    }
+                }
+            }
+            catch (JsonException) { /* Fallback to basic findings if parse fails */ }
         }
         else
         {
-            // Update existing report
-            // Verify ownership
-            if (report.DoctorId != doctorId)
+            // If switched to Narrative, clear structured fields
+            if (report.Fields.Any())
             {
-                throw new UnauthorizedAccessException("You do not have permission to modify this report.");
+                _context.DiagnosticReportFields.RemoveRange(report.Fields);
+                report.Fields.Clear();
             }
-
-            report.TemplateId = request.TemplateId;
-            report.Findings = request.Findings;
-            report.Impression = request.Impression;
-            report.Advice = request.Advice;
-            report.ReportingMode = request.ReportingMode;
-            report.IsFinalized = request.IsFinalized;
-            report.FinalizedAt = request.IsFinalized ? DateTime.UtcNow : report.FinalizedAt;
         }
 
-        // If finalized, update the appointment status
-        if (request.IsFinalized)
-        {
-            appointment.Status = "REPORTED";
-        }
+        report.FieldCount = report.Fields.Count;
+
+        if (request.IsFinalized) appointment.Status = "REPORTED";
 
         await _context.SaveChangesAsync(cancellationToken);
-
         return report;
     }
 }
+

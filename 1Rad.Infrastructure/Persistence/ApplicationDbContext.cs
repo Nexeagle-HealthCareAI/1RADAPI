@@ -34,9 +34,8 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<Invoice> Invoices => Set<Invoice>();
     public DbSet<Payment> Payments => Set<Payment>();
     public DbSet<Expense> Expenses => Set<Expense>();
-    public DbSet<DiagnosticReport> DiagnosticReports => Set<DiagnosticReport>();
-    public DbSet<ReportTemplate> ReportTemplates => Set<ReportTemplate>();
     public DbSet<ReportingKeyword> ReportingKeywords => Set<ReportingKeyword>();
+    public DbSet<DiagnosticReportField> DiagnosticReportFields => Set<DiagnosticReportField>();
     public DbSet<StudyAsset> StudyAssets => Set<StudyAsset>();
     public DbSet<PrescriptionProtocol> PrescriptionProtocols => Set<PrescriptionProtocol>();
 
@@ -289,7 +288,13 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.Findings).IsRequired();
             entity.Property(e => e.Impression).IsRequired();
             entity.Property(e => e.ReportingMode).HasMaxLength(50).HasDefaultValue("Structured");
+            entity.Property(e => e.FieldCount).HasDefaultValue(0);
             entity.Property(e => e.ReportPdfUrl).HasMaxLength(500);
+
+            entity.HasMany(e => e.Fields)
+                .WithOne(f => f.Report)
+                .HasForeignKey(f => f.ReportId)
+                .OnDelete(DeleteBehavior.Cascade);
 
             entity.HasOne(e => e.Appointment)
                 .WithMany()
@@ -305,6 +310,16 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
                 .WithMany()
                 .HasForeignKey(e => e.TemplateId)
                 .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        // DiagnosticReportField Configuration
+        modelBuilder.Entity<DiagnosticReportField>(entity =>
+        {
+            entity.ToTable("DiagnosticReportFields", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.FieldName).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.SectionName).HasMaxLength(255);
+            entity.Property(e => e.FieldValue).IsRequired();
         });
 
         // ReportTemplate Configuration

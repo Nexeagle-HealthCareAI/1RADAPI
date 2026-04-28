@@ -52,6 +52,7 @@ namespace _1Rad.Domain.Entities
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public string ReportPdfUrl { get; set; } = string.Empty;
         public string ReportingMode { get; set; } = "Structured"; // Structured or Narrative Editor
+        public int FieldCount { get; set; } = 0;
         
         public Guid HospitalId { get; set; }
         
@@ -59,5 +60,20 @@ namespace _1Rad.Domain.Entities
         public Appointment Appointment { get; set; } = null!;
         public User Doctor { get; set; } = null!;
         public ReportTemplate? Template { get; set; }
+        public ICollection<DiagnosticReportField> Fields { get; set; } = new List<DiagnosticReportField>();
+    }
+
+    public class DiagnosticReportField : BaseEntity
+    {
+        public Guid Id { get; set; } = Guid.NewGuid();
+        public Guid ReportId { get; set; }
+        public string? SectionName { get; set; }
+        public string FieldName { get; set; } = string.Empty;
+        public string FieldValue { get; set; } = string.Empty;
+        public int SortOrder { get; set; } = 0;
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+
+        // Navigation
+        public DiagnosticReport Report { get; set; } = null!;
     }
 }
