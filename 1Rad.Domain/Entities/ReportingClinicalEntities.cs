@@ -49,7 +49,7 @@ namespace _1Rad.Domain.Entities
         
         public bool IsFinalized { get; set; } = false;
         public DateTime? FinalizedAt { get; set; }
-        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        public DateTime? CreatedAt { get; set; } = DateTime.UtcNow;
         public string ReportPdfUrl { get; set; } = string.Empty;
         public string ReportingMode { get; set; } = "Structured"; // Structured or Narrative Editor
         public int? FieldCount { get; set; } = 0;
@@ -71,7 +71,7 @@ namespace _1Rad.Domain.Entities
         public string FieldName { get; set; } = string.Empty;
         public string FieldValue { get; set; } = string.Empty;
         public int? SortOrder { get; set; } = 0;
-        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        public DateTime? CreatedAt { get; set; } = DateTime.UtcNow;
 
         // Navigation
         public DiagnosticReport Report { get; set; } = null!;
