@@ -308,6 +308,11 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
                 .HasForeignKey(e => e.DoctorId)
                 .OnDelete(DeleteBehavior.Restrict);
 
+            entity.HasOne(e => e.Hospital)
+                .WithMany()
+                .HasForeignKey(e => e.HospitalId)
+                .OnDelete(DeleteBehavior.Restrict);
+
             entity.HasOne(e => e.Template)
                 .WithMany()
                 .HasForeignKey(e => e.TemplateId)

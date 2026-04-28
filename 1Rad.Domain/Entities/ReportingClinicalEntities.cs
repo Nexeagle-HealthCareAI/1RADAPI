@@ -54,11 +54,12 @@ namespace _1Rad.Domain.Entities
         public string ReportingMode { get; set; } = "Structured"; // Structured or Narrative Editor
         public int? FieldCount { get; set; } = 0;
         
-        public Guid? HospitalId { get; set; }
+        public Guid HospitalId { get; set; }
         
         // Navigation
         public Appointment Appointment { get; set; } = null!;
         public User Doctor { get; set; } = null!;
+        public Hospital Hospital { get; set; } = null!;
         public ReportTemplate? Template { get; set; }
         public ICollection<DiagnosticReportField> Fields { get; set; } = new List<DiagnosticReportField>();
     }
