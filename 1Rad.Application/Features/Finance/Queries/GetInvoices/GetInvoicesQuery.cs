@@ -22,6 +22,8 @@ public class InvoiceDto
     public decimal BalanceAmount { get; set; }
     public string Status { get; set; } = string.Empty;
     public DateTime CreatedAt { get; set; }
+    public string? ReferrerName { get; set; }
+    public decimal CommissionAmount { get; set; }
     public List<InvoiceItemDto> Items { get; set; } = new();
 }
 
@@ -55,6 +57,7 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
                 .AsNoTracking()
                 .Where(i => i.HospitalId == _context.UserContext.HospitalId)
                 .Include(i => i.Patient)
+                    .ThenInclude(p => p.Referrer)
                 .AsQueryable();
 
             // Status Filtering
@@ -93,6 +96,8 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
                     BalanceAmount = i.TotalAmount - i.PaidAmount,
                     Status = i.Status,
                     CreatedAt = i.CreatedAt,
+                    ReferrerName = i.Patient.Referrer != null ? i.Patient.Referrer.FullName : null,
+                    CommissionAmount = _context.Expenses.Where(e => e.ReferenceNumber == i.InvoiceId && e.HospitalId == i.HospitalId).Sum(e => (decimal?)e.Amount) ?? 0,
                     Items = i.Items.Select(it => new InvoiceItemDto
                     {
                         Description = it.Description,

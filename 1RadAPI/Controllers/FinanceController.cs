@@ -121,4 +121,18 @@ public class FinanceController : ControllerBase
         var result = await _mediator.Send(command);
         return Ok(new { id = result });
     }
+
+    [HttpDelete("invoices/{id}")]
+    public async Task<IActionResult> DeleteInvoice(Guid id)
+    {
+        await _mediator.Send(new _1Rad.Application.Features.Finance.Commands.DeleteInvoice.DeleteInvoiceCommand(id));
+        return Ok();
+    }
+
+    [HttpDelete("expenses/{id}")]
+    public async Task<IActionResult> DeleteExpense(Guid id)
+    {
+        await _mediator.Send(new _1Rad.Application.Features.Finance.Commands.DeleteExpense.DeleteExpenseCommand(id));
+        return Ok();
+    }
 }
