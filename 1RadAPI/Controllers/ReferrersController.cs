@@ -1,5 +1,6 @@
 using _1Rad.Application.Features.Referrers.Queries.GetReferrers;
 using _1Rad.Application.Features.Referrers.Queries.GetReferralIntelligence;
+using _1Rad.Application.Features.Referrers.Queries.GetReferralMatrix;
 using _1Rad.Application.Features.Referrers.Commands.CreateReferrer;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
@@ -37,6 +38,17 @@ public class ReferrersController : ControllerBase
     public async Task<IActionResult> GetIntelligence([FromQuery] DateTime? startDate, [FromQuery] DateTime? endDate, [FromQuery] Guid? referrerId)
     {
         var result = await _mediator.Send(new GetReferralIntelligenceQuery(startDate, endDate, referrerId));
+        return Ok(result);
+    }
+
+    [HttpGet("matrix")]
+    public async Task<IActionResult> GetMatrix(
+        [FromQuery] string period, 
+        [FromQuery] DateTime referenceDate, 
+        [FromQuery] int weekIndex = 1,
+        [FromQuery] string? search = null)
+    {
+        var result = await _mediator.Send(new GetReferralMatrixQuery(period, referenceDate, weekIndex, search));
         return Ok(result);
     }
 }
