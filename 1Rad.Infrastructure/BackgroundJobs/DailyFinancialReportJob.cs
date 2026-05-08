@@ -97,7 +97,7 @@ public class DailyFinancialReportJob : BackgroundService
                 // 4. Calculate Referral Commissions Logged Today
                 var referrals = await context.ReferralCommissions
                     .IgnoreQueryFilters()
-                    .Where(rc => rc.HospitalId == hospital.HospitalId && rc.CreatedAt.Date == today)
+                    .Where(rc => rc.HospitalId == hospital.HospitalId && rc.TransactionDate.Date == today)
                     .SumAsync(rc => rc.CommissionAmount, stoppingToken);
 
                 var netProfit = revenue - expenses;

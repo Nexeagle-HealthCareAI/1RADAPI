@@ -109,7 +109,7 @@ public class DailyReferralExcelReportJob : BackgroundService
                         .Include(a => a.Patient)
                         .Where(a => a.HospitalId == hospital.HospitalId && 
                                     a.Patient.ReferrerId == referrer.ReferrerId && 
-                                    a.CreatedAt.Date == today)
+                                    a.DateTime.Date == today)
                         .Select(a => a.PatientId)
                         .Distinct()
                         .CountAsync(stoppingToken);
@@ -120,7 +120,7 @@ public class DailyReferralExcelReportJob : BackgroundService
                         .Include(a => a.Patient)
                         .Where(a => a.HospitalId == hospital.HospitalId && 
                                     a.Patient.ReferrerId == referrer.ReferrerId && 
-                                    a.CreatedAt.Date >= startOfWeek)
+                                    a.DateTime.Date >= startOfWeek)
                         .Select(a => a.PatientId)
                         .Distinct()
                         .CountAsync(stoppingToken);
