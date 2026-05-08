@@ -256,7 +256,8 @@ namespace _1RadAPI.Controllers
         }
 
         [HttpGet("proxy-asset")]
-        [Microsoft.AspNetCore.Authorization.AllowAnonymous] // Use AllowAnonymous for public blobs if needed, or keep Authorize for security
+        [HttpHead("proxy-asset")]
+        [Microsoft.AspNetCore.Authorization.AllowAnonymous]
         public async Task<IActionResult> ProxyAsset([FromQuery] string url)
         {
             try
