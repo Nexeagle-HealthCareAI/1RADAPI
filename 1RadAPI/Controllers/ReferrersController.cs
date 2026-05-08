@@ -59,4 +59,11 @@ public class ReferrersController : ControllerBase
         var result = await _mediator.Send(command);
         return Ok(new { commissionId = result });
     }
+
+    [HttpGet("commissions")]
+    public async Task<IActionResult> GetCommissions([FromQuery] DateTime? startDate, [FromQuery] DateTime? endDate, [FromQuery] Guid? referrerId)
+    {
+        var result = await _mediator.Send(new GetReferralCommissionsQuery(startDate, endDate, referrerId));
+        return Ok(result);
+    }
 }
