@@ -4,7 +4,11 @@ using _1Rad.Application.Interfaces;
 
 namespace _1Rad.Application.Features.Finance.Queries.GetFinancialMatrix;
 
-public record GetFinancialMatrixQuery : IRequest<FinancialMatrixDto>;
+public record GetFinancialMatrixQuery : IRequest<FinancialMatrixDto>
+{
+    public DateTime? StartDate { get; init; }
+    public DateTime? EndDate { get; init; }
+}
 
 public class FinancialMatrixDto
 {
@@ -29,9 +33,7 @@ public class MatrixItemDto
 public class ModalityRevenueDto
 {
     public string Modality { get; set; } = string.Empty;
-    public decimal DailyRevenue { get; set; }
-    public decimal MonthlyRevenue { get; set; }
-    public decimal YearlyRevenue { get; set; }
+    public decimal RangeRevenue { get; set; }
     public int ContributionPercentage { get; set; }
 }
 
@@ -57,18 +59,29 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
             var hospitalId = _context.UserContext.HospitalId;
 
             // Perform a domain join to link Invoices with Appointments for Modality context
-            var invoiceData = await _context.Invoices
-                .AsNoTracking()
-                .Where(i => i.HospitalId == hospitalId)
+            var invoiceQuery = _context.Invoices.AsNoTracking().Where(i => i.HospitalId == hospitalId);
+            var expenseQuery = _context.Expenses.AsNoTracking().Where(e => e.HospitalId == hospitalId);
+
+            if (request.StartDate.HasValue)
+            {
+                invoiceQuery = invoiceQuery.Where(i => i.CreatedAt >= request.StartDate.Value);
+                expenseQuery = expenseQuery.Where(e => e.TransactionDate >= request.StartDate.Value);
+            }
+            if (request.EndDate.HasValue)
+            {
+                var end = request.EndDate.Value.Date.AddDays(1).AddTicks(-1);
+                invoiceQuery = invoiceQuery.Where(i => i.CreatedAt <= end);
+                expenseQuery = expenseQuery.Where(e => e.TransactionDate <= end);
+            }
+
+            var invoiceData = await invoiceQuery
                 .Join(_context.Appointments.AsNoTracking(), 
                       i => i.AppointmentId, 
                       a => a.AppointmentId, 
                       (i, a) => new { i.TotalAmount, i.PaidAmount, i.CreatedAt, a.Modality })
                 .ToListAsync(cancellationToken);
             
-            var expenseData = await _context.Expenses
-                .AsNoTracking()
-                .Where(e => e.HospitalId == hospitalId)
+            var expenseData = await expenseQuery
                 .Select(e => new { e.Amount, e.TransactionDate })
                 .ToListAsync(cancellationToken);
             
@@ -145,24 +158,17 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                         : 0
                 }).ToList();
 
-            // 2. Modality Cross-Pivot Aggregation
-            var today = DateTime.UtcNow.Date;
-            var monthStart = new DateTime(today.Year, today.Month, 1);
-            var yearStart = new DateTime(today.Year, 1, 1);
-
             var modalityBreakdown = invoiceData
                 .GroupBy(i => i.Modality)
                 .Select(g => new ModalityRevenueDto
                 {
                     Modality = (g.Key ?? "GENERIC").ToUpper(),
-                    DailyRevenue = g.Where(i => i.CreatedAt.Date == today).Sum(i => i.TotalAmount),
-                    MonthlyRevenue = g.Where(i => i.CreatedAt >= monthStart).Sum(i => i.TotalAmount),
-                    YearlyRevenue = g.Where(i => i.CreatedAt >= yearStart).Sum(i => i.TotalAmount),
+                    RangeRevenue = g.Sum(i => i.TotalAmount),
                     ContributionPercentage = totalLifeTimeInvoiced > 0 
                         ? (int)(g.Sum(i => i.TotalAmount) / totalLifeTimeInvoiced * 100)
                         : 0
                 })
-                .OrderByDescending(x => x.YearlyRevenue)
+                .OrderByDescending(x => x.RangeRevenue)
                 .ToList();
 
             return new FinancialMatrixDto

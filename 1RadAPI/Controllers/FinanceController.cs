@@ -95,9 +95,9 @@ public class FinanceController : ControllerBase
     }
 
     [HttpGet("matrix")]
-    public async Task<IActionResult> GetMatrix()
+    public async Task<IActionResult> GetMatrix([FromQuery] DateTime? startDate, [FromQuery] DateTime? endDate)
     {
-        var result = await _mediator.Send(new GetFinancialMatrixQuery());
+        var result = await _mediator.Send(new GetFinancialMatrixQuery { StartDate = startDate, EndDate = endDate });
         return Ok(result);
     }
 
@@ -135,4 +135,17 @@ public class FinanceController : ControllerBase
         await _mediator.Send(new _1Rad.Application.Features.Finance.Commands.DeleteExpense.DeleteExpenseCommand(id));
         return Ok();
     }
+
+    [HttpPost("invoices/{id}/discount")]
+    public async Task<IActionResult> ApplyDiscount(Guid id, [FromBody] ApplyDiscountRequest request)
+    {
+        var result = await _mediator.Send(new _1Rad.Application.Features.Finance.Commands.ApplyInvoiceDiscount.ApplyInvoiceDiscountCommand 
+        { 
+            InvoiceId = id, 
+            DiscountAmount = request.DiscountAmount 
+        });
+        return Ok(result);
+    }
 }
+
+public record ApplyDiscountRequest(decimal DiscountAmount);

@@ -17,6 +17,8 @@ public class InvoiceDto
     public Guid InvoiceId { get; set; }
     public string DisplayId { get; set; } = string.Empty;
     public string PatientName { get; set; } = string.Empty;
+    public decimal GrossAmount { get; set; }
+    public decimal DiscountAmount { get; set; }
     public decimal TotalAmount { get; set; }
     public decimal PaidAmount { get; set; }
     public decimal BalanceAmount { get; set; }
@@ -94,6 +96,8 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
                     InvoiceId = i.Id,
                     DisplayId = i.InvoiceId,
                     PatientName = i.Patient.FullName,
+                    GrossAmount = i.GrossAmount,
+                    DiscountAmount = i.DiscountAmount,
                     TotalAmount = i.TotalAmount,
                     PaidAmount = i.PaidAmount,
                     BalanceAmount = i.TotalAmount - i.PaidAmount,

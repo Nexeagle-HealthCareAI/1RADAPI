@@ -11,7 +11,9 @@ public class Invoice : BaseEntity, IHospitalContext
     public Guid PatientId { get; set; }
     public string PatientName { get; set; } = string.Empty; // Denormalized for financial records
     
-    public decimal TotalAmount { get; set; }
+    public decimal GrossAmount { get; set; }
+    public decimal DiscountAmount { get; set; }
+    public decimal TotalAmount { get; set; } // Net Amount
     public decimal PaidAmount { get; set; }
     public decimal BalanceAmount => TotalAmount - PaidAmount;
     

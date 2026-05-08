@@ -10,6 +10,7 @@ public record GenerateInvoiceCommand : IRequest<Guid>
 {
     public Guid? AppointmentId { get; init; }
     public Guid PatientId { get; init; }
+    public decimal DiscountAmount { get; init; }
     public List<InvoiceItemDto> Items { get; init; } = new();
 }
 
@@ -88,6 +89,15 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
                 }
             }
 
+            var grossAmount = request.Items.Sum(x => x.Amount * x.Quantity);
+            var discount = request.DiscountAmount;
+            
+            // Security/Business Rule: Discount cannot exceed Gross Amount
+            if (discount > grossAmount)
+            {
+                discount = grossAmount;
+            }
+
             var invoice = new Invoice
             {
                 AppointmentId = request.AppointmentId,
@@ -95,7 +105,9 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
                 PatientName = patient.FullName ?? "UNKNOWN PATIENT",
                 HospitalId = hospitalId,
                 InvoiceId = $"INV-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString().Substring(0, 8).ToUpper()}",
-                TotalAmount = request.Items.Sum(x => x.Amount * x.Quantity),
+                GrossAmount = grossAmount,
+                DiscountAmount = discount,
+                TotalAmount = grossAmount - discount,
                 PaidAmount = 0,
                 Status = "PENDING",
                 CreatedAt = DateTime.UtcNow
