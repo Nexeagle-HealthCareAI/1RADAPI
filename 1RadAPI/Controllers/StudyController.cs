@@ -40,6 +40,114 @@ namespace _1RadAPI.Controllers
             return Ok(assets);
         }
 
+        [HttpGet("{appointmentId}/viewer")]
+        public async Task<IActionResult> GetDicomViewerConfig(string appointmentId)
+        {
+            try
+            {
+                Guid.TryParse(appointmentId, out var guidId);
+
+                var assets = await _context.StudyAssets
+                    .Where(a => (guidId != Guid.Empty && a.AppointmentId == guidId) || a.Appointment.DisplayId == appointmentId)
+                    .OrderByDescending(a => a.UploadedAt)
+                    .ToListAsync();
+
+                var appointment = await _context.Appointments
+                    .FirstOrDefaultAsync(a => (guidId != Guid.Empty && a.AppointmentId == guidId) || a.DisplayId == appointmentId);
+
+                if (appointment == null)
+                    return NotFound(new { success = false, error = "Appointment not found" });
+
+                // Detect device type from User-Agent
+                var userAgent = Request.Headers.UserAgent.ToString();
+                var deviceInfo = GetDeviceInfo(userAgent);
+
+                var viewerConfig = new
+                {
+                    appointmentId = appointment.AppointmentId,
+                    patientName = appointment.PatientName,
+                    modality = appointment.Modality,
+                    studyDate = appointment.DateTime,
+                    assets = assets.Select(a => new
+                    {
+                        id = a.Id,
+                        fileName = a.FileName,
+                        fileType = a.FileType,
+                        blobUrl = a.BlobUrl,
+                        uploadedAt = a.UploadedAt
+                    }),
+                    deviceInfo = deviceInfo,
+                    mobileOptimizations = GetMobileOptimizations(deviceInfo)
+                };
+
+                return Ok(new { success = true, data = viewerConfig });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, error = $"Failed to get viewer configuration: {ex.Message}" });
+            }
+        }
+
+        private object GetDeviceInfo(string userAgent)
+        {
+            var isMobile = userAgent.Contains("Mobile");
+            var isTablet = userAgent.Contains("iPad") || 
+                          (userAgent.Contains("Android") && !userAgent.Contains("Mobile")) ||
+                          userAgent.Contains("Tablet");
+            var isIOS = userAgent.Contains("iPhone") || userAgent.Contains("iPad") || userAgent.Contains("iPod");
+            var isAndroid = userAgent.Contains("Android");
+            var isSafari = userAgent.Contains("Safari") && !userAgent.Contains("Chrome");
+
+            return new
+            {
+                isMobile = isMobile,
+                isTablet = isTablet,
+                isIOS = isIOS,
+                isAndroid = isAndroid,
+                isSafari = isSafari,
+                userAgent = userAgent
+            };
+        }
+
+        private object GetMobileOptimizations(object deviceInfo)
+        {
+            // Cast deviceInfo to access properties
+            var device = deviceInfo as dynamic ?? new { isTablet = false, isIOS = false, isMobile = false };
+            
+            return new
+            {
+                // Memory settings based on device
+                maxCacheSize = device.isTablet ? "512MB" : "256MB",
+                preloadImages = device.isTablet ? 5 : 3,
+                
+                // Rendering settings
+                webGLEnabled = true,
+                pixelReplication = false,
+                interpolation = "linear",
+                
+                // Touch settings
+                touchGestures = new
+                {
+                    pan = true,
+                    zoom = true,
+                    windowLevel = true,
+                    rotate = device.isTablet
+                },
+                
+                // Performance settings
+                maxConcurrentRequests = device.isMobile ? 2 : 4,
+                networkTimeout = 30000,
+                
+                // iOS-specific settings
+                safariOptimizations = device.isIOS ? new
+                {
+                    preventElasticScroll = true,
+                    disableUserSelect = true,
+                    touchAction = "none"
+                } : null
+            };
+        }
+
         [HttpPost("upload")]
         [DisableRequestSizeLimit]
         public async Task<IActionResult> UploadStudyAsset([FromForm] StudyUploadRequest request)

@@ -20,6 +20,11 @@ public class EmailService : IEmailService
 
     public async Task SendEmailAsync(string to, string subject, string body)
     {
+        await SendEmailWithAttachmentAsync(to, subject, body, null, null);
+    }
+
+    public async Task SendEmailWithAttachmentAsync(string to, string subject, string body, byte[]? attachment, string? fileName)
+    {
         var config = _configuration.GetSection("Smtp");
         
         var message = new MimeMessage();
@@ -28,6 +33,10 @@ public class EmailService : IEmailService
         message.Subject = subject;
 
         var bodyBuilder = new BodyBuilder { HtmlBody = body };
+        if (attachment != null && !string.IsNullOrEmpty(fileName))
+        {
+            bodyBuilder.Attachments.Add(fileName, attachment);
+        }
         message.Body = bodyBuilder.ToMessageBody();
 
         using var client = new SmtpClient();
@@ -38,12 +47,12 @@ public class EmailService : IEmailService
             await client.SendAsync(message);
             await client.DisconnectAsync(true);
             
-            _logger.LogInformation("Email sent successfully to {To}", to);
+            _logger.LogInformation("Email dispatched to {To} (HasAttachment: {HasAttachment})", to, attachment != null);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to send email to {To}", to);
-            throw; // Rethrow to ensure the command handler captures the failure
+            throw;
         }
     }
 }

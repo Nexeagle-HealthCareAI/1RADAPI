@@ -2,6 +2,7 @@ using _1Rad.Application.Interfaces;
 using _1Rad.Infrastructure.Authentication;
 using _1Rad.Infrastructure.Persistence;
 using _1Rad.Infrastructure.Services;
+using _1Rad.Infrastructure.BackgroundJobs;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -25,6 +26,9 @@ public static class DependencyInjection
         services.AddScoped<IBlobService, AzureBlobService>();
         services.AddHttpContextAccessor();
         services.AddScoped<IUserContext, UserContext>();
+        
+        services.AddHostedService<DailyFinancialReportJob>();
+        services.AddHostedService<DailyReferralExcelReportJob>();
 
         return services;
     }

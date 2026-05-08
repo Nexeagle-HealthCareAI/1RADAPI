@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>1Rad Mobile DICOM Viewer</title>
+    
+    <!-- iOS-specific meta tags -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="1Rad Viewer">
+    <meta name="format-detection" content="telephone=no">
+    
+    <!-- Android-specific meta tags -->
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#000000">
+    
+    <!-- Cornerstone.js and dependencies -->
+    <script src="https://unpkg.com/cornerstone-core@2.6.1/dist/cornerstone.min.js"></script>
+    <script src="https://unpkg.com/cornerstone-web-image-loader@2.1.1/dist/cornerstoneWebImageLoader.min.js"></script>
+    <script src="https://unpkg.com/cornerstone-tools@6.0.10/dist/cornerstoneTools.min.js"></script>
+    <script src="https://unpkg.com/hammerjs@2.0.8/hammer.min.js"></script>
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #000;
+            color: #fff;
+            overflow: hidden;
+            height: 100vh;
+            width: 100vw;
+            position: fixed;
+            -webkit-user-select: none;
+            user-select: none;
+            -webkit-touch-callout: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        
+        .viewer-container {
+            width: 100vw;
+            height: 100vh;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .viewer-header {
+            background: rgba(0, 0, 0, 0.8);
+            padding: 10px 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 1000;
+            backdrop-filter: blur(10px);
+        }
+        
+        .patient-info {
+            font-size: 14px;
+            font-weight: 500;
+        }
+        
+        .viewer-controls {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .control-btn {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: #fff;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            cursor: pointer;
+            min-height: 44px;
+            min-width: 44px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .control-btn:active {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        
+        .dicom-viewport {
+            flex: 1;
+            position: relative;
+            background: #000;
+            touch-action: none;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        
+        .loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 999;
+        }
+        
+        .loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-top: 3px solid #fff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .image-info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            z-index: 100;
+        }
+        
+        .gesture-hint {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.8);
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 11px;
+            opacity: 0.8;
+            z-index: 100;
+        }
+        
+        /* iPad-specific styles */
+        @media (min-width: 768px) and (max-width: 1024px) {
+            .viewer-header {
+                padding: 15px 20px;
+            }
+            
+            .patient-info {
+                font-size: 16px;
+            }
+            
+            .control-btn {
+                padding: 10px 16px;
+                font-size: 14px;
+                min-height: 48px;
+                min-width: 48px;
+            }
+        }
+        
+        /* Error state */
+        .error-message {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            color: #ff6b6b;
+            z-index: 100;
+        }
+    </style>
+</head>
+<body>
+    <div class="viewer-container">
+        <div class="viewer-header">
+            <div class="patient-info" id="patientInfo">
+                Loading patient information...
+            </div>
+            <div class="viewer-controls">
+                <button class="control-btn" id="resetBtn" title="Reset View">⟲</button>
+                <button class="control-btn" id="fullscreenBtn" title="Fullscreen">⛶</button>
+                <button class="control-btn" id="closeBtn" title="Close">✕</button>
+            </div>
+        </div>
+        
+        <div class="dicom-viewport" id="dicomViewport">
+            <div class="loading-overlay" id="loadingOverlay">
+                <div class="loading-spinner"></div>
+            </div>
+            
+            <div class="image-info" id="imageInfo" style="display: none;">
+                <div>Image: <span id="currentImage">1</span> of <span id="totalImages">1</span></div>
+                <div>WW: <span id="windowWidth">-</span> WL: <span id="windowLevel">-</span></div>
+                <div>Zoom: <span id="zoomLevel">100%</span></div>
+            </div>
+            
+            <div class="gesture-hint" id="gestureHint">
+                👆 Tap to pan • 🤏 Pinch to zoom • ✌️ Two fingers to adjust contrast
+            </div>
+            
+            <div class="error-message" id="errorMessage" style="display: none;">
+                <h3>Failed to load DICOM images</h3>
+                <p>Please check your connection and try again.</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        class MobileDicomViewer {
+            constructor() {
+                this.appointmentId = this.getAppointmentIdFromUrl();
+                this.currentImageIndex = 0;
+                this.images = [];
+                this.viewerConfig = null;
+                this.element = document.getElementById('dicomViewport');
+                
+                this.init();
+            }
+            
+            getAppointmentIdFromUrl() {
+                // Extract appointment ID from URL parameters
+                const urlParams = new URLSearchParams(window.location.search);
+                return urlParams.get('appointmentId') || 'demo-appointment';
+            }
+            
+            async init() {
+                try {
+                    // Initialize Cornerstone
+                    cornerstone.enable(this.element);
+                    
+                    // Load viewer configuration
+                    await this.loadViewerConfig();
+                    
+                    // Setup mobile optimizations
+                    this.setupMobileOptimizations();
+                    
+                    // Setup touch gestures
+                    this.setupTouchGestures();
+                    
+                    // Setup controls
+                    this.setupControls();
+                    
+                    // Load DICOM images
+                    await this.loadDicomImages();
+                    
+                } catch (error) {
+                    console.error('Failed to initialize viewer:', error);
+                    this.showError('Failed to initialize DICOM viewer');
+                }
+            }
+            
+            async loadViewerConfig() {
+                try {
+                    const response = await fetch(`/api/v1/study/${this.appointmentId}/viewer`, {
+                        headers: {
+                            'Authorization': `Bearer ${this.getAuthToken()}`,
+                            'Content-Type': 'application/json'
+                        }
+                    });
+                    
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+                    
+                    const result = await response.json();
+                    this.viewerConfig = result.data;
+                    
+                    // Update patient info
+                    document.getElementById('patientInfo').textContent = 
+                        `${this.viewerConfig.patientName} - ${this.viewerConfig.modality}`;
+                    
+                } catch (error) {
+                    console.error('Failed to load viewer config:', error);
+                    throw error;
+                }
+            }
+            
+            setupMobileOptimizations() {
+                const config = this.viewerConfig.mobileOptimizations;
+                
+                // Configure Cornerstone for mobile
+                cornerstone.configure({
+                    webGL: config.webGLEnabled,
+                    pixelReplication: config.pixelReplication,
+                    interpolate: config.interpolation === 'linear'
+                });
+                
+                // iOS-specific optimizations
+                if (config.safariOptimizations) {
+                    document.body.style.overflow = 'hidden';
+                    document.body.style.position = 'fixed';
+                    document.body.style.width = '100%';
+                    document.body.style.height = '100%';
+                    
+                    this.element.style.touchAction = config.safariOptimizations.touchAction;
+                    this.element.style.userSelect = 'none';
+                    this.element.style.webkitUserSelect = 'none';
+                }
+            }
+            
+            setupTouchGestures() {
+                // Initialize Hammer.js for advanced touch gestures
+                const hammer = new Hammer(this.element);
+                
+                // Enable pinch and pan
+                hammer.get('pinch').set({ enable: true });
+                hammer.get('pan').set({ direction: Hammer.DIRECTION_ALL });
+                
+                let lastScale = 1;
+                let lastPan = { x: 0, y: 0 };
+                
+                // Pan gesture
+                hammer.on('panstart panmove', (e) => {
+                    const viewport = cornerstone.getViewport(this.element);
+                    
+                    if (e.type === 'panstart') {
+                        lastPan = { x: e.deltaX, y: e.deltaY };
+                    } else {
+                        const deltaX = e.deltaX - lastPan.x;
+                        const deltaY = e.deltaY - lastPan.y;
+                        
+                        viewport.translation.x += deltaX / viewport.scale;
+                        viewport.translation.y += deltaY / viewport.scale;
+                        
+                        cornerstone.setViewport(this.element, viewport);
+                        lastPan = { x: e.deltaX, y: e.deltaY };
+                    }
+                });
+                
+                // Pinch gesture for zoom
+                hammer.on('pinchstart pinchmove', (e) => {
+                    const viewport = cornerstone.getViewport(this.element);
+                    
+                    if (e.type === 'pinchstart') {
+                        lastScale = e.scale;
+                    } else {
+                        const scaleChange = e.scale / lastScale;
+                        viewport.scale *= scaleChange;
+                        viewport.scale = Math.max(0.1, Math.min(10, viewport.scale));
+                        
+                        cornerstone.setViewport(this.element, viewport);
+                        this.updateImageInfo();
+                        lastScale = e.scale;
+                    }
+                });
+                
+                // Double tap to reset
+                hammer.on('doubletap', () => {
+                    this.resetView();
+                });
+                
+                // Two-finger drag for window/level (simplified)
+                let twoFingerStart = null;
+                
+                hammer.on('panstart', (e) => {
+                    if (e.pointers && e.pointers.length === 2) {
+                        twoFingerStart = { x: e.center.x, y: e.center.y };
+                    }
+                });
+                
+                hammer.on('panmove', (e) => {
+                    if (e.pointers && e.pointers.length === 2 && twoFingerStart) {
+                        const viewport = cornerstone.getViewport(this.element);
+                        const deltaX = e.center.x - twoFingerStart.x;
+                        const deltaY = e.center.y - twoFingerStart.y;
+                        
+                        // Adjust window/level
+                        viewport.voi.windowWidth += deltaX * 2;
+                        viewport.voi.windowCenter += deltaY * 2;
+                        
+                        cornerstone.setViewport(this.element, viewport);
+                        this.updateImageInfo();
+                        twoFingerStart = { x: e.center.x, y: e.center.y };
+                    }
+                });
+            }
+            
+            setupControls() {
+                document.getElementById('resetBtn').addEventListener('click', () => {
+                    this.resetView();
+                });
+                
+                document.getElementById('fullscreenBtn').addEventListener('click', () => {
+                    this.toggleFullscreen();
+                });
+                
+                document.getElementById('closeBtn').addEventListener('click', () => {
+                    this.closeViewer();
+                });
+                
+                // Hide gesture hint after 5 seconds
+                setTimeout(() => {
+                    const hint = document.getElementById('gestureHint');
+                    if (hint) {
+                        hint.style.opacity = '0';
+                        setTimeout(() => hint.style.display = 'none', 300);
+                    }
+                }, 5000);
+            }
+            
+            async loadDicomImages() {
+                try {
+                    const assets = this.viewerConfig.assets;
+                    
+                    if (!assets || assets.length === 0) {
+                        throw new Error('No DICOM images found');
+                    }
+                    
+                    // Load first image
+                    const firstAsset = assets[0];
+                    const imageId = `wadouri:${firstAsset.blobUrl}`;
+                    
+                    const image = await cornerstone.loadImage(imageId);
+                    cornerstone.displayImage(this.element, image);
+                    
+                    // Hide loading overlay
+                    document.getElementById('loadingOverlay').style.display = 'none';
+                    
+                    // Show image info
+                    document.getElementById('imageInfo').style.display = 'block';
+                    document.getElementById('totalImages').textContent = assets.length;
+                    
+                    this.updateImageInfo();
+                    
+                } catch (error) {
+                    console.error('Failed to load DICOM images:', error);
+                    this.showError('Failed to load DICOM images');
+                }
+            }
+            
+            updateImageInfo() {
+                const viewport = cornerstone.getViewport(this.element);
+                
+                document.getElementById('currentImage').textContent = this.currentImageIndex + 1;
+                document.getElementById('windowWidth').textContent = Math.round(viewport.voi.windowWidth);
+                document.getElementById('windowLevel').textContent = Math.round(viewport.voi.windowCenter);
+                document.getElementById('zoomLevel').textContent = Math.round(viewport.scale * 100) + '%';
+            }
+            
+            resetView() {
+                cornerstone.reset(this.element);
+                this.updateImageInfo();
+            }
+            
+            toggleFullscreen() {
+                if (!document.fullscreenElement) {
+                    document.documentElement.requestFullscreen();
+                } else {
+                    document.exitFullscreen();
+                }
+            }
+            
+            closeViewer() {
+                if (window.history.length > 1) {
+                    window.history.back();
+                } else {
+                    window.close();
+                }
+            }
+            
+            showError(message) {
+                document.getElementById('loadingOverlay').style.display = 'none';
+                document.getElementById('errorMessage').style.display = 'block';
+                document.getElementById('errorMessage').querySelector('p').textContent = message;
+            }
+            
+            getAuthToken() {
+                // Get auth token from localStorage, sessionStorage, or cookie
+                return localStorage.getItem('authToken') || 
+                       sessionStorage.getItem('authToken') || 
+                       this.getCookie('authToken') || '';
+            }
+            
+            getCookie(name) {
+                const value = `; ${document.cookie}`;
+                const parts = value.split(`; ${name}=`);
+                if (parts.length === 2) return parts.pop().split(';').shift();
+                return null;
+            }
+        }
+        
+        // Initialize viewer when DOM is loaded
+        document.addEventListener('DOMContentLoaded', () => {
+            new MobileDicomViewer();
+        });
+        
+        // Prevent zoom on double tap (iOS Safari)
+        let lastTouchEnd = 0;
+        document.addEventListener('touchend', (event) => {
+            const now = (new Date()).getTime();
+            if (now - lastTouchEnd <= 300) {
+                event.preventDefault();
+            }
+            lastTouchEnd = now;
+        }, false);
+        
+        // Prevent context menu on long press
+        document.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+        });
+    </script>
+</body>
+</html>
