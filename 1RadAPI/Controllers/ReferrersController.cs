@@ -1,6 +1,7 @@
 using _1Rad.Application.Features.Referrers.Queries.GetReferrers;
 using _1Rad.Application.Features.Referrers.Queries.GetReferralIntelligence;
 using _1Rad.Application.Features.Referrers.Queries.GetReferralMatrix;
+using _1Rad.Application.Features.Referrers.Queries.GetReferralCommissions;
 using _1Rad.Application.Features.Referrers.Commands.CreateReferrer;
 using _1Rad.Application.Features.Referrers.Commands.RecordReferralCommission;
 using MediatR;
