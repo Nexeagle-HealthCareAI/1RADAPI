@@ -9,6 +9,7 @@ public record RecordReferralCommissionCommand(
     Guid ReferrerId,
     decimal Amount,
     string Modality,
+    string? ReferenceNumber,
     string? Remarks
 ) : IRequest<Guid>;
 
@@ -45,6 +46,7 @@ public class RecordReferralCommissionCommandHandler : IRequestHandler<RecordRefe
             AccumulatedTotal = currentTotal + request.Amount,
             TransactionDate = DateTime.UtcNow,
             Status = "Pending",
+            ReferenceNumber = request.ReferenceNumber,
             Remarks = request.Remarks,
             HospitalId = hospitalId
         };
