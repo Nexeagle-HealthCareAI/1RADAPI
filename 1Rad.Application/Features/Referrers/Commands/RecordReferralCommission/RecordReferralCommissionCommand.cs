@@ -28,9 +28,11 @@ public class RecordReferralCommissionCommandHandler : IRequestHandler<RecordRefe
             .FirstOrDefaultAsync(r => r.ReferrerId == request.ReferrerId, cancellationToken);
 
         if (referrer == null)
-            throw new Exception("TACTICAL FAILURE: Referrer identity not recognized in global registry.");
+            throw new Exception($"TACTICAL FAILURE: Referrer identity [{request.ReferrerId}] not recognized in global registry for current facility.");
 
         var hospitalId = _context.UserContext.HospitalId;
+        if (hospitalId == Guid.Empty)
+            throw new Exception("FISCAL ERROR: Security context failure. Hospital identity is required for commission logging.");
 
         // Calculate accumulated total for this referrer in this hospital context
         var currentTotal = await _context.ReferralCommissions

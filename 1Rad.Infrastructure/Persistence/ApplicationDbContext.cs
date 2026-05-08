@@ -441,6 +441,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.AccumulatedTotal).HasPrecision(18, 2);
             entity.Property(e => e.Status).IsRequired().HasMaxLength(50).HasDefaultValue("Pending");
             entity.Property(e => e.ReferenceNumber).HasMaxLength(100);
+            entity.Property(e => e.Modality).HasMaxLength(50);
 
             entity.HasOne(e => e.Referrer)
                 .WithMany()
