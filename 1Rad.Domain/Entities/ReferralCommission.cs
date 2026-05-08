@@ -9,6 +9,7 @@ public class ReferralCommission : BaseEntity, IHospitalContext
     // Identity Parameters
     public Guid ReferrerId { get; set; }
     public string ReferrerName { get; set; } = string.Empty;
+    public string Modality { get; set; } = string.Empty;
     
     // Financial Quantum
     public decimal CommissionAmount { get; set; }

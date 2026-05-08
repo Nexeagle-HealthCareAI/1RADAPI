@@ -9,6 +9,7 @@ public record GetFinancialMatrixQuery : IRequest<FinancialMatrixDto>;
 public class FinancialMatrixDto
 {
     public List<MatrixItemDto> Daily { get; set; } = new();
+    public List<MatrixItemDto> Weekly { get; set; } = new();
     public List<MatrixItemDto> Monthly { get; set; } = new();
     public List<MatrixItemDto> Yearly { get; set; } = new();
     public List<ModalityRevenueDto> ModalityBreakdown { get; set; } = new();
@@ -98,6 +99,21 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                         ? Math.Min(100, (int)(g.Sum(x => x.Collected) / g.Sum(x => x.Invoiced) * 100))
                         : 0
                 }).Take(30).ToList();
+            
+            var weekly = invoiceData
+                .GroupBy(i => System.Globalization.ISOWeek.GetWeekOfYear(i.CreatedAt))
+                .OrderByDescending(g => g.Key)
+                .Select(g => new MatrixItemDto
+                {
+                    Label = $"Week {g.Key}",
+                    Invoiced = g.Sum(i => i.TotalAmount),
+                    Collected = g.Sum(i => i.PaidAmount),
+                    Expenses = expenseData.Where(e => System.Globalization.ISOWeek.GetWeekOfYear(e.TransactionDate) == g.Key).Sum(e => e.Amount),
+                    Pending = g.Sum(i => i.TotalAmount - i.PaidAmount),
+                    RealizationRate = g.Sum(i => i.TotalAmount) > 0 
+                        ? Math.Min(100, (int)(g.Sum(i => i.PaidAmount) / g.Sum(i => i.TotalAmount) * 100))
+                        : 0
+                }).Take(8).ToList();
 
             var monthly = invoiceData
                 .GroupBy(i => new { i.CreatedAt.Year, i.CreatedAt.Month })
@@ -152,6 +168,7 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
             return new FinancialMatrixDto
             {
                 Daily = daily,
+                Weekly = weekly,
                 Monthly = monthly,
                 Yearly = yearly,
                 ModalityBreakdown = modalityBreakdown

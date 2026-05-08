@@ -2,6 +2,7 @@ using _1Rad.Application.Features.Referrers.Queries.GetReferrers;
 using _1Rad.Application.Features.Referrers.Queries.GetReferralIntelligence;
 using _1Rad.Application.Features.Referrers.Queries.GetReferralMatrix;
 using _1Rad.Application.Features.Referrers.Commands.CreateReferrer;
+using _1Rad.Application.Features.Referrers.Commands.RecordReferralCommission;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -50,5 +51,12 @@ public class ReferrersController : ControllerBase
     {
         var result = await _mediator.Send(new GetReferralMatrixQuery(period, referenceDate, weekIndex, search));
         return Ok(result);
+    }
+
+    [HttpPost("commissions")]
+    public async Task<IActionResult> RecordCommission([FromBody] RecordReferralCommissionCommand command)
+    {
+        var result = await _mediator.Send(command);
+        return Ok(new { commissionId = result });
     }
 }
