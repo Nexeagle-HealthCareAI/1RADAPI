@@ -18,8 +18,7 @@ namespace _1Rad.Infrastructure.Services
             var connectionString = configuration.GetConnectionString("AzureBlobStorage");
             if (string.IsNullOrEmpty(connectionString))
             {
-                // Tactical: If connection string is missing, we must fail fast with a clear diagnostic
-                throw new InvalidOperationException("AZURE_STORAGE_CONFIG_MISSING: The 'AzureBlobStorage' connection string is not configured in appsettings.json or Azure environment variables.");
+                throw new InvalidOperationException("AZURE_STORAGE_CONFIG_MISSING: The 'AzureBlobStorage' connection string is not configured.");
             }
             _blobServiceClient = new BlobServiceClient(connectionString);
             _containerName = configuration["AzureBlobStorage:ContainerName"] ?? "prescriptions";
@@ -53,6 +52,29 @@ namespace _1Rad.Infrastructure.Services
             var blobClient = containerClient.GetBlobClient(blobName);
 
             await blobClient.DeleteIfExistsAsync();
+        }
+
+        public async Task<Stream> DownloadFileAsync(string fileUrl)
+        {
+            if (string.IsNullOrEmpty(fileUrl)) throw new ArgumentException("URL is required");
+
+            var uri = new Uri(fileUrl);
+            // Extract container name and blob name from the URI
+            // URI format: https://[account].blob.core.windows.net/[container]/[blob]
+            var segments = uri.Segments;
+            if (segments.Length < 3) throw new ArgumentException("Invalid blob URL format");
+
+            var containerName = segments[1].TrimEnd('/');
+            var blobName = string.Join("", segments.Skip(2)); // Skip / and container name
+
+            var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
+            var blobClient = containerClient.GetBlobClient(blobName);
+
+            if (!await blobClient.ExistsAsync())
+                throw new FileNotFoundException("The specified clinical asset was not found in storage.");
+
+            var downloadInfo = await blobClient.DownloadStreamingAsync();
+            return downloadInfo.Value.Content;
         }
     }
 }

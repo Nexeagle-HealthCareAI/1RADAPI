@@ -7,5 +7,6 @@ namespace _1Rad.Application.Interfaces
     {
         Task<string> UploadFileAsync(Stream fileStream, string fileName, string contentType, string? containerName = null);
         Task DeleteFileAsync(string fileUrl, string? containerName = null);
+        Task<Stream> DownloadFileAsync(string fileUrl);
     }
 }

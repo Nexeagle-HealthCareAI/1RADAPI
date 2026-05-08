@@ -254,6 +254,31 @@ namespace _1RadAPI.Controllers
                 return StatusCode(500, new { success = false, error = $"MISSION FINALIZATION FAILURE: {ex.Message}" });
             }
         }
+
+        [HttpGet("proxy-asset")]
+        [Microsoft.AspNetCore.Authorization.AllowAnonymous] // Use AllowAnonymous for public blobs if needed, or keep Authorize for security
+        public async Task<IActionResult> ProxyAsset([FromQuery] string url)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(url)) return BadRequest("URL is required");
+                
+                // Security check: ensure the URL is from 1radstorage
+                if (!url.Contains("1radstorage.blob.core.windows.net"))
+                    return BadRequest("Unauthorized asset origin");
+
+                var stream = await _blobService.DownloadFileAsync(url);
+                var contentType = url.ToLower().EndsWith(".zip") ? "application/zip" : 
+                                  url.ToLower().EndsWith(".pdf") ? "application/pdf" : 
+                                  "application/octet-stream";
+                                  
+                return File(stream, contentType, Path.GetFileName(new Uri(url).LocalPath));
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, $"Proxy failure: {ex.Message}");
+            }
+        }
     }
 
     public class StudyUploadRequest
