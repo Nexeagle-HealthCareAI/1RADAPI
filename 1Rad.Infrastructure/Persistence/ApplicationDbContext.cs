@@ -444,7 +444,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.Modality).HasMaxLength(50);
 
             entity.HasOne(e => e.Referrer)
-                .WithMany()
+                .WithMany(r => r.Commissions)
                 .HasForeignKey(e => e.ReferrerId)
                 .OnDelete(DeleteBehavior.Restrict);
 
