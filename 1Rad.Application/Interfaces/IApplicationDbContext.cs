@@ -25,6 +25,7 @@ public interface IApplicationDbContext
     DbSet<ReportingKeyword> ReportingKeywords { get; }
     DbSet<StudyAsset> StudyAssets { get; }
     DbSet<PrescriptionProtocol> PrescriptionProtocols { get; }
+    DbSet<ReferralCommission> ReferralCommissions { get; }
     IUserContext UserContext { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken);

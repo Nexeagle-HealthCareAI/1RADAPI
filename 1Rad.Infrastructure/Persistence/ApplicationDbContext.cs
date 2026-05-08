@@ -40,6 +40,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<DiagnosticReportField> DiagnosticReportFields => Set<DiagnosticReportField>();
     public DbSet<StudyAsset> StudyAssets => Set<StudyAsset>();
     public DbSet<PrescriptionProtocol> PrescriptionProtocols => Set<PrescriptionProtocol>();
+    public DbSet<ReferralCommission> ReferralCommissions => Set<ReferralCommission>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -424,6 +425,27 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.CostCenter).HasMaxLength(100);
             entity.Property(e => e.Status).IsRequired().HasMaxLength(50).HasDefaultValue("Paid");
             entity.Property(e => e.TransactionDate).IsRequired();
+
+            entity.HasOne(e => e.Hospital)
+                .WithMany()
+                .HasForeignKey(e => e.HospitalId);
+        });
+
+        // ReferralCommission Configuration
+        modelBuilder.Entity<ReferralCommission>(entity =>
+        {
+            entity.ToTable("ReferralCommissions", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.ReferrerName).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.CommissionAmount).HasPrecision(18, 2);
+            entity.Property(e => e.AccumulatedTotal).HasPrecision(18, 2);
+            entity.Property(e => e.Status).IsRequired().HasMaxLength(50).HasDefaultValue("Pending");
+            entity.Property(e => e.ReferenceNumber).HasMaxLength(100);
+
+            entity.HasOne(e => e.Referrer)
+                .WithMany()
+                .HasForeignKey(e => e.ReferrerId)
+                .OnDelete(DeleteBehavior.Restrict);
 
             entity.HasOne(e => e.Hospital)
                 .WithMany()
