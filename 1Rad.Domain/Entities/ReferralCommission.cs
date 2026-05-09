@@ -17,7 +17,7 @@ public class ReferralCommission : BaseEntity, IHospitalContext
     
     // Transactional Metadata
     public DateTime TransactionDate { get; set; } = DateTime.UtcNow;
-    public string Status { get; set; } = "Pending"; // Pending, Paid, Cancelled
+    public string Status { get; set; } = "UNPAID"; // UNPAID, PAID, Cancelled
     public DateTime? PaymentDate { get; set; }
     public string? ReferenceNumber { get; set; }
     public string? Remarks { get; set; }

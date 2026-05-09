@@ -10,7 +10,8 @@ public record RecordReferralCommissionCommand(
     decimal Amount,
     string Modality,
     string? ReferenceNumber,
-    string? Remarks
+    string? Remarks,
+    string? Status = "UNPAID"
 ) : IRequest<Guid>;
 
 public class RecordReferralCommissionCommandHandler : IRequestHandler<RecordReferralCommissionCommand, Guid>
@@ -47,7 +48,7 @@ public class RecordReferralCommissionCommandHandler : IRequestHandler<RecordRefe
             CommissionAmount = request.Amount,
             AccumulatedTotal = currentTotal + request.Amount,
             TransactionDate = DateTime.UtcNow,
-            Status = "Pending",
+            Status = request.Status ?? "UNPAID",
             ReferenceNumber = request.ReferenceNumber,
             Remarks = request.Remarks,
             HospitalId = hospitalId
