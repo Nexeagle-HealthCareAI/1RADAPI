@@ -4,6 +4,7 @@ using _1Rad.Application.Features.Referrers.Queries.GetReferralMatrix;
 using _1Rad.Application.Features.Referrers.Queries.GetReferralCommissions;
 using _1Rad.Application.Features.Referrers.Commands.CreateReferrer;
 using _1Rad.Application.Features.Referrers.Commands.RecordReferralCommission;
+using _1Rad.Application.Features.Referrers.Commands.UpdateReferralCommission;
 using _1Rad.Application.Features.Referrers.Commands.UpdateReferralCommissionStatus;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
@@ -66,6 +67,14 @@ public class ReferrersController : ControllerBase
     public async Task<IActionResult> GetCommissions([FromQuery] DateTime? startDate, [FromQuery] DateTime? endDate, [FromQuery] Guid? referrerId)
     {
         var result = await _mediator.Send(new GetReferralCommissionsQuery(startDate, endDate, referrerId));
+        return Ok(result);
+    }
+
+    [HttpPut("commissions/{id}")]
+    public async Task<IActionResult> Update(Guid id, [FromBody] UpdateReferralCommissionCommand command)
+    {
+        if (id != command.CommissionId) return BadRequest("Identity mismatch.");
+        var result = await _mediator.Send(command);
         return Ok(result);
     }
 
