@@ -35,6 +35,16 @@ public class RecordReferralCommissionCommandHandler : IRequestHandler<RecordRefe
         if (hospitalId == Guid.Empty)
             throw new Exception("FISCAL ERROR: Security context failure. Hospital identity is required for commission logging.");
 
+        // Prevent duplicate payouts for the same invoice/reference
+        if (!string.IsNullOrEmpty(request.ReferenceNumber))
+        {
+            var exists = await _context.ReferralCommissions
+                .AnyAsync(c => c.ReferenceNumber == request.ReferenceNumber && c.HospitalId == hospitalId, cancellationToken);
+            
+            if (exists)
+                throw new Exception($"FISCAL COLLISION: A referral cut for Mission [{request.ReferenceNumber}] has already been committed to the ledger.");
+        }
+
         // Calculate accumulated total for this referrer in this hospital context
         var currentTotal = await _context.ReferralCommissions
             .Where(c => c.ReferrerId == request.ReferrerId && c.HospitalId == hospitalId)
