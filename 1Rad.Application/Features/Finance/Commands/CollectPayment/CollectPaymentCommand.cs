@@ -60,7 +60,11 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
             // Apply Discount if provided (Administrative Rebate during payment)
             if (request.DiscountAmount.HasValue)
             {
-                var gross = invoice.GrossAmount > 0 ? invoice.GrossAmount : invoice.TotalAmount;
+                // Always recalculate Gross from Items to ensure absolute accuracy
+                var gross = invoice.Items.Any() 
+                    ? invoice.Items.Sum(x => x.Amount * x.Quantity)
+                    : (invoice.GrossAmount > 0 ? invoice.GrossAmount : invoice.TotalAmount);
+                
                 invoice.GrossAmount = gross;
                 invoice.DiscountAmount = request.DiscountAmount.Value;
                 invoice.TotalAmount = gross - invoice.DiscountAmount;
