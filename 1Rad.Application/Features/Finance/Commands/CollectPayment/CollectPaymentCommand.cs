@@ -9,6 +9,7 @@ public record CollectPaymentCommand : IRequest<bool>
 {
     public Guid InvoiceId { get; init; }
     public decimal Amount { get; init; }
+    public decimal? DiscountAmount { get; init; }
     public string PaymentMethod { get; init; } = "CASH";
 }
 
@@ -56,9 +57,18 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
                 throw new InvalidOperationException($"Invoice '{invoice.InvoiceId}' is cancelled. Payment cannot be collected.");
             }
 
+            // Apply Discount if provided (Administrative Rebate during payment)
+            if (request.DiscountAmount.HasValue)
+            {
+                var gross = invoice.GrossAmount > 0 ? invoice.GrossAmount : invoice.TotalAmount;
+                invoice.GrossAmount = gross;
+                invoice.DiscountAmount = request.DiscountAmount.Value;
+                invoice.TotalAmount = gross - invoice.DiscountAmount;
+            }
+
             // Check if payment exceeds remaining balance
             var remainingBalance = invoice.TotalAmount - invoice.PaidAmount;
-            if (request.Amount > remainingBalance)
+            if (request.Amount > remainingBalance + 0.01m) // Allow small epsilon for floating point
             {
                 throw new InvalidOperationException($"Payment amount (₹{request.Amount:N2}) exceeds remaining balance (₹{remainingBalance:N2}).");
             }
