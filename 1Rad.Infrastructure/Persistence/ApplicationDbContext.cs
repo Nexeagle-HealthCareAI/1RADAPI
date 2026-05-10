@@ -400,6 +400,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.FontColor).HasMaxLength(50);
             entity.Property(e => e.FontFamily).HasMaxLength(100);
             entity.Property(e => e.LetterheadBlobUrl).HasMaxLength(500);
+            entity.Property(e => e.OverflowBackgroundMode).HasMaxLength(50).HasDefaultValue("REUSE");
 
             entity.HasOne(e => e.Doctor)
                 .WithMany()

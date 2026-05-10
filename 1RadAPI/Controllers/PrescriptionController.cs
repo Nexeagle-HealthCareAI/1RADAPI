@@ -103,6 +103,7 @@ namespace _1RadAPI.Controllers
                         FontColor = request.FontColor,
                         FontFamily = request.FontFamily,
                         LetterheadBlobUrl = letterheadUrl,
+                        OverflowBackgroundMode = request.OverflowBackgroundMode ?? "REUSE",
                         CreatedAt = DateTime.UtcNow,
                         UpdatedAt = DateTime.UtcNow
                     };
@@ -118,6 +119,7 @@ namespace _1RadAPI.Controllers
                     protocol.FontColor = request.FontColor;
                     protocol.FontFamily = request.FontFamily;
                     protocol.LetterheadBlobUrl = letterheadUrl;
+                    protocol.OverflowBackgroundMode = request.OverflowBackgroundMode ?? "REUSE";
                     protocol.UpdatedAt = DateTime.UtcNow;
                 }
 
@@ -142,6 +144,7 @@ namespace _1RadAPI.Controllers
         public int FontSize { get; set; }
         public string? FontColor { get; set; }
         public string? FontFamily { get; set; }
+        public string? OverflowBackgroundMode { get; set; } // 'REUSE' or 'BLANK'
         public IFormFile? LetterheadFile { get; set; } = null;
     }
 }

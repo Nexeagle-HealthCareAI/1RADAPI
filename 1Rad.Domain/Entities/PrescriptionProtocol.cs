@@ -15,6 +15,7 @@ namespace _1Rad.Domain.Entities
         public string FontColor { get; set; }
         public string FontFamily { get; set; }
         public string? LetterheadBlobUrl { get; set; }
+        public string? OverflowBackgroundMode { get; set; } // 'REUSE' or 'BLANK'
         public DateTime CreatedAt { get; set; }
         public DateTime UpdatedAt { get; set; }
 
