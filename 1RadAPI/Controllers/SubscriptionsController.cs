@@ -7,7 +7,7 @@ namespace _1RadAPI.Controllers;
 
 [Authorize]
 [ApiController]
-[Route("api/[controller]")]
+[Route("api/v1/[controller]")]
 public class SubscriptionsController : ControllerBase
 {
     private readonly IMediator _mediator;
