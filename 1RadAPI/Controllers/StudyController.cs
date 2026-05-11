@@ -268,12 +268,23 @@ namespace _1RadAPI.Controllers
                 if (!url.Contains("1radstorage.blob.core.windows.net"))
                     return BadRequest("Unauthorized asset origin");
 
-                var stream = await _blobService.DownloadFileAsync(url);
-                var contentType = url.ToLower().EndsWith(".zip") ? "application/zip" : 
-                                  url.ToLower().EndsWith(".pdf") ? "application/pdf" : 
+                // Use Uri to strip query parameters for extension checking
+                var cleanPath = new Uri(url).AbsolutePath;
+                var contentType = cleanPath.ToLower().EndsWith(".zip") ? "application/zip" : 
+                                  cleanPath.ToLower().EndsWith(".pdf") ? "application/pdf" : 
+                                  cleanPath.ToLower().EndsWith(".png") ? "image/png" :
+                                  cleanPath.ToLower().EndsWith(".jpg") || cleanPath.ToLower().EndsWith(".jpeg") ? "image/jpeg" :
                                   "application/octet-stream";
-                                  
-                return File(stream, contentType, Path.GetFileName(new Uri(url).LocalPath));
+
+                if (Request.Method == "HEAD")
+                {
+                    // For HEAD requests, we don't want to download the whole blob
+                    // We just want to confirm it exists and get its metadata if possible
+                    return Ok(); 
+                }
+
+                var stream = await _blobService.DownloadFileAsync(url);
+                return File(stream, contentType, Path.GetFileName(cleanPath), true); // enableRangeProcessing: true for large files
             }
             catch (Exception ex)
             {

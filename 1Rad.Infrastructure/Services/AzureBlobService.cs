@@ -65,7 +65,7 @@ namespace _1Rad.Infrastructure.Services
             if (segments.Length < 3) throw new ArgumentException("Invalid blob URL format");
 
             var containerName = segments[1].TrimEnd('/');
-            var blobName = string.Join("", segments.Skip(2)); // Skip / and container name
+            var blobName = Uri.UnescapeDataString(string.Join("", segments.Skip(2))); 
 
             var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
             var blobClient = containerClient.GetBlobClient(blobName);
