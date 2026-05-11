@@ -19,4 +19,5 @@ public class Hospital : BaseEntity
     // Navigation properties
     public HospitalGroup? Group { get; set; }
     public ICollection<UserHospitalMapping> UserMappings { get; set; } = new List<UserHospitalMapping>();
+    public ICollection<HospitalSubscription> Subscriptions { get; set; } = new List<HospitalSubscription>();
 }

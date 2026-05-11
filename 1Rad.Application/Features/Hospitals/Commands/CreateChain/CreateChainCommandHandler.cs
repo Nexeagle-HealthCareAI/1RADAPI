@@ -104,6 +104,18 @@ public class CreateChainCommandHandler : IRequestHandler<CreateChainCommand, Cre
             mapping.Roles.Add(adminRole);
             _context.UserHospitalMappings.Add(mapping);
 
+            // 5. Add 15-day Trial Subscription
+            var trialSubscription = new HospitalSubscription
+            {
+                HospitalId = hospital.HospitalId,
+                StartDate = DateTime.UtcNow,
+                EndDate = DateTime.UtcNow.AddDays(15),
+                IsTrial = true,
+                Status = "Active",
+                CreatedAt = DateTime.UtcNow
+            };
+            _context.HospitalSubscriptions.Add(trialSubscription);
+
             await _context.SaveChangesAsync(cancellationToken);
 
             return new CreateChainResponse { Success = true, HospitalId = hospital.HospitalId };

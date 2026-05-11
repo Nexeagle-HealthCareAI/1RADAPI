@@ -41,6 +41,8 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<StudyAsset> StudyAssets => Set<StudyAsset>();
     public DbSet<PrescriptionProtocol> PrescriptionProtocols => Set<PrescriptionProtocol>();
     public DbSet<ReferralCommission> ReferralCommissions => Set<ReferralCommission>();
+    public DbSet<SubscriptionPlan> SubscriptionPlans => Set<SubscriptionPlan>();
+    public DbSet<HospitalSubscription> HospitalSubscriptions => Set<HospitalSubscription>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -455,6 +457,56 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
                 .WithMany()
                 .HasForeignKey(e => e.HospitalId);
         });
+
+        // SubscriptionPlan Configuration
+        modelBuilder.Entity<SubscriptionPlan>(entity =>
+        {
+            entity.ToTable("SubscriptionPlans", "dbo");
+            entity.HasKey(e => e.PlanId);
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.Price).HasPrecision(18, 2);
+            entity.Property(e => e.DiscountPercentage).HasPrecision(18, 2);
+        });
+
+        // HospitalSubscription Configuration
+        modelBuilder.Entity<HospitalSubscription>(entity =>
+        {
+            entity.ToTable("HospitalSubscriptions", "dbo");
+            entity.HasKey(e => e.SubscriptionId);
+            entity.Property(e => e.Status).IsRequired().HasMaxLength(50);
+
+            entity.HasOne(e => e.Hospital)
+                .WithMany(h => h.Subscriptions)
+                .HasForeignKey(e => e.HospitalId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Plan)
+                .WithMany()
+                .HasForeignKey(e => e.PlanId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        // Seed Subscription Plans
+        modelBuilder.Entity<SubscriptionPlan>().HasData(
+            new SubscriptionPlan 
+            { 
+                PlanId = Guid.Parse("A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D"), 
+                Name = "Monthly", 
+                Price = 4999, 
+                DurationInDays = 30, 
+                DiscountPercentage = 0,
+                PerAdditionalDoctorPrice = 1000
+            },
+            new SubscriptionPlan 
+            { 
+                PlanId = Guid.Parse("B2C3D4E5-F6A7-4B6C-9D0E-1F2A3B4C5D6E"), 
+                Name = "Yearly", 
+                Price = 59988, 
+                DurationInDays = 365, 
+                DiscountPercentage = 10,
+                PerAdditionalDoctorPrice = 10800 // 1000 * 12 * 0.9
+            }
+        );
 
 
 
