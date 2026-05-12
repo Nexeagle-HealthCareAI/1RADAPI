@@ -154,6 +154,15 @@ public class FinanceController : ControllerBase
         });
         return Ok(result);
     }
+
+    [HttpPut("expenses/{id}/status")]
+    public async Task<IActionResult> UpdateExpenseStatus(Guid id, [FromBody] UpdateExpenseStatusRequest request)
+    {
+        var result = await _mediator.Send(new _1Rad.Application.Features.Finance.Commands.UpdateExpenseStatus.UpdateExpenseStatusCommand(id, request.Status));
+        return Ok(new { success = result });
+    }
 }
 
+public record UpdateExpenseStatusRequest(string Status);
 public record ApplyDiscountRequest(decimal DiscountAmount);
+
