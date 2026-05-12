@@ -77,6 +77,66 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
 
         }
 
+        // --- REFERRAL COMMISSION SYNC ---
+        var commission = await _context.ReferralCommissions
+            .FirstOrDefaultAsync(c => c.AppointmentId == request.AppointmentId, cancellationToken);
+
+        decimal finalCut = request.ReferralCutValue ?? (invoice?.ReferralCutValue ?? 0);
+
+        if (commission != null)
+        {
+            if (finalCut <= 0 || string.IsNullOrEmpty(request.ReferredBy))
+            {
+                // If cut removed or referrer removed, delete commission? 
+                // Or just set to 0. Let's keep it but set to 0 to preserve history if needed, 
+                // but usually user expects it to disappear from analytics if it's 0.
+                commission.CommissionAmount = 0;
+            }
+            else
+            {
+                commission.CommissionAmount = finalCut;
+                commission.Modality = request.Modality;
+                
+                if (commission.ReferrerName != request.ReferredBy)
+                {
+                    var newReferrer = await _context.Referrers
+                        .FirstOrDefaultAsync(r => r.Name == request.ReferredBy && r.HospitalId == appointment.HospitalId, cancellationToken);
+                    
+                    if (newReferrer != null)
+                    {
+                        commission.ReferrerId = newReferrer.ReferrerId;
+                        commission.ReferrerName = newReferrer.Name ?? request.ReferredBy;
+                    }
+                    else
+                    {
+                        commission.ReferrerName = request.ReferredBy;
+                    }
+                }
+            }
+        }
+        else if (finalCut > 0 && !string.IsNullOrEmpty(request.ReferredBy))
+        {
+            var referrer = await _context.Referrers
+                .FirstOrDefaultAsync(r => r.Name == request.ReferredBy && r.HospitalId == appointment.HospitalId, cancellationToken);
+
+            if (referrer != null)
+            {
+                var newCommission = new ReferralCommission
+                {
+                    ReferrerId = referrer.ReferrerId,
+                    ReferrerName = referrer.Name ?? request.ReferredBy,
+                    Modality = request.Modality,
+                    CommissionAmount = finalCut,
+                    Status = "UNPAID",
+                    TransactionDate = DateTime.UtcNow,
+                    HospitalId = appointment.HospitalId,
+                    AppointmentId = appointment.AppointmentId
+                };
+                _context.ReferralCommissions.Add(newCommission);
+            }
+        }
+
+
         await _context.SaveChangesAsync(cancellationToken);
         return true;
     }

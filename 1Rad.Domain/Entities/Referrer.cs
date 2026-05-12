@@ -9,6 +9,8 @@ public class Referrer : BaseEntity, IHospitalContext
     public string? Contact { get; set; } = string.Empty;
     public string? Address { get; set; } = string.Empty;
     public Guid HospitalId { get; set; }
+
+
     
     // Navigation
     public Hospital Hospital { get; set; } = null!;

@@ -90,6 +90,32 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
             _context.Invoices.Add(invoice);
         }
 
+        // --- REFERRAL COMMISSION SYNC ---
+        if (!string.IsNullOrEmpty(request.ReferredBy) && (request.ReferralCutValue ?? 0) > 0)
+        {
+            var referrer = await _context.Referrers
+                .FirstOrDefaultAsync(r => r.Name == request.ReferredBy && r.HospitalId == appointment.HospitalId, cancellationToken);
+
+            if (referrer != null)
+            {
+                var commission = new ReferralCommission
+                {
+                    ReferrerId = referrer.ReferrerId,
+                    ReferrerName = referrer.Name ?? request.ReferredBy,
+                    Modality = request.Modality,
+                    CommissionAmount = request.ReferralCutValue ?? 0,
+                    AccumulatedTotal = 0, // This could be used for running totals if needed
+                    Status = "UNPAID",
+                    TransactionDate = DateTime.UtcNow,
+                    HospitalId = appointment.HospitalId,
+                    AppointmentId = appointment.AppointmentId
+                };
+
+                _context.ReferralCommissions.Add(commission);
+            }
+        }
+
+
         await _context.SaveChangesAsync(cancellationToken);
 
         return appointment.AppointmentId;
