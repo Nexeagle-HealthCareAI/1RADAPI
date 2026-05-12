@@ -22,7 +22,6 @@ public class Invoice : BaseEntity, IHospitalContext
     public DateTime? PaidAt { get; set; }
     
     public decimal ReferralCutValue { get; set; } = 0;
-    public string ReferralCutType { get; set; } = "PERCENTAGE"; // PERCENTAGE, FIXED
 
     
     public Guid HospitalId { get; set; }

@@ -16,9 +16,9 @@ public record CreateAppointmentCommand(
     string ReferredContact,
     string Notes,
     decimal Amount = 0,
-    string? ReferralCutType = null,
     decimal? ReferralCutValue = null
 ) : IRequest<Guid>;
+
 
 public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointmentCommand, Guid>
 {
@@ -75,9 +75,9 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
                 TotalAmount = request.Amount,
                 PaidAmount = 0,
                 Status = "PENDING",
-                ReferralCutType = request.ReferralCutType ?? "PERCENTAGE",
                 ReferralCutValue = request.ReferralCutValue ?? 0,
                 CreatedAt = DateTime.UtcNow
+
             };
 
             invoice.Items.Add(new InvoiceItem

@@ -76,8 +76,8 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
                     x.Appointment.TechnicianId,
                     x.Appointment.ScannedAt,
                     x.Invoice != null ? x.Invoice.TotalAmount : 0,
-                    x.Invoice != null ? x.Invoice.ReferralCutType ?? "PERCENTAGE" : "PERCENTAGE",
                     x.Invoice != null ? x.Invoice.ReferralCutValue : 0
+
                 ))
                 .ToListAsync(cancellationToken);
 

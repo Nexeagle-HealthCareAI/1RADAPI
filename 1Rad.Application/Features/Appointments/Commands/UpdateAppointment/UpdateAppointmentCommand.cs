@@ -16,9 +16,9 @@ public record UpdateAppointmentCommand(
     string? Mobile = null,
     string? PatientAge = null,
     decimal? Amount = null,
-    string? ReferralCutType = null,
     decimal? ReferralCutValue = null
 ) : IRequest<bool>;
+
 
 public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointmentCommand, bool>
 {
@@ -73,8 +73,8 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             }
 
 
-            if (!string.IsNullOrEmpty(request.ReferralCutType)) invoice.ReferralCutType = request.ReferralCutType;
             if (request.ReferralCutValue.HasValue) invoice.ReferralCutValue = request.ReferralCutValue.Value;
+
         }
 
         await _context.SaveChangesAsync(cancellationToken);

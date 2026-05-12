@@ -55,8 +55,8 @@ public class GetAppointmentByIdQueryHandler : IRequestHandler<GetAppointmentById
                 x.Appointment.TechnicianId,
                 x.Appointment.ScannedAt,
                 x.Invoice != null ? x.Invoice.TotalAmount : 0,
-                x.Invoice != null ? x.Invoice.ReferralCutType ?? "PERCENTAGE" : "PERCENTAGE",
                 x.Invoice != null ? x.Invoice.ReferralCutValue : 0
+
             ))
             .FirstOrDefaultAsync(cancellationToken);
 
