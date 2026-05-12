@@ -32,5 +32,6 @@ public record ReferredPatientDto(
     Guid? AppointmentId = null,
     decimal CommissionAmount = 0,
     string CommissionStatus = "Unpaid",
-    decimal TotalAmount = 0
+    decimal TotalAmount = 0,
+    string? ReferrerName = null
 );

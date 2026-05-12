@@ -97,7 +97,8 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
                     m.Appointment.AppointmentId,
                     m.Commissions.Sum(c => c.CommissionAmount),
                     m.Commissions.Any(c => c.Status.Equals("UNPAID", StringComparison.OrdinalIgnoreCase)) ? "Unpaid" : "Paid",
-                    m.Revenue
+                    m.Revenue,
+                    m.ReferrerName
                 )).ToList();
 
                 var totalComm = missionsList.Sum(p => p.CommissionAmount);
