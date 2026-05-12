@@ -11,8 +11,10 @@ public record RecordReferralCommissionCommand(
     string Modality,
     string? ReferenceNumber,
     string? Remarks,
+    string? PatientName = null,
     string? Status = "UNPAID"
 ) : IRequest<Guid>;
+
 
 public class RecordReferralCommissionCommandHandler : IRequestHandler<RecordReferralCommissionCommand, Guid>
 {
@@ -48,6 +50,7 @@ public class RecordReferralCommissionCommandHandler : IRequestHandler<RecordRefe
             // Update Existing
             commission.CommissionAmount = request.Amount;
             commission.Modality = request.Modality;
+            commission.PatientName = request.PatientName ?? commission.PatientName;
             commission.Remarks = (commission.Remarks ?? "") + $" [Updated: ₹{request.Amount}]";
             commission.Status = request.Status ?? commission.Status;
             commission.TransactionDate = DateTime.UtcNow;
@@ -64,12 +67,13 @@ public class RecordReferralCommissionCommandHandler : IRequestHandler<RecordRefe
             var currentTotal = await _context.ReferralCommissions
                 .Where(c => c.ReferrerId == request.ReferrerId && c.HospitalId == hospitalId)
                 .SumAsync(c => (decimal?)c.CommissionAmount, cancellationToken) ?? 0;
-
+ 
             commission = new ReferralCommission
             {
                 ReferrerId = request.ReferrerId,
                 ReferrerName = referrer.Name ?? "Unknown",
                 Modality = request.Modality,
+                PatientName = request.PatientName ?? "N/A",
                 CommissionAmount = request.Amount,
                 AccumulatedTotal = currentTotal + request.Amount,
                 TransactionDate = DateTime.UtcNow,
@@ -80,6 +84,7 @@ public class RecordReferralCommissionCommandHandler : IRequestHandler<RecordRefe
             };
             _context.ReferralCommissions.Add(commission);
         }
+
 
         await _context.SaveChangesAsync(cancellationToken);
 

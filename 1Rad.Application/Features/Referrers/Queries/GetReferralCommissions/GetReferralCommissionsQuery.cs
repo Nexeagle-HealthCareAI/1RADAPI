@@ -20,8 +20,10 @@ public record ReferralCommissionDto(
     DateTime TransactionDate,
     string Status,
     string? ReferenceNumber,
-    string? Remarks
+    string? Remarks,
+    string PatientName
 );
+
 
 public class GetReferralCommissionsQueryHandler : IRequestHandler<GetReferralCommissionsQuery, List<ReferralCommissionDto>>
 {
@@ -59,8 +61,10 @@ public class GetReferralCommissionsQueryHandler : IRequestHandler<GetReferralCom
                 c.TransactionDate,
                 c.Status,
                 c.ReferenceNumber,
-                c.Remarks
+                c.Remarks,
+                c.PatientName
             ))
+
             .ToListAsync(cancellationToken);
     }
 }
