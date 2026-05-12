@@ -136,7 +136,15 @@ public class FinanceController : ControllerBase
         return Ok();
     }
 
+    [HttpPost("adjust")]
+    public async Task<IActionResult> ApplyExtraDiscount([FromBody] ApplyExtraDiscountCommand command)
+    {
+        var result = await _mediator.Send(command);
+        return Ok(new { success = result });
+    }
+
     [HttpPost("invoices/{id}/discount")]
+
     public async Task<IActionResult> ApplyDiscount(Guid id, [FromBody] ApplyDiscountRequest request)
     {
         var result = await _mediator.Send(new _1Rad.Application.Features.Finance.Commands.ApplyInvoiceDiscount.ApplyInvoiceDiscountCommand 
