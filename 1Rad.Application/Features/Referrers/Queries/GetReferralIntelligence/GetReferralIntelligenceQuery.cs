@@ -51,7 +51,7 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
             appointmentsQuery = appointmentsQuery.Where(a => a.DateTime <= endOfDay);
         }
 
-        // 4. Materialize Tactical Mission Data with Commission Context
+        // 4. Materialize Tactical Mission Data with Commission & Revenue Context
         var missionData = await appointmentsQuery
             .Select(a => new
             {
@@ -64,6 +64,10 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
                 Commission = _context.ReferralCommissions
                     .Where(c => c.AppointmentId == a.AppointmentId)
                     .Select(c => new { c.CommissionAmount, c.Status })
+                    .FirstOrDefault(),
+                Revenue = _context.Invoices
+                    .Where(i => i.AppointmentId == a.AppointmentId)
+                    .Select(i => i.TotalAmount)
                     .FirstOrDefault()
             })
             .ToListAsync(cancellationToken);
@@ -87,11 +91,13 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
                     m.Appointment.Status,
                     m.Appointment.AppointmentId,
                     m.Commission?.CommissionAmount ?? 0,
-                    m.Commission?.Status ?? "Unpaid"
+                    m.Commission?.Status ?? "Unpaid",
+                    m.Revenue
                 )).ToList();
 
                 var totalComm = missionsList.Sum(p => p.CommissionAmount);
                 var paidComm = missionsList.Where(p => p.CommissionStatus.Equals("Paid", StringComparison.OrdinalIgnoreCase)).Sum(p => p.CommissionAmount);
+                var totalRev = missionsList.Sum(p => p.TotalAmount);
 
                 return new ReferrerIntelligenceDto(
                     g.Key,
@@ -102,7 +108,8 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
                     missionsList,
                     totalComm,
                     paidComm,
-                    totalComm - paidComm
+                    totalComm - paidComm,
+                    totalRev
                 );
             })
             .OrderByDescending(r => r.TotalPatients)
