@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using _1Rad.Domain.Common;
 
 namespace _1Rad.Domain.Entities;
@@ -9,6 +10,8 @@ public class Invoice : BaseEntity, IHospitalContext
     
     public Guid? AppointmentId { get; set; }
     public Guid PatientId { get; set; }
+    
+    [NotMapped]
     public string PatientName { get; set; } = string.Empty; // Denormalized for financial records
     
     public decimal GrossAmount { get; set; }

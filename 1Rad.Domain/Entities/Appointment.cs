@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using _1Rad.Domain.Common;
 
 namespace _1Rad.Domain.Entities;
@@ -7,7 +8,10 @@ public class Appointment : BaseEntity, IHospitalContext
     public Guid AppointmentId { get; set; } = Guid.NewGuid();
     public string? DisplayId { get; set; } // e.g., APP-101
     public Guid PatientId { get; set; }
+    
+    [NotMapped]
     public string? PatientName { get; set; } // Denormalized for quick tactical display
+    
     public string? Mobile { get; set; }
     
     public string? Service { get; set; }
