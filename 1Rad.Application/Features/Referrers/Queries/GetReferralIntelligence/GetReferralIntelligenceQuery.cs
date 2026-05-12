@@ -26,87 +26,80 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
 
     public async Task<List<ReferrerIntelligenceDto>> Handle(GetReferralIntelligenceQuery request, CancellationToken cancellationToken)
     {
-        var patientsQuery = _context.Patients
+        // 1. Initialize Appointment-Centric Query (Every appointment is a 'Mission')
+        var appointmentsQuery = _context.Appointments
             .AsNoTracking()
-            .Include(p => p.Referrer)
+            .Include(a => a.Patient)
+            .Include(a => a.Patient.Referrer)
+            .Where(a => a.Patient.ReferrerId != null) // Focus on referred cases
             .AsQueryable();
 
-        // Filter by Specific Referrer if requested
+        // 2. Apply Institutional Routing Filters
         if (request.ReferrerId.HasValue)
         {
-            patientsQuery = patientsQuery.Where(p => p.ReferrerId == request.ReferrerId.Value);
-        }
-        else
-        {
-            // Only include patients that HAVE a referrer for this specific intelligence query
-            patientsQuery = patientsQuery.Where(p => p.ReferrerId != null);
+            appointmentsQuery = appointmentsQuery.Where(a => a.Patient.ReferrerId == request.ReferrerId.Value);
         }
 
-        // Materialize and Group
-        // We include Appointments to get modality details for each patient
-        var patientsWithAppointments = await patientsQuery
-            .Select(p => new
+        // 3. Precise Temporal Filtering (Applied before materialization for integrity)
+        if (request.StartDate.HasValue)
+        {
+            appointmentsQuery = appointmentsQuery.Where(a => a.DateTime >= request.StartDate.Value);
+        }
+        if (request.EndDate.HasValue)
+        {
+            var endOfDay = request.EndDate.Value.Date.AddDays(1).AddTicks(-1);
+            appointmentsQuery = appointmentsQuery.Where(a => a.DateTime <= endOfDay);
+        }
+
+        // 4. Materialize Tactical Mission Data with Commission Context
+        var missionData = await appointmentsQuery
+            .Select(a => new
             {
-                p.ReferrerId,
-                ReferrerName = p.Referrer != null ? p.Referrer.Name : "Direct",
-                ReferrerContact = p.Referrer != null ? p.Referrer.Contact : "N/A",
-                ReferrerAddress = p.Referrer != null ? p.Referrer.Address : "N/A",
-                Patient = p,
-                LatestAppointment = _context.Appointments
-                    .Where(a => a.PatientId == p.PatientId)
-                    .OrderByDescending(a => a.DateTime)
-                    .Select(a => new { a.AppointmentId, a.Modality, a.Service, a.Status, a.DateTime })
-                    .FirstOrDefault(),
+                ReferrerId = a.Patient.ReferrerId ?? Guid.Empty,
+                ReferrerName = a.Patient.Referrer.Name ?? "Anonymous Source",
+                ReferrerContact = a.Patient.Referrer.Contact ?? "N/A",
+                ReferrerAddress = a.Patient.Referrer.Address ?? "N/A",
+                Appointment = a,
+                Patient = a.Patient,
                 Commission = _context.ReferralCommissions
-                    .Where(c => _context.Appointments.Where(a => a.PatientId == p.PatientId).Select(a => (Guid?)a.AppointmentId).Contains(c.AppointmentId))
-                    .OrderByDescending(c => c.CreatedAt)
+                    .Where(c => c.AppointmentId == a.AppointmentId)
                     .Select(c => new { c.CommissionAmount, c.Status })
                     .FirstOrDefault()
             })
             .ToListAsync(cancellationToken);
 
-        // Apply temporal filters on appointments if provided
-        if (request.StartDate.HasValue || request.EndDate.HasValue)
-        {
-            patientsWithAppointments = patientsWithAppointments
-                .Where(x => x.LatestAppointment != null &&
-                           (!request.StartDate.HasValue || x.LatestAppointment.DateTime >= request.StartDate.Value) &&
-                           (!request.EndDate.HasValue || x.LatestAppointment.DateTime <= request.EndDate.Value.Date.AddDays(1).AddTicks(-1)))
-                .ToList();
-        }
-
-        // Group by Referrer
-        var result = patientsWithAppointments
-            .GroupBy(x => x.ReferrerId)
+        // 5. Aggregate Intelligence by Referrer Node
+        var result = missionData
+            .GroupBy(m => m.ReferrerId)
             .Select(g => {
-                var patientsList = g.Select(x => new ReferredPatientDto(
-                    x.Patient.PatientId,
-                    x.Patient.PatientIdentifier,
-                    x.Patient.FullName,
-                    x.Patient.Mobile,
-                    x.Patient.Address,
-                    x.Patient.Age,
-                    x.Patient.Gender,
-                    x.LatestAppointment?.Modality ?? "RECON",
-                    x.LatestAppointment?.Service ?? "N/A",
-                    x.Patient.SourceOfInfo ?? "DIRECT",
-                    x.LatestAppointment?.DateTime.ToString("yyyy-MM-dd") ?? "N/A",
-                    x.LatestAppointment?.Status ?? "COMMITTED",
-                    x.LatestAppointment?.AppointmentId,
-                    x.Commission?.CommissionAmount ?? 0,
-                    x.Commission?.Status ?? "Unpaid"
+                var missionsList = g.Select(m => new ReferredPatientDto(
+                    m.Patient.PatientId,
+                    m.Patient.PatientIdentifier,
+                    m.Patient.FullName,
+                    m.Patient.Mobile,
+                    m.Patient.Address,
+                    m.Patient.Age,
+                    m.Patient.Gender,
+                    m.Appointment.Modality,
+                    m.Appointment.Service,
+                    m.Patient.SourceOfInfo ?? "DIRECT",
+                    m.Appointment.DateTime.ToString("yyyy-MM-dd"),
+                    m.Appointment.Status,
+                    m.Appointment.AppointmentId,
+                    m.Commission?.CommissionAmount ?? 0,
+                    m.Commission?.Status ?? "Unpaid"
                 )).ToList();
 
-                var totalComm = patientsList.Sum(p => p.CommissionAmount);
-                var paidComm = patientsList.Where(p => p.CommissionStatus.Equals("Paid", StringComparison.OrdinalIgnoreCase)).Sum(p => p.CommissionAmount);
+                var totalComm = missionsList.Sum(p => p.CommissionAmount);
+                var paidComm = missionsList.Where(p => p.CommissionStatus.Equals("Paid", StringComparison.OrdinalIgnoreCase)).Sum(p => p.CommissionAmount);
 
                 return new ReferrerIntelligenceDto(
-                    g.Key ?? Guid.Empty,
+                    g.Key,
                     g.First().ReferrerName,
                     g.First().ReferrerContact,
                     g.First().ReferrerAddress,
-                    g.Count(),
-                    patientsList,
+                    missionsList.Count, // Every referred appointment is a mission unit
+                    missionsList,
                     totalComm,
                     paidComm,
                     totalComm - paidComm
