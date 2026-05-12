@@ -69,8 +69,9 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
                 var item = invoice.Items.First();
                 item.Amount = request.Amount.Value;
                 invoice.TotalAmount = request.Amount.Value;
-                invoice.BalanceAmount = invoice.TotalAmount - invoice.PaidAmount;
+                invoice.GrossAmount = request.Amount.Value; // Sync gross if updating from appointment
             }
+
 
             if (!string.IsNullOrEmpty(request.ReferralCutType)) invoice.ReferralCutType = request.ReferralCutType;
             if (request.ReferralCutValue.HasValue) invoice.ReferralCutValue = request.ReferralCutValue.Value;
