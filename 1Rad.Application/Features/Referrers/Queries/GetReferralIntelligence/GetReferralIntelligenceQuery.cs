@@ -61,10 +61,10 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
                 ReferrerAddress = a.Patient.Referrer.Address ?? "N/A",
                 Appointment = a,
                 Patient = a.Patient,
-                Commission = _context.ReferralCommissions
-                    .Where(c => c.AppointmentId == a.AppointmentId)
+                Commissions = _context.ReferralCommissions
+                    .Where(c => c.AppointmentId == a.AppointmentId && c.Status != "Cancelled")
                     .Select(c => new { c.CommissionAmount, c.Status })
-                    .FirstOrDefault(),
+                    .ToList(),
                 Revenue = _context.Invoices
                     .Where(i => i.AppointmentId == a.AppointmentId)
                     .Select(i => i.TotalAmount)
@@ -90,8 +90,8 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
                     m.Appointment.DateTime.ToString("yyyy-MM-dd"),
                     m.Appointment.Status,
                     m.Appointment.AppointmentId,
-                    m.Commission?.CommissionAmount ?? 0,
-                    m.Commission?.Status ?? "Unpaid",
+                    m.Commissions.Sum(c => c.CommissionAmount),
+                    m.Commissions.Any(c => c.Status.Equals("UNPAID", StringComparison.OrdinalIgnoreCase)) ? "Unpaid" : "Paid",
                     m.Revenue
                 )).ToList();
 
