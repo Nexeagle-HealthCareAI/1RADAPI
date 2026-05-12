@@ -129,26 +129,5 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
             throw;
         }
     }
-
-        catch (UnauthorizedAccessException)
-        {
-            throw;
-        }
-        catch (ArgumentException)
-        {
-            throw;
-        }
-        catch (KeyNotFoundException)
-        {
-            throw;
-        }
-        catch (InvalidOperationException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            throw new Exception($"Failed to collect payment: {ex.Message}", ex);
-        }
-    }
 }
+
