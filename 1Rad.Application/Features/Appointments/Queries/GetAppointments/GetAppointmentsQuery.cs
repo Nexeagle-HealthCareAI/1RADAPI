@@ -38,8 +38,9 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
 
             if (!string.IsNullOrEmpty(request.Status) && request.Status != "ALL")
             {
-                query = query.Where(a => a.Status == request.Status);
+                query = query.Where(x => x.Appointment.Status == request.Status);
             }
+
 
             if (!string.IsNullOrEmpty(request.SearchQuery))
             {

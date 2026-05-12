@@ -19,36 +19,47 @@ public class GetAppointmentByIdQueryHandler : IRequestHandler<GetAppointmentById
 
     public async Task<AppointmentDto?> Handle(GetAppointmentByIdQuery request, CancellationToken cancellationToken)
     {
-        var query = _context.Appointments.AsNoTracking();
-
         // Try to parse as Guid first, then fallback to DisplayId
         _ = Guid.TryParse(request.Id, out var guidId);
 
-        var appointment = await query
-            .Where(a => a.AppointmentId == guidId || a.DisplayId == request.Id)
-            .Select(a => new AppointmentDto(
-                a.AppointmentId,
-                a.DisplayId ?? string.Empty,
-                a.PatientId,
-                a.PatientName ?? "Unknown",
-                a.Mobile ?? string.Empty,
-                a.Patient != null ? (a.Patient.Age ?? "0") : "0",
-                a.Patient != null ? (a.Patient.Gender ?? "Unknown") : "Unknown",
-                a.Patient != null ? (a.Patient.PatientIdentifier ?? string.Empty) : string.Empty,
-                a.Service ?? string.Empty,
-                a.Modality ?? string.Empty,
-                a.DateTime,
-                a.Type ?? "BOOKED",
-                a.Doctor ?? string.Empty,
-                a.Status ?? "BOOKED",
-                a.ReferredBy ?? string.Empty,
-                a.ReferredContact ?? string.Empty,
-                a.Notes ?? string.Empty,
-                a.TechnicianComments ?? string.Empty,
-                a.TechnicianId,
-                a.ScannedAt
+        var appointment = await _context.Appointments
+            .AsNoTracking()
+            .Include(a => a.Patient)
+
+            .GroupJoin(_context.Invoices,
+                a => a.AppointmentId,
+                i => i.AppointmentId,
+                (a, invoices) => new { Appointment = a, Invoices = invoices })
+            .SelectMany(x => x.Invoices.DefaultIfEmpty(),
+                (x, invoice) => new { x.Appointment, Invoice = invoice })
+            .Where(x => x.Appointment.AppointmentId == guidId || x.Appointment.DisplayId == request.Id)
+            .Select(x => new AppointmentDto(
+                x.Appointment.AppointmentId,
+                x.Appointment.DisplayId ?? string.Empty,
+                x.Appointment.PatientId,
+                x.Appointment.PatientName ?? "Unknown",
+                x.Appointment.Mobile ?? string.Empty,
+                x.Appointment.Patient != null ? (x.Appointment.Patient.Age ?? "0") : "0",
+                x.Appointment.Patient != null ? (x.Appointment.Patient.Gender ?? "Unknown") : "Unknown",
+                x.Appointment.Patient != null ? (x.Appointment.Patient.PatientIdentifier ?? string.Empty) : string.Empty,
+                x.Appointment.Service ?? string.Empty,
+                x.Appointment.Modality ?? string.Empty,
+                x.Appointment.DateTime,
+                x.Appointment.Type ?? "BOOKED",
+                x.Appointment.Doctor ?? string.Empty,
+                x.Appointment.Status ?? "BOOKED",
+                x.Appointment.ReferredBy ?? string.Empty,
+                x.Appointment.ReferredContact ?? string.Empty,
+                x.Appointment.Notes ?? string.Empty,
+                x.Appointment.TechnicianComments ?? string.Empty,
+                x.Appointment.TechnicianId,
+                x.Appointment.ScannedAt,
+                x.Invoice != null ? x.Invoice.TotalAmount : 0,
+                x.Invoice != null ? x.Invoice.ReferralCutType ?? "PERCENTAGE" : "PERCENTAGE",
+                x.Invoice != null ? x.Invoice.ReferralCutValue : 0
             ))
             .FirstOrDefaultAsync(cancellationToken);
+
 
         return appointment;
     }
