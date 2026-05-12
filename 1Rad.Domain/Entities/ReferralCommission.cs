@@ -16,6 +16,8 @@ public class ReferralCommission : BaseEntity, IHospitalContext
     // Financial Quantum
     public decimal CommissionAmount { get; set; }
     public decimal AccumulatedTotal { get; set; }
+
+
     
     // Transactional Metadata
     public DateTime TransactionDate { get; set; } = DateTime.UtcNow;

@@ -13,6 +13,8 @@ public record CollectPaymentCommand : IRequest<bool>
     public string PaymentMethod { get; init; } = "CASH";
 }
 
+
+
 public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentCommand, bool>
 {
     private readonly IApplicationDbContext _context;
@@ -69,6 +71,8 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
                 invoice.DiscountAmount = request.DiscountAmount.Value;
                 invoice.TotalAmount = gross - invoice.DiscountAmount;
             }
+
+
 
             // Check if payment exceeds remaining balance
             var remainingBalance = invoice.TotalAmount - invoice.PaidAmount;

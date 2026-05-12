@@ -18,6 +18,7 @@ public class Invoice : BaseEntity, IHospitalContext
     public decimal BalanceAmount => TotalAmount - PaidAmount;
     
     public string Status { get; set; } = "PENDING"; // PENDING, PARTIAL, PAID, CANCELLED
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? PaidAt { get; set; }
     
