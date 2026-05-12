@@ -47,7 +47,9 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
 
             var invoice = await _context.Invoices
                 .Include(i => i.Payments)
+                .Include(i => i.Items)
                 .FirstOrDefaultAsync(i => i.Id == request.InvoiceId && i.HospitalId == _context.UserContext.HospitalId, cancellationToken);
+
             
             if (invoice == null)
             {
