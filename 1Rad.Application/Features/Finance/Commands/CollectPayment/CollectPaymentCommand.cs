@@ -9,10 +9,13 @@ public record CollectPaymentCommand : IRequest<bool>
 {
     public Guid InvoiceId { get; init; }
     public decimal Amount { get; init; }
-    public decimal? DiscountAmount { get; init; }
-    public string DiscountBurden { get; init; } = "CENTRE"; // "CENTRE" or "REFERRER"
+    public decimal? CentreDiscount { get; init; }
+    public decimal? ReferrerDiscount { get; init; }
+    public decimal? Deduction { get; init; }
     public string PaymentMethod { get; init; } = "CASH";
 }
+
+
 
 
 
@@ -61,31 +64,33 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
                 throw new InvalidOperationException($"Invoice '{invoice.InvoiceId}' is cancelled. Payment cannot be collected.");
             }
 
-            // Apply Discount if provided (Administrative Rebate during payment)
-            if (request.DiscountAmount.HasValue)
+            // Apply Three-Tier Discounts/Deductions
+            var totalDiscount = (request.CentreDiscount ?? 0) + (request.ReferrerDiscount ?? 0) + (request.Deduction ?? 0);
+            if (totalDiscount > 0)
             {
-                // Always recalculate Gross from Items to ensure absolute accuracy
                 var gross = invoice.Items.Any() 
                     ? invoice.Items.Sum(x => x.Amount * x.Quantity)
                     : (invoice.GrossAmount > 0 ? invoice.GrossAmount : invoice.TotalAmount);
                 
                 invoice.GrossAmount = gross;
-                invoice.DiscountAmount = request.DiscountAmount.Value;
-                invoice.TotalAmount = gross - invoice.DiscountAmount;
+                invoice.DiscountAmount = totalDiscount;
+                invoice.TotalAmount = gross - totalDiscount;
 
-                // Handle Referrer-side deduction if requested
-                if (request.DiscountBurden == "REFERRER" && invoice.AppointmentId.HasValue && request.DiscountAmount.Value > 0)
+                // Handle Referrer-side adjustment if requested
+                if ((request.ReferrerDiscount ?? 0) > 0 && invoice.AppointmentId.HasValue)
                 {
                     var commission = await _context.ReferralCommissions
                         .FirstOrDefaultAsync(c => c.AppointmentId == invoice.AppointmentId && c.HospitalId == _context.UserContext.HospitalId, cancellationToken);
                     
                     if (commission != null)
                     {
-                        commission.CommissionAmount -= request.DiscountAmount.Value;
-                        commission.Remarks = (commission.Remarks ?? "") + $" [Adjustment: ₹{request.DiscountAmount.Value} deducted for patient discount burden]";
+                        commission.CommissionAmount -= request.ReferrerDiscount.Value;
+                        commission.Remarks = (commission.Remarks ?? "") + $" [Burden-Share: ₹{request.ReferrerDiscount.Value} deducted]";
                     }
                 }
             }
+
+
 
 
 
