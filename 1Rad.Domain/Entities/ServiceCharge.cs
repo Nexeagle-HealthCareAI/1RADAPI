@@ -9,6 +9,8 @@ public class ServiceCharge : BaseEntity, IHospitalContext
     public string ServiceName { get; set; } = string.Empty;
     public decimal Amount { get; set; }
     
+    public decimal ReferralCutValue { get; set; } = 0;
+    
     public Guid HospitalId { get; set; }
     public Hospital Hospital { get; set; } = null!;
 }

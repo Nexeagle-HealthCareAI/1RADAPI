@@ -8,9 +8,10 @@ namespace _1Rad.Application.Features.Finance.Commands.UpsertServiceCharge;
 public record UpsertServiceChargeCommand : IRequest<Guid>
 {
     public Guid? Id { get; init; }
-    public string Modality { get; init; } = string.Empty;
-    public string ServiceName { get; init; } = string.Empty;
-    public decimal Amount { get; init; }
+    public string Modality { init; get; } = string.Empty;
+    public string ServiceName { init; get; } = string.Empty;
+    public decimal Amount { init; get; }
+    public decimal ReferralCutValue { init; get; } = 0;
 }
 
 public class UpsertServiceChargeCommandHandler : IRequestHandler<UpsertServiceChargeCommand, Guid>
@@ -89,6 +90,7 @@ public class UpsertServiceChargeCommandHandler : IRequestHandler<UpsertServiceCh
             entity.Modality = request.Modality;
             entity.ServiceName = request.ServiceName;
             entity.Amount = request.Amount;
+            entity.ReferralCutValue = request.ReferralCutValue;
 
             await _context.SaveChangesAsync(cancellationToken);
 

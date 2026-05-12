@@ -12,6 +12,7 @@ public class ServiceChargeDto
     public string Modality { get; set; } = string.Empty;
     public string ServiceName { get; set; } = string.Empty;
     public decimal Amount { get; set; }
+    public decimal ReferralCutValue { get; set; }
 }
 
 public class GetServiceChargesQueryHandler : IRequestHandler<GetServiceChargesQuery, List<ServiceChargeDto>>
@@ -41,7 +42,8 @@ public class GetServiceChargesQueryHandler : IRequestHandler<GetServiceChargesQu
                     Id = s.Id,
                     Modality = s.Modality,
                     ServiceName = s.ServiceName,
-                    Amount = s.Amount
+                    Amount = s.Amount,
+                    ReferralCutValue = s.ReferralCutValue
                 })
                 .OrderBy(s => s.Modality)
                 .ThenBy(s => s.ServiceName)
