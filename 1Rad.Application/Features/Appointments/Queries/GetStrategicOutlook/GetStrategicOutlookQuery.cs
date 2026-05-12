@@ -163,9 +163,9 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
                 ageTiers.Add(new AgeTier(tier.Label, count, percentage, tier.Color));
             }
 
-            // --- 6. TOP SOURCES ---
+            // --- 6. TOP SOURCES (Refined to Reference Date) ---
             var topSourcesRaw = await _context.Appointments
-                .Where(a => a.HospitalId == hospitalId && !string.IsNullOrEmpty(a.ReferredBy))
+                .Where(a => a.HospitalId == hospitalId && a.DateTime >= today && a.DateTime < tomorrow && !string.IsNullOrEmpty(a.ReferredBy))
                 .Select(a => a.ReferredBy)
                 .ToListAsync(cancellationToken);
 
