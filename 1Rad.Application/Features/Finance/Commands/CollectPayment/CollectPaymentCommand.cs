@@ -79,10 +79,14 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
                 invoice.TotalAmount = gross - totalDiscount;
 
                 // Handle Referrer-side adjustment if requested
-                if ((request.ReferrerDiscount ?? 0) > 0 && invoice.AppointmentId.HasValue)
+                if ((request.ReferrerDiscount ?? 0) > 0)
+
                 {
                     var commission = await _context.ReferralCommissions
-                        .FirstOrDefaultAsync(c => c.AppointmentId == invoice.AppointmentId && c.HospitalId == _context.UserContext.HospitalId, cancellationToken);
+                        .FirstOrDefaultAsync(c => 
+                            (c.AppointmentId == invoice.AppointmentId || (c.ReferenceNumber == invoice.InvoiceId && c.ReferenceNumber != null)) && 
+                            c.HospitalId == _context.UserContext.HospitalId, cancellationToken);
+
                     
                     if (commission != null)
                     {
