@@ -90,21 +90,24 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
             _context.Invoices.Add(invoice);
         }
 
-        // --- REFERRAL COMMISSION SYNC ---
-        if (!string.IsNullOrEmpty(request.ReferredBy) && (request.ReferralCutValue ?? 0) > 0)
+        // --- REFERRAL SYNCHRONIZATION ---
+        if (!string.IsNullOrEmpty(request.ReferredBy))
         {
             var referrer = await _context.Referrers
                 .FirstOrDefaultAsync(r => r.Name == request.ReferredBy && r.HospitalId == appointment.HospitalId, cancellationToken);
 
             if (referrer != null)
             {
+                // Ensure patient record is linked to this referrer for longitudinal tracking
+                patient.ReferrerId = referrer.ReferrerId;
+
+                // Record commission even if amount is zero to maintain mission audit trail
                 var commission = new ReferralCommission
                 {
                     ReferrerId = referrer.ReferrerId,
                     ReferrerName = referrer.Name ?? request.ReferredBy,
                     Modality = request.Modality,
                     CommissionAmount = request.ReferralCutValue ?? 0,
-                    AccumulatedTotal = 0, // This could be used for running totals if needed
                     Status = "UNPAID",
                     TransactionDate = DateTime.UtcNow,
                     HospitalId = appointment.HospitalId,

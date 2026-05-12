@@ -18,20 +18,24 @@ public record GetReferralIntelligenceQuery(
 public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIntelligenceQuery, List<ReferrerIntelligenceDto>>
 {
     private readonly IApplicationDbContext _context;
+    private readonly IUserContext _userContext;
 
-    public GetReferralIntelligenceQueryHandler(IApplicationDbContext context)
+    public GetReferralIntelligenceQueryHandler(IApplicationDbContext context, IUserContext userContext)
     {
         _context = context;
+        _userContext = userContext;
     }
 
     public async Task<List<ReferrerIntelligenceDto>> Handle(GetReferralIntelligenceQuery request, CancellationToken cancellationToken)
     {
         // 1. Initialize Appointment-Centric Query (Every appointment is a 'Mission')
+        var hospitalId = _userContext.HospitalId;
         var appointmentsQuery = _context.Appointments
             .AsNoTracking()
             .Include(a => a.Patient)
             .Include(a => a.Patient.Referrer)
-            .Where(a => a.Patient.ReferrerId != null) // Focus on referred cases
+            .Where(a => a.HospitalId == hospitalId)
+            .Where(a => a.Patient.ReferrerId != null || !string.IsNullOrEmpty(a.ReferredBy)) // Broaden detection
             .AsQueryable();
 
         // 2. Apply Institutional Routing Filters
@@ -55,8 +59,9 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
         var missionData = await appointmentsQuery
             .Select(a => new
             {
-                ReferrerId = a.Patient.ReferrerId ?? Guid.Empty,
-                ReferrerName = a.Patient.Referrer.Name ?? "Anonymous Source",
+                ReferrerId = a.Patient.ReferrerId ?? 
+                             _context.Referrers.Where(r => r.Name == a.ReferredBy && r.HospitalId == a.HospitalId).Select(r => r.ReferrerId).FirstOrDefault(),
+                ReferrerName = a.Patient.Referrer.Name ?? a.ReferredBy ?? "Anonymous Source",
                 ReferrerContact = a.Patient.Referrer.Contact ?? "N/A",
                 ReferrerAddress = a.Patient.Referrer.Address ?? "N/A",
                 Appointment = a,
