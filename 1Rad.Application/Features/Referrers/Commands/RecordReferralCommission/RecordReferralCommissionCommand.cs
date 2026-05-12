@@ -35,37 +35,54 @@ public class RecordReferralCommissionCommandHandler : IRequestHandler<RecordRefe
         if (hospitalId == Guid.Empty)
             throw new Exception("FISCAL ERROR: Security context failure. Hospital identity is required for commission logging.");
 
-        // Prevent duplicate payouts for the same invoice/reference
+        // Upsert Logic: If reference exists, update instead of adding
+        ReferralCommission? commission = null;
         if (!string.IsNullOrEmpty(request.ReferenceNumber))
         {
-            var exists = await _context.ReferralCommissions
-                .AnyAsync(c => c.ReferenceNumber == request.ReferenceNumber && c.HospitalId == hospitalId, cancellationToken);
-            
-            if (exists)
-                throw new Exception($"FISCAL COLLISION: A referral cut for Mission [{request.ReferenceNumber}] has already been committed to the ledger.");
+            commission = await _context.ReferralCommissions
+                .FirstOrDefaultAsync(c => c.ReferenceNumber == request.ReferenceNumber && c.HospitalId == hospitalId, cancellationToken);
         }
 
-        // Calculate accumulated total for this referrer in this hospital context
-        var currentTotal = await _context.ReferralCommissions
-            .Where(c => c.ReferrerId == request.ReferrerId && c.HospitalId == hospitalId)
-            .SumAsync(c => c.CommissionAmount, cancellationToken);
-
-        var commission = new ReferralCommission
+        if (commission != null)
         {
-            ReferrerId = request.ReferrerId,
-            ReferrerName = referrer.Name ?? "Unknown",
-            Modality = request.Modality,
-            CommissionAmount = request.Amount,
-            AccumulatedTotal = currentTotal + request.Amount,
-            TransactionDate = DateTime.UtcNow,
-            Status = request.Status ?? "UNPAID",
-            ReferenceNumber = request.ReferenceNumber,
-            Remarks = request.Remarks,
-            HospitalId = hospitalId
-        };
+            // Update Existing
+            commission.CommissionAmount = request.Amount;
+            commission.Modality = request.Modality;
+            commission.Remarks = (commission.Remarks ?? "") + $" [Updated: ₹{request.Amount}]";
+            commission.Status = request.Status ?? commission.Status;
+            commission.TransactionDate = DateTime.UtcNow;
+            
+            // Recalculate accumulated total for this specific record (optional, but keeps it consistent)
+            var previousTotal = await _context.ReferralCommissions
+                .Where(c => c.ReferrerId == request.ReferrerId && c.HospitalId == hospitalId && c.TransactionDate < commission.TransactionDate && c.Id != commission.Id)
+                .SumAsync(c => (decimal?)c.CommissionAmount, cancellationToken) ?? 0;
+            commission.AccumulatedTotal = previousTotal + request.Amount;
+        }
+        else
+        {
+            // Calculate accumulated total for new record
+            var currentTotal = await _context.ReferralCommissions
+                .Where(c => c.ReferrerId == request.ReferrerId && c.HospitalId == hospitalId)
+                .SumAsync(c => (decimal?)c.CommissionAmount, cancellationToken) ?? 0;
 
-        _context.ReferralCommissions.Add(commission);
+            commission = new ReferralCommission
+            {
+                ReferrerId = request.ReferrerId,
+                ReferrerName = referrer.Name ?? "Unknown",
+                Modality = request.Modality,
+                CommissionAmount = request.Amount,
+                AccumulatedTotal = currentTotal + request.Amount,
+                TransactionDate = DateTime.UtcNow,
+                Status = request.Status ?? "UNPAID",
+                ReferenceNumber = request.ReferenceNumber,
+                Remarks = request.Remarks,
+                HospitalId = hospitalId
+            };
+            _context.ReferralCommissions.Add(commission);
+        }
+
         await _context.SaveChangesAsync(cancellationToken);
+
 
         return commission.Id;
     }
