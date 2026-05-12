@@ -13,15 +13,15 @@ public record GetReferralCommissionsQuery(
 public record ReferralCommissionDto(
     Guid Id,
     Guid ReferrerId,
-    string ReferrerName,
-    string Modality,
+    string? ReferrerName,
+    string? Modality,
     decimal Amount,
     decimal AccumulatedTotal,
     DateTime TransactionDate,
     string Status,
     string? ReferenceNumber,
     string? Remarks,
-    string PatientName
+    string? PatientName
 );
 
 
@@ -54,17 +54,16 @@ public class GetReferralCommissionsQueryHandler : IRequestHandler<GetReferralCom
             .Select(c => new ReferralCommissionDto(
                 c.Id,
                 c.ReferrerId,
-                c.ReferrerName,
-                c.Modality,
+                c.ReferrerName ?? "Unknown Referrer",
+                c.Modality ?? "Unknown",
                 c.CommissionAmount,
                 c.AccumulatedTotal,
                 c.TransactionDate,
-                c.Status,
+                c.Status ?? "UNPAID",
                 c.ReferenceNumber,
                 c.Remarks,
-                c.PatientName
+                c.PatientName ?? "Unknown Patient"
             ))
-
             .ToListAsync(cancellationToken);
     }
 }
