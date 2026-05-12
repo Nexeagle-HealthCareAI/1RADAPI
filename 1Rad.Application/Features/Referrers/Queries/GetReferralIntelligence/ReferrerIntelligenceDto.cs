@@ -9,7 +9,10 @@ public record ReferrerIntelligenceDto(
     string Contact,
     string Address,
     int TotalPatients,
-    List<ReferredPatientDto> Patients
+    List<ReferredPatientDto> Patients,
+    decimal TotalCommission = 0,
+    decimal PaidCommission = 0,
+    decimal UnpaidCommission = 0
 );
 
 public record ReferredPatientDto(
@@ -24,5 +27,8 @@ public record ReferredPatientDto(
     string Service,
     string SourceOfInfo,
     string RegistrationDate,
-    string Status
+    string Status,
+    Guid? AppointmentId = null,
+    decimal CommissionAmount = 0,
+    string CommissionStatus = "Unpaid"
 );

@@ -52,11 +52,15 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
                 ReferrerContact = p.Referrer != null ? p.Referrer.Contact : "N/A",
                 ReferrerAddress = p.Referrer != null ? p.Referrer.Address : "N/A",
                 Patient = p,
-                // Get the latest appointment modality for this intelligence log
                 LatestAppointment = _context.Appointments
                     .Where(a => a.PatientId == p.PatientId)
                     .OrderByDescending(a => a.DateTime)
-                    .Select(a => new { a.Modality, a.Service, a.Status, a.DateTime })
+                    .Select(a => new { a.AppointmentId, a.Modality, a.Service, a.Status, a.DateTime })
+                    .FirstOrDefault(),
+                Commission = _context.ReferralCommissions
+                    .Where(c => _context.Appointments.Where(a => a.PatientId == p.PatientId).Select(a => (Guid?)a.AppointmentId).Contains(c.AppointmentId))
+                    .OrderByDescending(c => c.CreatedAt)
+                    .Select(c => new { c.CommissionAmount, c.Status })
                     .FirstOrDefault()
             })
             .ToListAsync(cancellationToken);
@@ -74,13 +78,8 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
         // Group by Referrer
         var result = patientsWithAppointments
             .GroupBy(x => x.ReferrerId)
-            .Select(g => new ReferrerIntelligenceDto(
-                g.Key ?? Guid.Empty,
-                g.First().ReferrerName,
-                g.First().ReferrerContact,
-                g.First().ReferrerAddress,
-                g.Count(),
-                g.Select(x => new ReferredPatientDto(
+            .Select(g => {
+                var patientsList = g.Select(x => new ReferredPatientDto(
                     x.Patient.PatientId,
                     x.Patient.PatientIdentifier,
                     x.Patient.FullName,
@@ -92,9 +91,27 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
                     x.LatestAppointment?.Service ?? "N/A",
                     x.Patient.SourceOfInfo ?? "DIRECT",
                     x.LatestAppointment?.DateTime.ToString("yyyy-MM-dd") ?? "N/A",
-                    x.LatestAppointment?.Status ?? "COMMITTED"
-                )).ToList()
-            ))
+                    x.LatestAppointment?.Status ?? "COMMITTED",
+                    x.LatestAppointment?.AppointmentId,
+                    x.Commission?.CommissionAmount ?? 0,
+                    x.Commission?.Status ?? "Unpaid"
+                )).ToList();
+
+                var totalComm = patientsList.Sum(p => p.CommissionAmount);
+                var paidComm = patientsList.Where(p => p.CommissionStatus.Equals("Paid", StringComparison.OrdinalIgnoreCase)).Sum(p => p.CommissionAmount);
+
+                return new ReferrerIntelligenceDto(
+                    g.Key ?? Guid.Empty,
+                    g.First().ReferrerName,
+                    g.First().ReferrerContact,
+                    g.First().ReferrerAddress,
+                    g.Count(),
+                    patientsList,
+                    totalComm,
+                    paidComm,
+                    totalComm - paidComm
+                );
+            })
             .OrderByDescending(r => r.TotalPatients)
             .ToList();
 
