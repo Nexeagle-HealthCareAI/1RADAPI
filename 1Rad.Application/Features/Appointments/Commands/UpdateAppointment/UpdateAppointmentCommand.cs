@@ -1,4 +1,5 @@
 using _1Rad.Application.Interfaces;
+using _1Rad.Domain.Entities;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
 
