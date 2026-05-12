@@ -3,6 +3,7 @@ using _1Rad.Application.Features.Referrers.Queries.GetReferralIntelligence;
 using _1Rad.Application.Features.Referrers.Queries.GetReferralMatrix;
 using _1Rad.Application.Features.Referrers.Queries.GetReferralCommissions;
 using _1Rad.Application.Features.Referrers.Commands.CreateReferrer;
+using _1Rad.Application.Features.Referrers.Commands.UpdateReferrer;
 using _1Rad.Application.Features.Referrers.Commands.RecordReferralCommission;
 using _1Rad.Application.Features.Referrers.Commands.UpdateReferralCommission;
 using _1Rad.Application.Features.Referrers.Commands.UpdateReferralCommissionStatus;
@@ -36,6 +37,14 @@ public class ReferrersController : ControllerBase
     {
         var result = await _mediator.Send(command);
         return Ok(new { referrerId = result });
+    }
+
+    [HttpPut("{id}")]
+    public async Task<IActionResult> UpdateReferrer(Guid id, [FromBody] UpdateReferrerCommand command)
+    {
+        if (id != command.ReferrerId) return BadRequest("Identity mismatch.");
+        var result = await _mediator.Send(command);
+        return Ok(result);
     }
 
     [HttpGet("intelligence")]

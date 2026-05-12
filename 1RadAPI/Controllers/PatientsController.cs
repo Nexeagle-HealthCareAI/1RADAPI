@@ -1,5 +1,6 @@
 using _1Rad.Application.Features.Patients.Queries.GetPatients;
 using _1Rad.Application.Features.Patients.Commands.CreatePatient;
+using _1Rad.Application.Features.Patients.Commands.UpdatePatient;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -30,5 +31,13 @@ public class PatientsController : ControllerBase
     {
         var result = await _mediator.Send(command);
         return Ok(new { patientId = result });
+    }
+
+    [HttpPut("{id}")]
+    public async Task<IActionResult> Update(Guid id, [FromBody] UpdatePatientCommand command)
+    {
+        if (id != command.PatientId) return BadRequest("Identity mismatch.");
+        var result = await _mediator.Send(command);
+        return Ok(result);
     }
 }
