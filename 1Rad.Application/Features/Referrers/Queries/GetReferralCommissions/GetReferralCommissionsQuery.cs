@@ -36,33 +36,43 @@ public class GetReferralCommissionsQueryHandler : IRequestHandler<GetReferralCom
 
     public async Task<List<ReferralCommissionDto>> Handle(GetReferralCommissionsQuery request, CancellationToken cancellationToken)
     {
-        var query = _context.ReferralCommissions
+        // 1. Initial query from Commissions
+        var commissionsQuery = _context.ReferralCommissions
             .AsNoTracking()
             .AsQueryable();
 
+        // 2. Apply Filters
         if (request.ReferrerId.HasValue)
-            query = query.Where(c => c.ReferrerId == request.ReferrerId.Value);
+            commissionsQuery = commissionsQuery.Where(c => c.ReferrerId == request.ReferrerId.Value);
 
         if (request.StartDate.HasValue)
-            query = query.Where(c => c.TransactionDate >= request.StartDate.Value);
+            commissionsQuery = commissionsQuery.Where(c => c.TransactionDate >= request.StartDate.Value);
 
         if (request.EndDate.HasValue)
-            query = query.Where(c => c.TransactionDate <= request.EndDate.Value);
+            commissionsQuery = commissionsQuery.Where(c => c.TransactionDate <= request.EndDate.Value);
 
-        return await query
+        // 3. Project with Tactical Joins to resolve missing columns (PatientName/ReferrerName) in DB
+        return await commissionsQuery
             .OrderByDescending(c => c.TransactionDate)
-            .Select(c => new ReferralCommissionDto(
-                c.Id,
-                c.ReferrerId,
-                c.ReferrerName ?? "Unknown Referrer",
-                c.Modality ?? "Unknown",
-                c.CommissionAmount,
-                c.AccumulatedTotal,
-                c.TransactionDate,
-                c.Status ?? "UNPAID",
-                c.ReferenceNumber,
-                c.Remarks,
-                c.PatientName ?? "Unknown Patient"
+            .Select(c => new
+            {
+                Commission = c,
+                ReferrerName = c.Referrer.Name,
+                // Join with Appointments to get the true PatientName
+                Appointment = _context.Appointments.FirstOrDefault(a => a.AppointmentId == c.AppointmentId)
+            })
+            .Select(x => new ReferralCommissionDto(
+                x.Commission.Id,
+                x.Commission.ReferrerId,
+                x.ReferrerName ?? x.Commission.ReferrerName ?? "Unknown Referrer",
+                x.Commission.Modality ?? "Unknown",
+                x.Commission.CommissionAmount,
+                x.Commission.AccumulatedTotal,
+                x.Commission.TransactionDate,
+                x.Commission.Status ?? "UNPAID",
+                x.Commission.ReferenceNumber,
+                x.Commission.Remarks,
+                x.Appointment != null ? x.Appointment.PatientName : (x.Commission.PatientName ?? "Unknown Patient")
             ))
             .ToListAsync(cancellationToken);
     }
