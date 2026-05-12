@@ -70,10 +70,10 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
                     .Where(c => c.AppointmentId == a.AppointmentId && c.Status != "Cancelled")
                     .Select(c => new { c.CommissionAmount, c.Status })
                     .ToList(),
-                Revenue = _context.Invoices
+                Financials = _context.Invoices
                     .Where(i => i.AppointmentId == a.AppointmentId)
-                    .Select(i => i.TotalAmount)
-                    .FirstOrDefault()
+                    .Select(i => new { i.TotalAmount, i.DiscountAmount })
+                    .FirstOrDefault() ?? new { TotalAmount = 0m, DiscountAmount = 0m }
             })
             .ToListAsync(cancellationToken);
 
@@ -97,25 +97,29 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
                     m.Appointment.AppointmentId,
                     m.Commissions.Sum(c => c.CommissionAmount),
                     m.Commissions.Any(c => c.Status.Equals("UNPAID", StringComparison.OrdinalIgnoreCase)) ? "Unpaid" : "Paid",
-                    m.Revenue,
-                    m.ReferrerName
+                    m.Financials.TotalAmount,
+                    m.ReferrerName,
+                    m.Financials.DiscountAmount
                 )).ToList();
 
                 var totalComm = missionsList.Sum(p => p.CommissionAmount);
                 var paidComm = missionsList.Where(p => p.CommissionStatus.Equals("Paid", StringComparison.OrdinalIgnoreCase)).Sum(p => p.CommissionAmount);
                 var totalRev = missionsList.Sum(p => p.TotalAmount);
+                var totalDisc = missionsList.Sum(p => p.DiscountAmount);
 
                 return new ReferrerIntelligenceDto(
                     g.Key,
                     g.First().ReferrerName,
                     g.First().ReferrerContact,
                     g.First().ReferrerAddress,
-                    missionsList.Count, // Every referred appointment is a mission unit
+                    missionsList.Count,
                     missionsList,
                     totalComm,
                     paidComm,
                     totalComm - paidComm,
-                    totalRev
+                    totalRev,
+                    totalDisc,
+                    totalRev - totalComm
                 );
             })
             .OrderByDescending(r => r.TotalPatients)

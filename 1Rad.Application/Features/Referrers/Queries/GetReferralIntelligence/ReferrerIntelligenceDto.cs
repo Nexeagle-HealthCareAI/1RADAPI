@@ -13,7 +13,9 @@ public record ReferrerIntelligenceDto(
     decimal TotalCommission = 0,
     decimal PaidCommission = 0,
     decimal UnpaidCommission = 0,
-    decimal TotalRevenue = 0
+    decimal TotalRevenue = 0,
+    decimal TotalDiscount = 0,
+    decimal NetProfit = 0
 );
 
 public record ReferredPatientDto(
@@ -33,5 +35,6 @@ public record ReferredPatientDto(
     decimal CommissionAmount = 0,
     string CommissionStatus = "Unpaid",
     decimal TotalAmount = 0,
-    string? ReferrerName = null
+    string? ReferrerName = null,
+    decimal DiscountAmount = 0
 );
