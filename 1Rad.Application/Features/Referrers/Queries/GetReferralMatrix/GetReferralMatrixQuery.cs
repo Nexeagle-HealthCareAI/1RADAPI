@@ -143,17 +143,11 @@ public class GetReferralMatrixQueryHandler : IRequestHandler<GetReferralMatrixQu
                 ReferrerId = a.Patient.ReferrerId,
                 ReferrerName = a.Patient.Referrer.Name,
                 ReferrerContact = a.Patient.Referrer.Contact,
-                a.PatientId,
                 a.DateTime
             })
             .ToListAsync(cancellationToken);
 
-        var uniquePatients = appointments
-            .GroupBy(a => a.PatientId)
-            .Select(g => g.OrderByDescending(x => x.DateTime).First())
-            .ToList();
-
-        var rows = uniquePatients
+        var rows = appointments
             .GroupBy(p => p.ReferrerId)
             .Select(g =>
             {
