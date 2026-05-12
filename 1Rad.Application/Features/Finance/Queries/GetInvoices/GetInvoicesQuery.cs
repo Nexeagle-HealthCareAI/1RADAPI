@@ -106,8 +106,8 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
                     ReferrerName = i.Appointment != null ? i.Appointment.ReferredBy : (i.Patient.Referrer != null ? i.Patient.Referrer.Name : null),
                     ReferrerId = i.Patient.ReferrerId ?? (i.Appointment != null ? _context.Referrers.Where(r => r.Name == i.Appointment.ReferredBy && r.HospitalId == i.HospitalId).Select(r => (Guid?)r.ReferrerId).FirstOrDefault() : null),
                     Modality = i.Appointment != null ? i.Appointment.Modality : null,
-                    CommissionAmount = (_context.Expenses.Where(e => e.ReferenceNumber == i.InvoiceId && e.HospitalId == i.HospitalId).Sum(e => (decimal?)e.Amount) ?? 0) +
-                                       (_context.ReferralCommissions.Where(c => c.ReferenceNumber == i.InvoiceId && c.HospitalId == i.HospitalId).Sum(c => (decimal?)c.CommissionAmount) ?? 0),
+                    CommissionAmount = (_context.ReferralCommissions.Where(c => (c.AppointmentId == i.AppointmentId || (c.ReferenceNumber == i.InvoiceId && c.ReferenceNumber != null)) && c.HospitalId == i.HospitalId).Sum(c => (decimal?)c.CommissionAmount) ?? 0),
+
                     Items = i.Items.Select(it => new InvoiceItemDto
                     {
                         Description = it.Description,

@@ -10,8 +10,10 @@ public record CollectPaymentCommand : IRequest<bool>
     public Guid InvoiceId { get; init; }
     public decimal Amount { get; init; }
     public decimal? DiscountAmount { get; init; }
+    public string DiscountBurden { get; init; } = "CENTRE"; // "CENTRE" or "REFERRER"
     public string PaymentMethod { get; init; } = "CASH";
 }
+
 
 
 
@@ -70,7 +72,21 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
                 invoice.GrossAmount = gross;
                 invoice.DiscountAmount = request.DiscountAmount.Value;
                 invoice.TotalAmount = gross - invoice.DiscountAmount;
+
+                // Handle Referrer-side deduction if requested
+                if (request.DiscountBurden == "REFERRER" && invoice.AppointmentId.HasValue && request.DiscountAmount.Value > 0)
+                {
+                    var commission = await _context.ReferralCommissions
+                        .FirstOrDefaultAsync(c => c.AppointmentId == invoice.AppointmentId && c.HospitalId == _context.UserContext.HospitalId, cancellationToken);
+                    
+                    if (commission != null)
+                    {
+                        commission.CommissionAmount -= request.DiscountAmount.Value;
+                        commission.Remarks = (commission.Remarks ?? "") + $" [Adjustment: ₹{request.DiscountAmount.Value} deducted for patient discount burden]";
+                    }
+                }
             }
+
 
 
 
