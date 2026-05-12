@@ -59,8 +59,8 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
         var missionData = await appointmentsQuery
             .Select(a => new
             {
-                ReferrerId = a.Patient.ReferrerId ?? 
-                             _context.Referrers.Where(r => r.Name == a.ReferredBy && r.HospitalId == a.HospitalId).Select(r => r.ReferrerId).FirstOrDefault(),
+                ReferrerId = (a.Patient.ReferrerId ?? 
+                             _context.Referrers.Where(r => r.Name == a.ReferredBy && r.HospitalId == a.HospitalId).Select(r => r.ReferrerId).FirstOrDefault()) ?? Guid.Empty,
                 ReferrerName = a.Patient.Referrer.Name ?? a.ReferredBy ?? "Anonymous Source",
                 ReferrerContact = a.Patient.Referrer.Contact ?? "N/A",
                 ReferrerAddress = a.Patient.Referrer.Address ?? "N/A",
