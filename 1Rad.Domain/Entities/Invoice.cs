@@ -23,6 +23,12 @@ public class Invoice : BaseEntity, IHospitalContext
     public DateTime? PaidAt { get; set; }
     
     public decimal ReferralCutValue { get; set; } = 0;
+    
+    // Triple-Vector Deduction Tracking
+    public decimal CentreDiscount { get; set; } = 0;
+    public decimal ReferrerDiscount { get; set; } = 0;
+    public decimal InstitutionalDeduction { get; set; } = 0;
+
 
     
     public Guid HospitalId { get; set; }

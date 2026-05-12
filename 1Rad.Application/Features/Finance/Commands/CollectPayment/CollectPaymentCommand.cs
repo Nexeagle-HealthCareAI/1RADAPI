@@ -33,108 +33,103 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
     {
         try
         {
-            // Validate hospital context
             if (_context.UserContext.HospitalId == Guid.Empty)
             {
                 throw new UnauthorizedAccessException("Hospital context is required to collect payment.");
-            }
-
-            // Validate payment amount
-            if (request.Amount <= 0)
-            {
-                throw new ArgumentException("Payment amount must be greater than zero.", nameof(request.Amount));
             }
 
             var invoice = await _context.Invoices
                 .Include(i => i.Payments)
                 .Include(i => i.Items)
                 .FirstOrDefaultAsync(i => i.Id == request.InvoiceId && i.HospitalId == _context.UserContext.HospitalId, cancellationToken);
-
             
             if (invoice == null)
             {
-                throw new KeyNotFoundException($"Invoice with ID '{request.InvoiceId}' not found or does not belong to your hospital.");
-            }
-
-            if (invoice.Status == "PAID")
-            {
-                throw new InvalidOperationException($"Invoice '{invoice.InvoiceId}' is already fully paid. No additional payment can be collected.");
+                throw new KeyNotFoundException($"Invoice with ID '{request.InvoiceId}' not found.");
             }
 
             if (invoice.Status == "CANCELLED")
             {
-                throw new InvalidOperationException($"Invoice '{invoice.InvoiceId}' is cancelled. Payment cannot be collected.");
+                throw new InvalidOperationException($"Invoice '{invoice.InvoiceId}' is cancelled.");
             }
 
-            // Apply Three-Tier Discounts/Deductions
-            var totalDiscount = (request.CentreDiscount ?? 0) + (request.ReferrerDiscount ?? 0) + (request.Deduction ?? 0);
-            if (totalDiscount > 0)
+            // Record Previous State for Commission Differential
+            var oldReferrerDiscount = invoice.ReferrerDiscount;
+
+            // Update Deduction Vectors (Overwrite with request values if provided, else keep existing)
+            invoice.CentreDiscount = request.CentreDiscount ?? invoice.CentreDiscount;
+            invoice.ReferrerDiscount = request.ReferrerDiscount ?? invoice.ReferrerDiscount;
+            invoice.InstitutionalDeduction = request.Deduction ?? invoice.InstitutionalDeduction;
+
+            var totalDiscount = invoice.CentreDiscount + invoice.ReferrerDiscount + invoice.InstitutionalDeduction;
+            
+            // Re-anchor Gross to prevent drift
+            var gross = invoice.Items.Any() 
+                ? invoice.Items.Sum(x => x.Amount * x.Quantity)
+                : (invoice.GrossAmount > 0 ? invoice.GrossAmount : invoice.TotalAmount + invoice.DiscountAmount);
+            
+            invoice.GrossAmount = gross;
+            invoice.DiscountAmount = totalDiscount;
+            invoice.TotalAmount = gross - totalDiscount;
+
+            // Handle Referrer-side adjustment (Differential logic)
+            if (invoice.ReferrerDiscount != oldReferrerDiscount)
             {
-                var gross = invoice.Items.Any() 
-                    ? invoice.Items.Sum(x => x.Amount * x.Quantity)
-                    : (invoice.GrossAmount > 0 ? invoice.GrossAmount : invoice.TotalAmount);
+                var commission = await _context.ReferralCommissions
+                    .FirstOrDefaultAsync(c => 
+                        (c.AppointmentId == invoice.AppointmentId || (c.ReferenceNumber == invoice.InvoiceId && c.ReferenceNumber != null)) && 
+                        c.HospitalId == _context.UserContext.HospitalId, cancellationToken);
                 
-                invoice.GrossAmount = gross;
-                invoice.DiscountAmount = totalDiscount;
-                invoice.TotalAmount = gross - totalDiscount;
-
-                // Handle Referrer-side adjustment if requested
-                if ((request.ReferrerDiscount ?? 0) > 0)
-
+                if (commission != null)
                 {
-                    var commission = await _context.ReferralCommissions
-                        .FirstOrDefaultAsync(c => 
-                            (c.AppointmentId == invoice.AppointmentId || (c.ReferenceNumber == invoice.InvoiceId && c.ReferenceNumber != null)) && 
-                            c.HospitalId == _context.UserContext.HospitalId, cancellationToken);
-
-                    
-                    if (commission != null)
-                    {
-                        commission.CommissionAmount -= request.ReferrerDiscount.Value;
-                        commission.Remarks = (commission.Remarks ?? "") + $" [Burden-Share: ₹{request.ReferrerDiscount.Value} deducted]";
-                    }
+                    commission.CommissionAmount += oldReferrerDiscount; // Revert
+                    commission.CommissionAmount -= invoice.ReferrerDiscount; // Apply New
+                    commission.Remarks = (commission.Remarks ?? "") + $" [Adj: ₹{oldReferrerDiscount} -> ₹{invoice.ReferrerDiscount}]";
                 }
             }
 
-
-
-
-
-
-            // Check if payment exceeds remaining balance
-            var remainingBalance = invoice.TotalAmount - invoice.PaidAmount;
-            if (request.Amount > remainingBalance + 0.01m) // Allow small epsilon for floating point
+            // Process Optional Payment
+            if (request.Amount > 0)
             {
-                throw new InvalidOperationException($"Payment amount (₹{request.Amount:N2}) exceeds remaining balance (₹{remainingBalance:N2}).");
+                var remainingBalance = invoice.TotalAmount - invoice.PaidAmount;
+                if (request.Amount > remainingBalance + 0.01m)
+                {
+                    throw new InvalidOperationException($"Payment (₹{request.Amount}) exceeds balance (₹{remainingBalance}).");
+                }
+
+                var payment = new Payment
+                {
+                    InvoiceId = request.InvoiceId,
+                    Amount = request.Amount,
+                    PaymentMethod = request.PaymentMethod,
+                    CreatedAt = DateTime.UtcNow,
+                    HospitalId = _context.UserContext.HospitalId
+                };
+
+                _context.Payments.Add(payment);
+                invoice.PaidAmount += request.Amount;
             }
 
-            var payment = new Payment
-            {
-                InvoiceId = request.InvoiceId,
-                Amount = request.Amount,
-                PaymentMethod = request.PaymentMethod,
-                CreatedAt = DateTime.UtcNow,
-                HospitalId = _context.UserContext.HospitalId
-            };
-
-            _context.Payments.Add(payment);
-
-            invoice.PaidAmount += request.Amount;
-            
-            if (invoice.PaidAmount >= invoice.TotalAmount)
+            // Status Management
+            if (invoice.PaidAmount >= invoice.TotalAmount - 0.01m)
             {
                 invoice.Status = "PAID";
                 invoice.PaidAt = DateTime.UtcNow;
             }
-            else
+            else if (invoice.PaidAmount > 0)
             {
                 invoice.Status = "PARTIAL";
             }
 
             await _context.SaveChangesAsync(cancellationToken);
-
             return true;
         }
+        catch (Exception)
+        {
+            throw;
+        }
+    }
+
         catch (UnauthorizedAccessException)
         {
             throw;
