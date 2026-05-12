@@ -1,5 +1,6 @@
 using _1Rad.Application.Features.Appointments.Queries.GetAppointments;
 using _1Rad.Application.Features.Appointments.Commands.CreateAppointment;
+using _1Rad.Application.Features.Appointments.Commands.UpdateAppointment;
 using _1Rad.Application.Features.Appointments.Commands.UpdateAppointmentStatus;
 using _1Rad.Application.Features.Appointments.Commands.ImportAppointments;
 using MediatR;
@@ -45,6 +46,14 @@ public class AppointmentsController : ControllerBase
     public async Task<IActionResult> UpdateStatus(Guid id, [FromBody] string status)
     {
         var result = await _mediator.Send(new UpdateAppointmentStatusCommand(id, status));
+        return result ? Ok() : NotFound();
+    }
+
+    [HttpPut("{id}")]
+    public async Task<IActionResult> Update(Guid id, [FromBody] UpdateAppointmentCommand command)
+    {
+        if (id != command.AppointmentId) return BadRequest("Appointment ID mismatch.");
+        var result = await _mediator.Send(command);
         return result ? Ok() : NotFound();
     }
 

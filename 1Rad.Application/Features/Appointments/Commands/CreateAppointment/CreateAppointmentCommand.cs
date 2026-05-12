@@ -14,7 +14,10 @@ public record CreateAppointmentCommand(
     string Doctor,
     string ReferredBy,
     string ReferredContact,
-    string Notes
+    string Notes,
+    decimal Amount = 0,
+    string? ReferralCutType = null,
+    decimal? ReferralCutValue = null
 ) : IRequest<Guid>;
 
 public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointmentCommand, Guid>
@@ -56,6 +59,37 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
         };
 
         _context.Appointments.Add(appointment);
+
+        // Create Invoice if amount is provided
+        if (request.Amount > 0)
+        {
+            var invoice = new Invoice
+            {
+                AppointmentId = appointment.AppointmentId,
+                PatientId = request.PatientId,
+                PatientName = patient.FullName ?? "UNKNOWN",
+                HospitalId = appointment.HospitalId,
+                InvoiceId = $"INV-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString().Substring(0, 8).ToUpper()}",
+                GrossAmount = request.Amount,
+                DiscountAmount = 0,
+                TotalAmount = request.Amount,
+                PaidAmount = 0,
+                Status = "PENDING",
+                ReferralCutType = request.ReferralCutType ?? "PERCENTAGE",
+                ReferralCutValue = request.ReferralCutValue ?? 0,
+                CreatedAt = DateTime.UtcNow
+            };
+
+            invoice.Items.Add(new InvoiceItem
+            {
+                Description = request.Service,
+                Amount = request.Amount,
+                Quantity = 1
+            });
+
+            _context.Invoices.Add(invoice);
+        }
+
         await _context.SaveChangesAsync(cancellationToken);
 
         return appointment.AppointmentId;

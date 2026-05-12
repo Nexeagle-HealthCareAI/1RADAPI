@@ -21,6 +21,8 @@ public class Invoice : BaseEntity, IHospitalContext
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? PaidAt { get; set; }
     
+    public decimal ReferralCutValue { get; set; } = 0;
+    
     public Guid HospitalId { get; set; }
     
     // Navigation

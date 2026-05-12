@@ -20,5 +20,8 @@ public record AppointmentDto(
     string? Notes,
     string? TechnicianComments,
     Guid? TechnicianId,
-    DateTime? ScannedAt
+    DateTime? ScannedAt,
+    decimal Amount = 0,
+    string ReferralCutType = "PERCENTAGE",
+    decimal ReferralCutValue = 0
 );
