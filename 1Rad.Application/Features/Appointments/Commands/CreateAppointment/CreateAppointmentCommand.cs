@@ -42,7 +42,7 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
         {
             DisplayId = $"APP-{101 + count}",
             PatientId = request.PatientId,
-            PatientName = patient.FullName,
+            PatientName = patient.FullName ?? "Unknown",
             Mobile = patient.Mobile,
             Service = request.Service,
             Modality = request.Modality,
@@ -77,7 +77,6 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
                 Status = "PENDING",
                 ReferralCutValue = request.ReferralCutValue ?? 0,
                 CreatedAt = DateTime.UtcNow
-
             };
 
             invoice.Items.Add(new InvoiceItem
@@ -105,7 +104,8 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
                 var commission = new ReferralCommission
                 {
                     ReferrerId = referrer.ReferrerId,
-                    ReferrerName = referrer.Name ?? request.ReferredBy,
+                    ReferrerName = referrer.Name ?? request.ReferredBy ?? "Self-Referral",
+                    PatientName = patient.FullName ?? "Unknown",
                     Modality = request.Modality,
                     CommissionAmount = request.ReferralCutValue ?? 0,
                     Status = "UNPAID",
@@ -119,7 +119,19 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
         }
 
 
-        await _context.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await _context.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException ex)
+        {
+            var innerMessage = ex.InnerException?.Message ?? "No inner exception details";
+            throw new Exception($"MISSION PERSISTENCE FAILURE: {ex.Message}. Database says: {innerMessage}", ex);
+        }
+        catch (Exception ex)
+        {
+            throw new Exception($"UNEXPECTED SYSTEM ERROR: {ex.Message}", ex);
+        }
 
         return appointment.AppointmentId;
     }

@@ -9,7 +9,6 @@ public class Appointment : BaseEntity, IHospitalContext
     public string? DisplayId { get; set; } // e.g., APP-101
     public Guid PatientId { get; set; }
     
-    [NotMapped]
     public string? PatientName { get; set; } // Denormalized for quick tactical display
     
     public string? Mobile { get; set; }

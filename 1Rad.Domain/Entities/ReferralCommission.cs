@@ -10,12 +10,10 @@ public class ReferralCommission : BaseEntity, IHospitalContext
     // Identity Parameters
     public Guid ReferrerId { get; set; }
     
-    [NotMapped]
     public string ReferrerName { get; set; } = string.Empty;
     
     public string Modality { get; set; } = string.Empty;
     
-    [NotMapped]
     public string PatientName { get; set; } = string.Empty;
     
     public Guid? AppointmentId { get; set; }

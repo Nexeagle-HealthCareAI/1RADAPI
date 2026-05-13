@@ -197,7 +197,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.ToTable("Appointments", "dbo");
             entity.HasKey(e => e.AppointmentId);
             entity.Property(e => e.DisplayId).HasMaxLength(50);
-            // entity.Property(e => e.PatientName).HasMaxLength(255); // Tactical: Ignored via [NotMapped] in Domain Entity
+            entity.Property(e => e.PatientName).IsRequired().HasMaxLength(255); 
             entity.Property(e => e.Service).HasMaxLength(255);
             entity.Property(e => e.Modality).HasMaxLength(50);
             entity.Property(e => e.Type).HasMaxLength(50);
@@ -233,7 +233,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.ToTable("Invoices", "dbo");
             entity.HasKey(e => e.Id);
             entity.Property(e => e.InvoiceId).IsRequired().HasMaxLength(50);
-            // entity.Property(e => e.PatientName).IsRequired().HasMaxLength(255); // Tactical: Ignored via [NotMapped] in Domain Entity
+            entity.Property(e => e.PatientName).IsRequired().HasMaxLength(255); 
             entity.Property(e => e.GrossAmount).HasPrecision(18, 2);
             entity.Property(e => e.DiscountAmount).HasPrecision(18, 2);
             entity.Property(e => e.TotalAmount).HasPrecision(18, 2);
@@ -441,7 +441,8 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
         {
             entity.ToTable("ReferralCommissions", "dbo");
             entity.HasKey(e => e.Id);
-            // entity.Property(e => e.ReferrerName).IsRequired().HasMaxLength(255); // Tactical: Ignored via [NotMapped] in Domain Entity
+            entity.Property(e => e.ReferrerName).IsRequired().HasMaxLength(255); 
+            entity.Property(e => e.PatientName).IsRequired().HasMaxLength(255); 
             entity.Property(e => e.CommissionAmount).HasPrecision(18, 2);
             entity.Property(e => e.AccumulatedTotal).HasPrecision(18, 2);
             entity.Property(e => e.Status).IsRequired().HasMaxLength(50).HasDefaultValue("Pending");

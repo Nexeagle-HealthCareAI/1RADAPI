@@ -11,8 +11,7 @@ public class Invoice : BaseEntity, IHospitalContext
     public Guid? AppointmentId { get; set; }
     public Guid PatientId { get; set; }
     
-    [NotMapped]
-    public string PatientName { get; set; } = string.Empty; // Denormalized for financial records
+    public string? PatientName { get; set; } = string.Empty; // Denormalized for financial records
     
     public decimal GrossAmount { get; set; }
     public decimal DiscountAmount { get; set; }
