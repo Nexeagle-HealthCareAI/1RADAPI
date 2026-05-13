@@ -37,7 +37,7 @@ public class GetAppointmentByIdQueryHandler : IRequestHandler<GetAppointmentById
                 x.Appointment.AppointmentId,
                 x.Appointment.DisplayId ?? string.Empty,
                 x.Appointment.PatientId,
-                x.Appointment.PatientName ?? "Unknown",
+                x.Appointment.Patient != null ? (x.Appointment.Patient.FullName ?? "Unknown") : "Unknown",
                 x.Appointment.Mobile ?? string.Empty,
                 x.Appointment.Patient != null ? (x.Appointment.Patient.Age ?? "0") : "0",
                 x.Appointment.Patient != null ? (x.Appointment.Patient.Gender ?? "Unknown") : "Unknown",

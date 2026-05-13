@@ -47,7 +47,7 @@ public class ExportReferralIntelligenceQueryHandler : IRequestHandler<ExportRefe
             .Select(a => new
             {
                 Referrer = a.ReferredBy ?? "Direct / Walk-in",
-                PatientName = a.PatientName,
+                PatientName = a.Patient != null ? (a.Patient.FullName ?? "Unknown") : "Unknown",
                 PatientID = a.DisplayId,
                 Modality = a.Modality,
                 Service = a.Service,

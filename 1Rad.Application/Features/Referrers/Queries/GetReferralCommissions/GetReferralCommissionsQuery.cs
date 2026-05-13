@@ -55,11 +55,13 @@ public class GetReferralCommissionsQueryHandler : IRequestHandler<GetReferralCom
         return await commissionsQuery
             .OrderByDescending(c => c.TransactionDate)
             .Select(c => new
-            {
                 Commission = c,
                 ReferrerName = c.Referrer.Name,
-                // Join with Appointments to get the true PatientName
-                Appointment = _context.Appointments.FirstOrDefault(a => a.AppointmentId == c.AppointmentId)
+                // Join with Appointments/Patients to get the true identity
+                PatientName = _context.Appointments
+                    .Where(a => a.AppointmentId == c.AppointmentId)
+                    .Select(a => a.Patient.FullName)
+                    .FirstOrDefault()
             })
             .Select(x => new ReferralCommissionDto(
                 x.Commission.Id,
@@ -72,7 +74,7 @@ public class GetReferralCommissionsQueryHandler : IRequestHandler<GetReferralCom
                 x.Commission.Status ?? "UNPAID",
                 x.Commission.ReferenceNumber,
                 x.Commission.Remarks,
-                x.Appointment != null ? x.Appointment.PatientName : (x.Commission.PatientName ?? "Unknown Patient")
+                x.PatientName ?? "Unknown Patient"
             ))
             .ToListAsync(cancellationToken);
     }

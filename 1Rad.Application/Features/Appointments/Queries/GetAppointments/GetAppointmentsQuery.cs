@@ -46,7 +46,7 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
             {
                 var search = request.SearchQuery.ToLower();
                 query = query.Where(x => 
-                    (x.Appointment.PatientName != null && x.Appointment.PatientName.ToLower().Contains(search)) || 
+                    (x.Appointment.Patient != null && x.Appointment.Patient.FullName != null && x.Appointment.Patient.FullName.ToLower().Contains(search)) || 
                     (x.Appointment.Mobile != null && x.Appointment.Mobile.Contains(search)) || 
                     (x.Appointment.DisplayId != null && x.Appointment.DisplayId.ToLower().Contains(search)));
             }
@@ -58,7 +58,7 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
                     x.Appointment.AppointmentId,
                     x.Appointment.DisplayId ?? string.Empty,
                     x.Appointment.PatientId,
-                    x.Appointment.PatientName ?? "Unknown",
+                    x.Appointment.Patient != null ? (x.Appointment.Patient.FullName ?? "Unknown") : "Unknown",
                     x.Appointment.Mobile ?? string.Empty,
                     x.Appointment.Patient != null ? (x.Appointment.Patient.Age != null ? x.Appointment.Patient.Age.ToString() : "0") : "0",
                     x.Appointment.Patient != null ? (x.Appointment.Patient.Gender ?? "Unknown") : "Unknown",
