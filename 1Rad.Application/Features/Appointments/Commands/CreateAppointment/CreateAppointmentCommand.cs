@@ -67,7 +67,7 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
             {
                 AppointmentId = appointment.AppointmentId,
                 PatientId = request.PatientId,
-                PatientName = patient.FullName ?? "UNKNOWN",
+                PatientName = patient.FullName ?? "Unknown",
                 HospitalId = appointment.HospitalId,
                 InvoiceId = $"INV-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString().Substring(0, 8).ToUpper()}",
                 GrossAmount = request.Amount,
@@ -105,7 +105,6 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
                 {
                     ReferrerId = referrer.ReferrerId,
                     ReferrerName = referrer.Name ?? request.ReferredBy ?? "Self-Referral",
-                    PatientName = patient.FullName ?? "Unknown",
                     Modality = request.Modality,
                     CommissionAmount = request.ReferralCutValue ?? 0,
                     Status = "UNPAID",

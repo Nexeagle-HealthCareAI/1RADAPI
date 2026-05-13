@@ -14,6 +14,7 @@ public class ReferralCommission : BaseEntity, IHospitalContext
     
     public string Modality { get; set; } = string.Empty;
     
+    [NotMapped]
     public string PatientName { get; set; } = string.Empty;
     
     public Guid? AppointmentId { get; set; }

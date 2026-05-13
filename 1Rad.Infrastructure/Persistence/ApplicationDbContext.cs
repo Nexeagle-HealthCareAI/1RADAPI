@@ -442,7 +442,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.ToTable("ReferralCommissions", "dbo");
             entity.HasKey(e => e.Id);
             entity.Property(e => e.ReferrerName).IsRequired().HasMaxLength(255); 
-            entity.Property(e => e.PatientName).IsRequired().HasMaxLength(255); 
+            // entity.Property(e => e.PatientName).IsRequired().HasMaxLength(255); 
             entity.Property(e => e.CommissionAmount).HasPrecision(18, 2);
             entity.Property(e => e.AccumulatedTotal).HasPrecision(18, 2);
             entity.Property(e => e.Status).IsRequired().HasMaxLength(50).HasDefaultValue("Pending");
