@@ -54,7 +54,7 @@ public class GetReferralCommissionsQueryHandler : IRequestHandler<GetReferralCom
         // 3. Project with Tactical Joins to resolve missing columns (PatientName/ReferrerName) in DB
         return await commissionsQuery
             .OrderByDescending(c => c.TransactionDate)
-            .Select(c => new
+            .Select(c => new {
                 Commission = c,
                 ReferrerName = c.Referrer.Name,
                 // Join with Appointments/Patients to get the true identity
