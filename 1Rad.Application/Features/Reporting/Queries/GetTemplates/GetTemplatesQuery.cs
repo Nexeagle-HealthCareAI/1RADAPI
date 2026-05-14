@@ -25,7 +25,7 @@ public class GetTemplatesQueryHandler : IRequestHandler<GetTemplatesQuery, List<
         var doctorId = _context.UserContext.UserId;
 
         var query = _context.ReportTemplates
-            .Where(t => t.HospitalId == hospitalId && (t.DoctorId == null || t.DoctorId == doctorId));
+            .Where(t => t.HospitalId == hospitalId);
 
         if (!string.IsNullOrEmpty(request.Modality) && request.Modality != "ALL")
         {

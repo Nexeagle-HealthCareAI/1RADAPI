@@ -343,10 +343,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.Modality).IsRequired().HasMaxLength(50);
             entity.Property(e => e.Content).IsRequired();
 
-            entity.HasOne(e => e.Doctor)
-                .WithMany()
-                .HasForeignKey(e => e.DoctorId)
-                .OnDelete(DeleteBehavior.SetNull);
+
 
             entity.HasOne(e => e.Hospital)
                 .WithMany()

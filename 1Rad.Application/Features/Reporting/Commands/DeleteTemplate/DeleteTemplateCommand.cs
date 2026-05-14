@@ -26,8 +26,7 @@ public class DeleteTemplateCommandHandler : IRequestHandler<DeleteTemplateComman
         var template = await _context.ReportTemplates
             .FirstOrDefaultAsync(t => 
                 t.Id == request.Id && 
-                t.HospitalId == hospitalId && 
-                (t.DoctorId == null || t.DoctorId == doctorId), 
+                t.HospitalId == hospitalId, 
                 cancellationToken);
 
         if (template == null)
