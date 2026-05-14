@@ -10,16 +10,11 @@ namespace _1Rad.Domain.Entities
         public Guid Id { get; set; } = Guid.NewGuid();
         public string Name { get; set; } = string.Empty;
         public string Modality { get; set; } = string.Empty; // X-RAY, MRI, etc.
-        public bool IsStructured { get; set; } = false;
-        
-        // Stores JSON structure for structured reports or HTML/Text for narrative
         public string Content { get; set; } = string.Empty; 
         
-        public Guid? DoctorId { get; set; } // Null if global/hospital template
         public Guid HospitalId { get; set; }
         
         // Navigation
-        public User? Doctor { get; set; }
         public Hospital Hospital { get; set; } = null!;
     }
 
@@ -28,6 +23,7 @@ namespace _1Rad.Domain.Entities
         public Guid Id { get; set; } = Guid.NewGuid();
         public string Trigger { get; set; } = string.Empty; // e.g. .norm
         public string ReplacementText { get; set; } = string.Empty; // Full findings text
+        public string Category { get; set; } = string.Empty; // e.g. Liver, GB, Heart, etc.
         
         public Guid DoctorId { get; set; }
         public Guid HospitalId { get; set; }

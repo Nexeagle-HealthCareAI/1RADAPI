@@ -10,6 +10,7 @@ public record UpsertKeywordCommand : IRequest<ReportingKeyword>
     public Guid Id { get; init; }
     public string Trigger { get; init; } = string.Empty;
     public string ReplacementText { get; init; } = string.Empty;
+    public string Category { get; init; } = string.Empty;
 }
 
 public class UpsertKeywordCommandHandler : IRequestHandler<UpsertKeywordCommand, ReportingKeyword>
@@ -48,6 +49,7 @@ public class UpsertKeywordCommandHandler : IRequestHandler<UpsertKeywordCommand,
                 Id = request.Id == Guid.Empty ? Guid.NewGuid() : request.Id,
                 Trigger = request.Trigger,
                 ReplacementText = request.ReplacementText,
+                Category = request.Category,
                 HospitalId = hospitalId,
                 DoctorId = doctorId
             };
@@ -68,6 +70,7 @@ public class UpsertKeywordCommandHandler : IRequestHandler<UpsertKeywordCommand,
 
             existing.Trigger = request.Trigger;
             existing.ReplacementText = request.ReplacementText;
+            existing.Category = request.Category;
 
             await _context.SaveChangesAsync(cancellationToken);
             

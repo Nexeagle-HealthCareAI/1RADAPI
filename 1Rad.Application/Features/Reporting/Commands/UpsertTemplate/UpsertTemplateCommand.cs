@@ -11,7 +11,6 @@ public record UpsertTemplateCommand : IRequest<ReportTemplate>
     public string Name { get; init; } = string.Empty;
     public string Modality { get; init; } = string.Empty;
     public string Content { get; init; } = string.Empty;
-    public bool IsStructured { get; init; }
 }
 
 public class UpsertTemplateCommandHandler : IRequestHandler<UpsertTemplateCommand, ReportTemplate>
@@ -56,22 +55,22 @@ public class UpsertTemplateCommandHandler : IRequestHandler<UpsertTemplateComman
                 Name = request.Name,
                 Modality = request.Modality,
                 Content = request.Content,
-                IsStructured = request.IsStructured,
-                HospitalId = hospitalId,
-                DoctorId = doctorId
+                HospitalId = hospitalId
             };
 
             _context.ReportTemplates.Add(template);
             await _context.SaveChangesAsync(cancellationToken);
             
+            // SYNC WITH SERVICE CHARGE
+            await SynchronizeServiceCharge(template, cancellationToken);
+
             return template;
         }
         else
         {
             // Update existing template
             // Verify ownership
-            if (existing.HospitalId != hospitalId || 
-                (existing.DoctorId.HasValue && existing.DoctorId != doctorId))
+            if (existing.HospitalId != hospitalId)
             {
                 throw new UnauthorizedAccessException("You do not have permission to modify this template.");
             }
@@ -79,11 +78,56 @@ public class UpsertTemplateCommandHandler : IRequestHandler<UpsertTemplateComman
             existing.Name = request.Name;
             existing.Modality = request.Modality;
             existing.Content = request.Content;
-            existing.IsStructured = request.IsStructured;
 
             await _context.SaveChangesAsync(cancellationToken);
+
+            // SYNC WITH SERVICE CHARGE
+            await SynchronizeServiceCharge(existing, cancellationToken);
             
             return existing;
         }
+    }
+
+    private async Task SynchronizeServiceCharge(ReportTemplate template, CancellationToken cancellationToken)
+    {
+        // 1. Check if a ServiceCharge is already linked to this template
+        var linkedService = await _context.ServiceCharges
+            .FirstOrDefaultAsync(s => s.TemplateId == template.Id, cancellationToken);
+
+        if (linkedService == null)
+        {
+            // 2. If not linked, check if a ServiceCharge with the same name exists in this hospital/modality
+            linkedService = await _context.ServiceCharges
+                .FirstOrDefaultAsync(s => s.HospitalId == template.HospitalId && 
+                                         s.Modality == template.Modality && 
+                                         s.ServiceName == template.Name, cancellationToken);
+            
+            if (linkedService != null)
+            {
+                // Link existing service to this template
+                linkedService.TemplateId = template.Id;
+            }
+            else
+            {
+                // 3. Create new ServiceCharge if none exists
+                linkedService = new ServiceCharge
+                {
+                    HospitalId = template.HospitalId,
+                    Modality = template.Modality,
+                    ServiceName = template.Name,
+                    Amount = 0, // Default to 0, to be configured in billing
+                    TemplateId = template.Id
+                };
+                _context.ServiceCharges.Add(linkedService);
+            }
+        }
+        else
+        {
+            // 4. Update existing linked service name if it changed
+            linkedService.ServiceName = template.Name;
+            linkedService.Modality = template.Modality;
+        }
+
+        await _context.SaveChangesAsync(cancellationToken);
     }
 }

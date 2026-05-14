@@ -12,6 +12,7 @@ public record UpsertServiceChargeCommand : IRequest<Guid>
     public string ServiceName { init; get; } = string.Empty;
     public decimal Amount { init; get; }
     public decimal ReferralCutValue { init; get; } = 0;
+    public Guid? TemplateId { init; get; }
 }
 
 public class UpsertServiceChargeCommandHandler : IRequestHandler<UpsertServiceChargeCommand, Guid>
@@ -91,6 +92,7 @@ public class UpsertServiceChargeCommandHandler : IRequestHandler<UpsertServiceCh
             entity.ServiceName = request.ServiceName;
             entity.Amount = request.Amount;
             entity.ReferralCutValue = request.ReferralCutValue;
+            entity.TemplateId = request.TemplateId;
 
             await _context.SaveChangesAsync(cancellationToken);
 
