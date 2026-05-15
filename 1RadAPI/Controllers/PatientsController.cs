@@ -1,6 +1,7 @@
 using _1Rad.Application.Features.Patients.Queries.GetPatients;
 using _1Rad.Application.Features.Patients.Commands.CreatePatient;
 using _1Rad.Application.Features.Patients.Commands.UpdatePatient;
+using _1Rad.Application.Features.Patients.Queries.GetPatientTimeline;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -39,5 +40,12 @@ public class PatientsController : ControllerBase
         if (id != command.PatientId) return BadRequest("Identity mismatch.");
         var result = await _mediator.Send(command);
         return Ok(result);
+    }
+
+    [HttpGet("{id}/timeline")]
+    public async Task<IActionResult> GetTimeline(Guid id)
+    {
+        var result = await _mediator.Send(new GetPatientTimelineQuery(id));
+        return Ok(new { success = true, data = result });
     }
 }

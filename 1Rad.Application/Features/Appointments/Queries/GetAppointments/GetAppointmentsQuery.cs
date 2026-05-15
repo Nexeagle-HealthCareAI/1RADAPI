@@ -76,8 +76,12 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
                     x.Appointment.TechnicianId,
                     x.Appointment.ScannedAt,
                     x.Invoice != null ? x.Invoice.TotalAmount : 0,
-                    x.Invoice != null ? x.Invoice.ReferralCutValue : 0
-
+                    x.Invoice != null ? x.Invoice.ReferralCutValue : 0,
+                    _context.StudyAssets.Count(sa => sa.AppointmentId == x.Appointment.AppointmentId),
+                    _context.DiagnosticReports
+                        .Where(dr => dr.AppointmentId == x.Appointment.AppointmentId)
+                        .Select(dr => dr.Impression)
+                        .FirstOrDefault()
                 ))
                 .ToListAsync(cancellationToken);
 
