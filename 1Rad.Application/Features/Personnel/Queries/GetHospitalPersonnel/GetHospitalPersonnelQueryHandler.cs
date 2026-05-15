@@ -24,6 +24,7 @@ public class GetHospitalPersonnelQueryHandler : IRequestHandler<GetHospitalPerso
                 m.User.FullName,
                 m.User.Email,
                 m.User.Mobile,
+                m.User.Password,
                 m.Roles.Select(r => r.RoleName).ToList(),
                 m.User.Specialization,
                 m.User.Degree,

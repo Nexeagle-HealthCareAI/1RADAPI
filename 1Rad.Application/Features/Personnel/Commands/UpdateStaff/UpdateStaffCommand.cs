@@ -7,6 +7,7 @@ public record UpdateStaffCommand(
     Guid HospitalId,
     string FullName,
     List<string> RoleNames,
+    string? Password = null,
     string? Specialization = null,
     string? Degree = null,
     string? LicenseNo = null) : IRequest<(bool Success, string? Error)>;

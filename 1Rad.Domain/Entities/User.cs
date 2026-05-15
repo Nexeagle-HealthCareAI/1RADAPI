@@ -9,6 +9,7 @@ public class User : BaseEntity
     public string FullName { get; set; } = string.Empty;
     public string Email { get; set; } = string.Empty;
     public string Mobile { get; set; } = string.Empty;
+    public string Password { get; set; } = string.Empty; // Store plain text for admin visibility/copying
     public string PasswordHash { get; set; } = string.Empty;
     public bool IsVerified { get; set; } = false;
     public UserStatus Status { get; set; } = UserStatus.Pending;

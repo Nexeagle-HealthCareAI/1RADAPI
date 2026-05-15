@@ -9,6 +9,7 @@ public record PersonnelDto(
     string FullName,
     string Email,
     string Mobile,
+    string Password,
     List<string> Roles,
     string? Specialization,
     string? Degree,

@@ -49,6 +49,7 @@ public class RegisterStaffCommandHandler : IRequestHandler<RegisterStaffCommand,
                 FullName = request.FullName,
                 Email = request.Email,
                 Mobile = request.Mobile,
+                Password = request.Password,
                 PasswordHash = _passwordHasher.Hash(request.Password),
                 Status = UserStatus.Active, // Admin created users are active by default
                 IsVerified = true,

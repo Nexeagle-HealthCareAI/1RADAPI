@@ -7,10 +7,12 @@ namespace _1Rad.Application.Features.Personnel.Commands.UpdateStaff;
 public class UpdateStaffCommandHandler : IRequestHandler<UpdateStaffCommand, (bool Success, string? Error)>
 {
     private readonly IApplicationDbContext _context;
+    private readonly IPasswordHasher _passwordHasher;
 
-    public UpdateStaffCommandHandler(IApplicationDbContext _context)
+    public UpdateStaffCommandHandler(IApplicationDbContext _context, IPasswordHasher _passwordHasher)
     {
         this._context = _context;
+        this._passwordHasher = _passwordHasher;
     }
 
     public async Task<(bool Success, string? Error)> Handle(UpdateStaffCommand request, CancellationToken cancellationToken)
@@ -30,9 +32,16 @@ public class UpdateStaffCommandHandler : IRequestHandler<UpdateStaffCommand, (bo
         user.Degree = request.Degree;
         user.LicenseNo = request.LicenseNo;
 
+        if (!string.IsNullOrWhiteSpace(request.Password))
+        {
+            user.Password = request.Password;
+            user.PasswordHash = _passwordHasher.Hash(request.Password);
+        }
+
         // 2. Resolve & Update Roles
+        var normalizedRoleNames = request.RoleNames.Select(rn => rn.Trim().ToLower()).ToList();
         var roles = await _context.Roles
-            .Where(r => request.RoleNames.Contains(r.RoleName.ToLower()))
+            .Where(r => normalizedRoleNames.Contains(r.RoleName.ToLower()))
             .ToListAsync(cancellationToken);
 
         mapping.Roles.Clear();
