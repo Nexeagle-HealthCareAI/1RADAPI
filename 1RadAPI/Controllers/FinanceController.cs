@@ -44,6 +44,15 @@ public class FinanceController : ControllerBase
         return Ok(new { id = result });
     }
 
+    [HttpPut("registry/{id}")]
+    public async Task<IActionResult> UpdateRegistry(Guid id, [FromBody] UpsertServiceChargeCommand command)
+    {
+        var updatedCommand = command with { Id = id };
+        var result = await _mediator.Send(updatedCommand);
+        return Ok(new { id = result });
+    }
+
+
     [HttpDelete("registry/{id}")]
     public async Task<IActionResult> DeleteRegistry(Guid id)
     {
