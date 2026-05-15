@@ -24,11 +24,19 @@ public class RegisterStaffCommandHandler : IRequestHandler<RegisterStaffCommand,
         if (hospital == null) return (Guid.Empty, "Hospital not found.");
 
         // 2. Resolve Roles
+        var normalizedRequestRoles = request.RoleNames.Select(r => r.Trim().ToLower()).ToList();
         var roles = await _context.Roles
-            .Where(r => request.RoleNames.Contains(r.RoleName.ToLower()))
+            .Where(r => normalizedRequestRoles.Contains(r.RoleName.ToLower()))
             .ToListAsync(cancellationToken);
         
-        if (!roles.Any()) return (Guid.Empty, "Invalid roles selected.");
+        if (!roles.Any())
+        {
+            // Fallback for strict database collations: Fetch and filter in-memory if query returns nothing
+            var allRoles = await _context.Roles.ToListAsync(cancellationToken);
+            roles = allRoles.Where(r => normalizedRequestRoles.Contains(r.RoleName.ToLower())).ToList();
+        }
+
+        if (!roles.Any()) return (Guid.Empty, "Invalid roles selected. Please verify system role naming.");
 
         // 3. Check for existing User
         var user = await _context.Users
