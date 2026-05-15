@@ -11,7 +11,8 @@ public record GenerateInvoiceCommand : IRequest<Guid>
     public Guid? AppointmentId { get; init; }
     public Guid PatientId { get; init; }
     public Guid? ReferrerId { get; init; }
-    public decimal DiscountAmount { get; init; }
+    public decimal CentreDiscount { get; init; }
+    public decimal ReferrerDiscount { get; init; }
     public decimal? CommissionAmount { get; init; }
     public List<InvoiceItemDto> Items { get; init; } = new();
 }
@@ -92,12 +93,12 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
             }
 
             var grossAmount = request.Items.Sum(x => x.Amount * x.Quantity);
-            var discount = request.DiscountAmount;
+            var totalDiscount = request.CentreDiscount + request.ReferrerDiscount;
             
             // Security/Business Rule: Discount cannot exceed Gross Amount
-            if (discount > grossAmount)
+            if (totalDiscount > grossAmount)
             {
-                discount = grossAmount;
+                totalDiscount = grossAmount;
             }
 
             var invoice = new Invoice
@@ -108,8 +109,10 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
                 HospitalId = hospitalId,
                 InvoiceId = $"INV-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString().Substring(0, 8).ToUpper()}",
                 GrossAmount = grossAmount,
-                DiscountAmount = discount,
-                TotalAmount = grossAmount - discount,
+                DiscountAmount = totalDiscount,
+                CentreDiscount = request.CentreDiscount,
+                ReferrerDiscount = request.ReferrerDiscount,
+                TotalAmount = grossAmount - totalDiscount,
                 PaidAmount = 0,
                 ReferralCutValue = request.CommissionAmount ?? 0,
                 Status = "PENDING",
@@ -140,19 +143,22 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
                         .Where(c => c.ReferrerId == request.ReferrerId.Value && c.HospitalId == hospitalId)
                         .SumAsync(c => (decimal?)c.CommissionAmount, cancellationToken) ?? 0;
 
+                    var netCommission = (request.CommissionAmount ?? 0) - request.ReferrerDiscount;
+                    if (netCommission < 0) netCommission = 0;
+
                     var commission = new ReferralCommission
                     {
                         ReferrerId = request.ReferrerId.Value,
                         ReferrerName = referrer.Name ?? "Unknown",
-                        Modality = invoice.Items.FirstOrDefault()?.Description ?? "GENERAL", // Use first item description as proxy for modality if needed
+                        Modality = invoice.Items.FirstOrDefault()?.Description ?? "GENERAL",
                         PatientName = patient.FullName ?? "N/A",
-                        CommissionAmount = request.CommissionAmount.Value,
-                        AccumulatedTotal = currentTotal + request.CommissionAmount.Value,
+                        CommissionAmount = netCommission,
+                        AccumulatedTotal = currentTotal + netCommission,
                         TransactionDate = DateTime.UtcNow,
                         Status = "UNPAID",
                         ReferenceNumber = invoice.InvoiceId,
                         AppointmentId = invoice.AppointmentId,
-                        Remarks = $"Manual Invoice Generation for {patient.FullName}",
+                        Remarks = $"Manual Invoice Generation for {patient.FullName}" + (request.ReferrerDiscount > 0 ? $" (Ref. Discount: ₹{request.ReferrerDiscount})" : ""),
                         HospitalId = hospitalId
                     };
                     _context.ReferralCommissions.Add(commission);
