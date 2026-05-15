@@ -60,8 +60,12 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
 
         _context.Appointments.Add(appointment);
 
-        // Create Invoice if amount is provided
-        if (request.Amount > 0)
+        // Fetch Hospital settings to check for auto-billing preference
+        var hospital = await _context.Hospitals.FindAsync(new object[] { appointment.HospitalId }, cancellationToken);
+        bool isAutoBillingEnabled = hospital?.IsAutoBillingEnabled ?? false;
+
+        // Create Invoice if amount is provided AND auto-billing is authorized
+        if (request.Amount > 0 && isAutoBillingEnabled)
         {
             var invoice = new Invoice
             {
