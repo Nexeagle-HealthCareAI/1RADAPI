@@ -19,7 +19,7 @@ public record TimelineReportDto(
     string Findings,
     string Impression,
     string Advice,
-    DateTime CreatedAt,
+    DateTime? CreatedAt,
     string DoctorName
 );
 
@@ -28,5 +28,6 @@ public record TimelineAssetDto(
     string FileName,
     string FileType,
     string BlobUrl,
-    DateTime UploadedAt
+    DateTime? UploadedAt
 );
+
