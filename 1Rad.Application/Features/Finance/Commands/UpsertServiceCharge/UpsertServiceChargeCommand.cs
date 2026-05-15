@@ -50,6 +50,11 @@ public class UpsertServiceChargeCommandHandler : IRequestHandler<UpsertServiceCh
                 throw new ArgumentException("Amount must be greater than zero.", nameof(request.Amount));
             }
 
+            if (request.ReferralCutValue > request.Amount)
+            {
+                throw new ArgumentException("Referral cut cannot exceed the total service amount.", nameof(request.ReferralCutValue));
+            }
+
             ServiceCharge? entity;
 
             if (request.Id.HasValue && request.Id != Guid.Empty)
