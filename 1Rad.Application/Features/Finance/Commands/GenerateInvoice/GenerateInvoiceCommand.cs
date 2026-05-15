@@ -10,7 +10,9 @@ public record GenerateInvoiceCommand : IRequest<Guid>
 {
     public Guid? AppointmentId { get; init; }
     public Guid PatientId { get; init; }
+    public Guid? ReferrerId { get; init; }
     public decimal DiscountAmount { get; init; }
+    public decimal? CommissionAmount { get; init; }
     public List<InvoiceItemDto> Items { get; init; } = new();
 }
 
@@ -109,6 +111,7 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
                 DiscountAmount = discount,
                 TotalAmount = grossAmount - discount,
                 PaidAmount = 0,
+                ReferralCutValue = request.CommissionAmount ?? 0,
                 Status = "PENDING",
                 CreatedAt = DateTime.UtcNow
             };
@@ -124,6 +127,38 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
             }
 
             _context.Invoices.Add(invoice);
+
+            // Record Referral Commission if Referrer is provided
+            if (request.ReferrerId.HasValue && (request.CommissionAmount ?? 0) > 0)
+            {
+                var referrer = await _context.Referrers
+                    .FirstOrDefaultAsync(r => r.ReferrerId == request.ReferrerId.Value, cancellationToken);
+
+                if (referrer != null)
+                {
+                    var currentTotal = await _context.ReferralCommissions
+                        .Where(c => c.ReferrerId == request.ReferrerId.Value && c.HospitalId == hospitalId)
+                        .SumAsync(c => (decimal?)c.CommissionAmount, cancellationToken) ?? 0;
+
+                    var commission = new ReferralCommission
+                    {
+                        ReferrerId = request.ReferrerId.Value,
+                        ReferrerName = referrer.Name ?? "Unknown",
+                        Modality = invoice.Items.FirstOrDefault()?.Description ?? "GENERAL", // Use first item description as proxy for modality if needed
+                        PatientName = patient.FullName ?? "N/A",
+                        CommissionAmount = request.CommissionAmount.Value,
+                        AccumulatedTotal = currentTotal + request.CommissionAmount.Value,
+                        TransactionDate = DateTime.UtcNow,
+                        Status = "UNPAID",
+                        ReferenceNumber = invoice.InvoiceId,
+                        AppointmentId = invoice.AppointmentId,
+                        Remarks = $"Manual Invoice Generation for {patient.FullName}",
+                        HospitalId = hospitalId
+                    };
+                    _context.ReferralCommissions.Add(commission);
+                }
+            }
+
             await _context.SaveChangesAsync(cancellationToken);
 
             return invoice.Id;
