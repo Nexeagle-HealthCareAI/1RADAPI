@@ -104,20 +104,24 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
                 // Ensure patient record is linked to this referrer for longitudinal tracking
                 patient.ReferrerId = referrer.ReferrerId;
 
-                // Record commission even if amount is zero to maintain mission audit trail
-                var commission = new ReferralCommission
+                // Only generate financial commissions automatically if auto-billing is enabled
+                if (isAutoBillingEnabled)
                 {
-                    ReferrerId = referrer.ReferrerId,
-                    ReferrerName = referrer.Name ?? request.ReferredBy ?? "Self-Referral",
-                    Modality = request.Modality,
-                    CommissionAmount = request.ReferralCutValue ?? 0,
-                    Status = "UNPAID",
-                    TransactionDate = DateTime.UtcNow,
-                    HospitalId = appointment.HospitalId,
-                    AppointmentId = appointment.AppointmentId
-                };
+                    // Record commission even if amount is zero to maintain mission audit trail
+                    var commission = new ReferralCommission
+                    {
+                        ReferrerId = referrer.ReferrerId,
+                        ReferrerName = referrer.Name ?? request.ReferredBy ?? "Self-Referral",
+                        Modality = request.Modality,
+                        CommissionAmount = request.ReferralCutValue ?? 0,
+                        Status = "UNPAID",
+                        TransactionDate = DateTime.UtcNow,
+                        HospitalId = appointment.HospitalId,
+                        AppointmentId = appointment.AppointmentId
+                    };
 
-                _context.ReferralCommissions.Add(commission);
+                    _context.ReferralCommissions.Add(commission);
+                }
             }
         }
 
