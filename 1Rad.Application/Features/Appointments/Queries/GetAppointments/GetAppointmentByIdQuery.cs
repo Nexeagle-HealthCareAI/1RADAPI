@@ -60,7 +60,8 @@ public class GetAppointmentByIdQueryHandler : IRequestHandler<GetAppointmentById
                 _context.DiagnosticReports
                     .Where(dr => dr.AppointmentId == x.Appointment.AppointmentId)
                     .Select(dr => dr.Impression)
-                    .FirstOrDefault()
+                    .FirstOrDefault(),
+                x.Appointment.DailyTokenNumber
             ))
 
             .FirstOrDefaultAsync(cancellationToken);

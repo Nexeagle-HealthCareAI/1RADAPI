@@ -16,6 +16,7 @@ public class UpdateStaffCommandHandlerTests
     private readonly Mock<IUserContext> _userContextMock;
     private readonly Mock<IPublisher> _publisherMock;
     private readonly Mock<ILogger<UpdateStaffCommandHandler>> _loggerMock;
+    private readonly Mock<IPasswordHasher> _passwordHasherMock;
     private readonly ApplicationDbContext _context;
 
     public UpdateStaffCommandHandlerTests()
@@ -23,6 +24,7 @@ public class UpdateStaffCommandHandlerTests
         _userContextMock = new Mock<IUserContext>();
         _publisherMock = new Mock<IPublisher>();
         _loggerMock = new Mock<ILogger<UpdateStaffCommandHandler>>();
+        _passwordHasherMock = new Mock<IPasswordHasher>();
 
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()
             .UseInMemoryDatabase(databaseName: Guid.NewGuid().ToString())
@@ -73,7 +75,7 @@ public class UpdateStaffCommandHandlerTests
 
         _userContextMock.Setup(x => x.HospitalId).Returns(hospitalId);
 
-        var handler = new UpdateStaffCommandHandler(_context);
+        var handler = new UpdateStaffCommandHandler(_context, _passwordHasherMock.Object);
         var command = new UpdateStaffCommand(
             userId,
             hospitalId,
@@ -112,7 +114,7 @@ public class UpdateStaffCommandHandlerTests
         var hospitalId = Guid.NewGuid();
         _userContextMock.Setup(x => x.HospitalId).Returns(hospitalId);
 
-        var handler = new UpdateStaffCommandHandler(_context);
+        var handler = new UpdateStaffCommandHandler(_context, _passwordHasherMock.Object);
         var command = new UpdateStaffCommand(
             Guid.NewGuid(),
             hospitalId,
@@ -165,7 +167,7 @@ public class UpdateStaffCommandHandlerTests
 
         _userContextMock.Setup(x => x.HospitalId).Returns(hospitalId2);
 
-        var handler = new UpdateStaffCommandHandler(_context);
+        var handler = new UpdateStaffCommandHandler(_context, _passwordHasherMock.Object);
         var command = new UpdateStaffCommand(
             userId,
             hospitalId2,
@@ -218,7 +220,7 @@ public class UpdateStaffCommandHandlerTests
 
         _userContextMock.Setup(x => x.HospitalId).Returns(hospitalId);
 
-        var handler = new UpdateStaffCommandHandler(_context);
+        var handler = new UpdateStaffCommandHandler(_context, _passwordHasherMock.Object);
         var command = new UpdateStaffCommand(
             userId,
             hospitalId,
