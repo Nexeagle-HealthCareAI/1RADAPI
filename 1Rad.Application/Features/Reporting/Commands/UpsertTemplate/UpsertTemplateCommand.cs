@@ -43,6 +43,18 @@ public class UpsertTemplateCommandHandler : IRequestHandler<UpsertTemplateComman
             throw new ArgumentException("Template content is required.", nameof(request.Content));
         }
 
+        // Prevent duplicate template name for the given modality in the same hospital
+        var duplicateExists = await _context.ReportTemplates
+            .AnyAsync(t => t.HospitalId == hospitalId &&
+                           t.Modality.ToLower() == request.Modality.ToLower() &&
+                           t.Name.ToLower() == request.Name.ToLower() &&
+                           t.Id != request.Id, cancellationToken);
+
+        if (duplicateExists)
+        {
+            throw new ArgumentException($"A template with the name '{request.Name}' already exists for modality '{request.Modality}'.", nameof(request.Name));
+        }
+
         var existing = await _context.ReportTemplates
             .FirstOrDefaultAsync(t => t.Id == request.Id, cancellationToken);
 
