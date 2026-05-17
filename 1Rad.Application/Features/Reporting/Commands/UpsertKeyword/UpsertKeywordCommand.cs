@@ -38,6 +38,17 @@ public class UpsertKeywordCommandHandler : IRequestHandler<UpsertKeywordCommand,
             throw new ArgumentException("Replacement text is required.", nameof(request.ReplacementText));
         }
 
+        // Prevent duplicate trigger word (case-insensitive check) for the doctor
+        var duplicateExists = await _context.ReportingKeywords
+            .AnyAsync(k => k.DoctorId == doctorId &&
+                           k.Trigger.ToLower() == request.Trigger.ToLower() &&
+                           k.Id != request.Id, cancellationToken);
+
+        if (duplicateExists)
+        {
+            throw new ArgumentException($"A keyword with the trigger '/{request.Trigger}' already exists.", nameof(request.Trigger));
+        }
+
         var existing = await _context.ReportingKeywords
             .FirstOrDefaultAsync(k => k.Id == request.Id, cancellationToken);
 
