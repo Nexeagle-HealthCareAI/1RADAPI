@@ -41,7 +41,7 @@ public class GetFinanceStatsQueryHandler : IRequestHandler<GetFinanceStatsQuery,
             var invoiceData = await _context.Invoices
                 .AsNoTracking()
                 .Where(i => i.HospitalId == hospitalId)
-                .Select(i => new { i.Status, i.TotalAmount, i.PaidAmount })
+                .Select(i => new { i.Status, i.GrossAmount, i.TotalAmount, i.PaidAmount })
                 .ToListAsync(cancellationToken);
 
             var expenseData = await _context.Expenses
@@ -55,7 +55,8 @@ public class GetFinanceStatsQueryHandler : IRequestHandler<GetFinanceStatsQuery,
             var paidInvoices = invoiceData.Where(i => i.Status == "PAID").ToList();
             var pendingInvoices = invoiceData.Where(i => i.Status != "PAID" && i.Status != "CANCELLED").ToList();
 
-            var totalRev = invoiceData.Sum(i => i.PaidAmount);
+            var totalRev = invoiceData.Sum(i => i.GrossAmount);
+            var totalPaid = invoiceData.Sum(i => i.PaidAmount);
             var pendingRev = pendingInvoices.Sum(i => i.TotalAmount - i.PaidAmount);
             var totalExp = expenseData.Sum(e => e.Amount);
             
@@ -64,7 +65,7 @@ public class GetFinanceStatsQueryHandler : IRequestHandler<GetFinanceStatsQuery,
                 TotalRevenue = totalRev,
                 PendingRevenue = pendingRev,
                 TotalExpenses = totalExp,
-                NetProfit = totalRev - totalExp,
+                NetProfit = totalPaid - totalExp,
                 PendingCount = pendingInvoices.Count,
                 RealizationRate = invoiceData.Any() ? (int)((decimal)paidInvoices.Count / invoiceData.Count * 100) : 0,
                 AverageTicket = paidInvoices.Any() ? paidInvoices.Average(i => i.TotalAmount) : 0

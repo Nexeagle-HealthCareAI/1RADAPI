@@ -123,7 +123,7 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                                 x.i.CreatedAt, 
                                 x.i.ReferralCutValue,
                                 Modality = a != null ? a.Modality : "GENERAL",
-                                HasReferrer = a != null && a.ReferrerId != null
+                                HasReferrer = a != null && !string.IsNullOrEmpty(a.ReferredBy)
                             })
                 .ToListAsync(cancellationToken);
             
@@ -133,7 +133,7 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
             
             if (!invoiceData.Any() && !expenseData.Any()) return new FinancialMatrixDto();
 
-            var totalLifeTimeInvoiced = invoiceData.Sum(i => i.TotalAmount);
+            var totalLifeTimeInvoiced = invoiceData.Sum(i => i.GrossAmount);
 
             // 1. Temporal Aggregation (Standard)
             var daily = invoiceData
@@ -141,7 +141,7 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 .Select(g => new
                 {
                     Date = g.Key,
-                    Invoiced = g.Sum(i => i.TotalAmount),
+                    Invoiced = g.Sum(i => i.GrossAmount),
                     Collected = g.Sum(i => i.PaidAmount)
                 })
                 .Concat(expenseData.GroupBy(e => e.TransactionDate.Date).Select(g => new { Date = g.Key, Invoiced = 0m, Collected = 0m })) // Ensure date coverage
@@ -165,12 +165,12 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 .Select(g => new MatrixItemDto
                 {
                     Label = $"Week {g.Key}",
-                    Invoiced = g.Sum(i => i.TotalAmount),
+                    Invoiced = g.Sum(i => i.GrossAmount),
                     Collected = g.Sum(i => i.PaidAmount),
                     Expenses = expenseData.Where(e => System.Globalization.ISOWeek.GetWeekOfYear(e.TransactionDate) == g.Key).Sum(e => e.Amount),
                     Pending = g.Sum(i => i.TotalAmount - i.PaidAmount),
-                    RealizationRate = g.Sum(i => i.TotalAmount) > 0 
-                        ? Math.Min(100, (int)(g.Sum(i => i.PaidAmount) / g.Sum(i => i.TotalAmount) * 100))
+                    RealizationRate = g.Sum(i => i.GrossAmount) > 0 
+                        ? Math.Min(100, (int)(g.Sum(i => i.PaidAmount) / g.Sum(i => i.GrossAmount) * 100))
                         : 0
                 }).Take(8).ToList();
 
@@ -180,12 +180,12 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 .Select(g => new MatrixItemDto
                 {
                     Label = new DateTime(g.Key.Year, g.Key.Month, 1).ToString("MMMM yyyy"),
-                    Invoiced = g.Sum(i => i.TotalAmount),
+                    Invoiced = g.Sum(i => i.GrossAmount),
                     Collected = g.Sum(i => i.PaidAmount),
                     Expenses = expenseData.Where(e => e.TransactionDate.Year == g.Key.Year && e.TransactionDate.Month == g.Key.Month).Sum(e => e.Amount),
                     Pending = g.Sum(i => i.TotalAmount - i.PaidAmount),
-                    RealizationRate = g.Sum(i => i.TotalAmount) > 0 
-                        ? Math.Min(100, (int)(g.Sum(i => i.PaidAmount) / g.Sum(i => i.TotalAmount) * 100))
+                    RealizationRate = g.Sum(i => i.GrossAmount) > 0 
+                        ? Math.Min(100, (int)(g.Sum(i => i.PaidAmount) / g.Sum(i => i.GrossAmount) * 100))
                         : 0
                 }).Take(12).ToList();
 
@@ -195,12 +195,12 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 .Select(g => new MatrixItemDto
                 {
                     Label = g.Key.ToString(),
-                    Invoiced = g.Sum(i => i.TotalAmount),
+                    Invoiced = g.Sum(i => i.GrossAmount),
                     Collected = g.Sum(i => i.PaidAmount),
                     Expenses = expenseData.Where(e => e.TransactionDate.Year == g.Key).Sum(e => e.Amount),
                     Pending = g.Sum(i => i.TotalAmount - i.PaidAmount),
-                    RealizationRate = g.Sum(i => i.TotalAmount) > 0 
-                        ? Math.Min(100, (int)(g.Sum(i => i.PaidAmount) / g.Sum(i => i.TotalAmount) * 100))
+                    RealizationRate = g.Sum(i => i.GrossAmount) > 0 
+                        ? Math.Min(100, (int)(g.Sum(i => i.PaidAmount) / g.Sum(i => i.GrossAmount) * 100))
                         : 0
                 }).ToList();
 
@@ -209,9 +209,9 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 .Select(g => new ModalityRevenueDto
                 {
                     Modality = (g.Key ?? "GENERAL").ToUpper(),
-                    RangeRevenue = g.Sum(i => i.TotalAmount),
+                    RangeRevenue = g.Sum(i => i.GrossAmount),
                     ContributionPercentage = totalLifeTimeInvoiced > 0 
-                        ? (int)(g.Sum(i => i.TotalAmount) / totalLifeTimeInvoiced * 100)
+                        ? (int)(g.Sum(i => i.GrossAmount) / totalLifeTimeInvoiced * 100)
                         : 0
                 })
                 .OrderByDescending(x => x.RangeRevenue)
@@ -231,8 +231,8 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 LeakagePercentage = totalGross > 0 ? (double)Math.Round((totalDiscount / totalGross) * 100, 1) : 0,
                 OutstandingAR = invoiceData.Sum(i => i.TotalAmount - i.PaidAmount),
                 ExpenseRatio = totalPaid > 0 ? (double)Math.Round((totalExpenses / totalPaid) * 100, 1) : 0,
-                AverageRevenuePerScan = invoiceData.Any() ? Math.Round(invoiceData.Sum(i => i.TotalAmount) / invoiceData.Count, 2) : 0,
-                TotalScansCount = invoiceData.Count
+                AverageRevenuePerScan = invoiceData.Any() ? Math.Round(invoiceData.Sum(i => i.GrossAmount) / invoiceData.Count(), 2) : 0,
+                TotalScansCount = invoiceData.Count()
             };
 
             // ADVANCED MODALITY PROFITABILITY MATRIX (Modality revenue minus partner cuts)
@@ -242,7 +242,7 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 {
                     var gross = g.Sum(x => x.GrossAmount);
                     var cut = g.Sum(x => x.ReferralCutValue);
-                    var net = g.Sum(x => x.TotalAmount) - cut;
+                    var net = g.Sum(x => x.GrossAmount) - cut;
                     return new ModalityProfitabilityDto
                     {
                         Modality = (g.Key ?? "GENERAL").ToUpper(),
@@ -259,15 +259,15 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
             // ADVANCED REFERRAL CONTRIBUTION ANALYSIS
             var referredInvoices = invoiceData.Where(i => i.HasReferrer).ToList();
             var directInvoices = invoiceData.Where(i => !i.HasReferrer).ToList();
-            var totalNetBilled = invoiceData.Sum(i => i.TotalAmount);
+            var totalNetBilled = invoiceData.Sum(i => i.GrossAmount);
             
             var referralContribution = new ReferralContributionDto
             {
-                ReferredRevenue = referredInvoices.Sum(i => i.TotalAmount),
-                DirectRevenue = directInvoices.Sum(i => i.TotalAmount),
-                ReferralRatio = totalNetBilled > 0 ? (double)Math.Round((referredInvoices.Sum(i => i.TotalAmount) / totalNetBilled) * 100, 1) : 0,
-                ReferredScansCount = referredInvoices.Count,
-                DirectScansCount = directInvoices.Count
+                ReferredRevenue = referredInvoices.Sum(i => i.GrossAmount),
+                DirectRevenue = directInvoices.Sum(i => i.GrossAmount),
+                ReferralRatio = totalNetBilled > 0 ? (double)Math.Round((referredInvoices.Sum(i => i.GrossAmount) / totalNetBilled) * 100, 1) : 0,
+                ReferredScansCount = referredInvoices.Count(),
+                DirectScansCount = directInvoices.Count()
             };
 
             return new FinancialMatrixDto
