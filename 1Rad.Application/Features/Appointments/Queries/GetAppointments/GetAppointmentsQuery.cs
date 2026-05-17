@@ -53,7 +53,7 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
 
             // Project to DTO directly in the query to avoid entity materialization issues
             var appointments = await query
-                .OrderByDescending(x => x.Appointment.DateTime)
+                .OrderBy(x => x.Appointment.DateTime)
                 .Select(x => new AppointmentDto(
                     x.Appointment.AppointmentId,
                     x.Appointment.DisplayId ?? string.Empty,
@@ -81,7 +81,8 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
                     _context.DiagnosticReports
                         .Where(dr => dr.AppointmentId == x.Appointment.AppointmentId)
                         .Select(dr => dr.Impression)
-                        .FirstOrDefault()
+                        .FirstOrDefault(),
+                    x.Appointment.DailyTokenNumber
                 ))
                 .ToListAsync(cancellationToken);
 

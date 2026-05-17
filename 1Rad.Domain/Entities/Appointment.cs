@@ -26,6 +26,7 @@ public class Appointment : BaseEntity, IHospitalContext
     public string? TechnicianComments { get; set; }
     public Guid? TechnicianId { get; set; }
     public DateTime? ScannedAt { get; set; }
+    public int? DailyTokenNumber { get; set; }  // Persisted token, assigned atomically on creation
     
     public Guid HospitalId { get; set; }
     

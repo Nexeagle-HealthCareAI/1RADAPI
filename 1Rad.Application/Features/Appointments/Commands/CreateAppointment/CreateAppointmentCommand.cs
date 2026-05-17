@@ -37,6 +37,15 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
         if (patient == null) throw new Exception("Patient not found.");
 
         var count = await _context.Appointments.CountAsync(cancellationToken);
+
+        // Compute a stable, persisted daily token number scoped to this hospital + date
+        var appointmentDate = request.DateTime.Date;
+        var hospitalId = _context.UserContext.HospitalId != Guid.Empty
+            ? _context.UserContext.HospitalId
+            : patient.HospitalId;
+
+        var dailyTokenNumber = await _context.Appointments
+            .CountAsync(a => a.HospitalId == hospitalId && a.DateTime.Date == appointmentDate, cancellationToken) + 1;
         
         var appointment = new Appointment
         {
@@ -53,9 +62,8 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
             ReferredBy = request.ReferredBy,
             ReferredContact = request.ReferredContact,
             Notes = request.Notes,
-            HospitalId = _context.UserContext.HospitalId != Guid.Empty 
-                ? _context.UserContext.HospitalId 
-                : patient.HospitalId
+            DailyTokenNumber = dailyTokenNumber,
+            HospitalId = hospitalId
         };
 
         _context.Appointments.Add(appointment);

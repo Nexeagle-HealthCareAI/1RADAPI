@@ -24,6 +24,7 @@ public record AppointmentDto(
     decimal Amount = 0,
     decimal ReferralCutValue = 0,
     int AssetCount = 0,
-    string? ReportImpression = null
+    string? ReportImpression = null,
+    int? DailyTokenNumber = null
 );
 
