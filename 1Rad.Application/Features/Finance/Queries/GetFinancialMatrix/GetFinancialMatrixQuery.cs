@@ -17,6 +17,9 @@ public class FinancialMatrixDto
     public List<MatrixItemDto> Monthly { get; set; } = new();
     public List<MatrixItemDto> Yearly { get; set; } = new();
     public List<ModalityRevenueDto> ModalityBreakdown { get; set; } = new();
+    public ClinicPerformanceDto Performance { get; set; } = new();
+    public List<ModalityProfitabilityDto> ModalityProfitability { get; set; } = new();
+    public ReferralContributionDto ReferralContribution { get; set; } = new();
 }
 
 public class MatrixItemDto
@@ -35,6 +38,37 @@ public class ModalityRevenueDto
     public string Modality { get; set; } = string.Empty;
     public decimal RangeRevenue { get; set; }
     public int ContributionPercentage { get; set; }
+}
+
+public class ClinicPerformanceDto
+{
+    public decimal GrossRevenue { get; set; }
+    public decimal CashCollected { get; set; }
+    public decimal ConcessionLeakage { get; set; }
+    public double LeakagePercentage { get; set; }
+    public decimal OutstandingAR { get; set; }
+    public double ExpenseRatio { get; set; }
+    public decimal AverageRevenuePerScan { get; set; }
+    public int TotalScansCount { get; set; }
+}
+
+public class ModalityProfitabilityDto
+{
+    public string Modality { get; set; } = string.Empty;
+    public int ScanCount { get; set; }
+    public decimal GrossRevenue { get; set; }
+    public decimal ReferralCut { get; set; }
+    public decimal NetRevenue { get; set; }
+    public double MarginPercentage { get; set; }
+}
+
+public class ReferralContributionDto
+{
+    public decimal ReferredRevenue { get; set; }
+    public decimal DirectRevenue { get; set; }
+    public double ReferralRatio { get; set; }
+    public int ReferredScansCount { get; set; }
+    public int DirectScansCount { get; set; }
 }
 
 public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrixQuery, FinancialMatrixDto>
@@ -75,10 +109,22 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
             }
 
             var invoiceData = await invoiceQuery
-                .Join(_context.Appointments.AsNoTracking(), 
-                      i => i.AppointmentId, 
-                      a => a.AppointmentId, 
-                      (i, a) => new { i.TotalAmount, i.PaidAmount, i.CreatedAt, a.Modality })
+                .GroupJoin(_context.Appointments.AsNoTracking(), 
+                           i => i.AppointmentId, 
+                           a => a.AppointmentId, 
+                           (i, appointments) => new { i, appointments })
+                .SelectMany(x => x.appointments.DefaultIfEmpty(),
+                            (x, a) => new 
+                            { 
+                                x.i.GrossAmount,
+                                x.i.DiscountAmount,
+                                x.i.TotalAmount, 
+                                x.i.PaidAmount, 
+                                x.i.CreatedAt, 
+                                x.i.ReferralCutValue,
+                                Modality = a != null ? a.Modality : "GENERAL",
+                                HasReferrer = a != null && a.ReferrerId != null
+                            })
                 .ToListAsync(cancellationToken);
             
             var expenseData = await expenseQuery
@@ -162,7 +208,7 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 .GroupBy(i => i.Modality)
                 .Select(g => new ModalityRevenueDto
                 {
-                    Modality = (g.Key ?? "GENERIC").ToUpper(),
+                    Modality = (g.Key ?? "GENERAL").ToUpper(),
                     RangeRevenue = g.Sum(i => i.TotalAmount),
                     ContributionPercentage = totalLifeTimeInvoiced > 0 
                         ? (int)(g.Sum(i => i.TotalAmount) / totalLifeTimeInvoiced * 100)
@@ -171,13 +217,69 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 .OrderByDescending(x => x.RangeRevenue)
                 .ToList();
 
+            // ADVANCED CLINICAL PERFORMANCE METRICS
+            var totalGross = invoiceData.Sum(i => i.GrossAmount);
+            var totalPaid = invoiceData.Sum(i => i.PaidAmount);
+            var totalDiscount = invoiceData.Sum(i => i.DiscountAmount);
+            var totalExpenses = expenseData.Sum(e => e.Amount);
+            
+            var performance = new ClinicPerformanceDto
+            {
+                GrossRevenue = totalGross,
+                CashCollected = totalPaid,
+                ConcessionLeakage = totalDiscount,
+                LeakagePercentage = totalGross > 0 ? (double)Math.Round((totalDiscount / totalGross) * 100, 1) : 0,
+                OutstandingAR = invoiceData.Sum(i => i.TotalAmount - i.PaidAmount),
+                ExpenseRatio = totalPaid > 0 ? (double)Math.Round((totalExpenses / totalPaid) * 100, 1) : 0,
+                AverageRevenuePerScan = invoiceData.Any() ? Math.Round(invoiceData.Sum(i => i.TotalAmount) / invoiceData.Count, 2) : 0,
+                TotalScansCount = invoiceData.Count
+            };
+
+            // ADVANCED MODALITY PROFITABILITY MATRIX (Modality revenue minus partner cuts)
+            var modalityProfitability = invoiceData
+                .GroupBy(i => i.Modality)
+                .Select(g => 
+                {
+                    var gross = g.Sum(x => x.GrossAmount);
+                    var cut = g.Sum(x => x.ReferralCutValue);
+                    var net = g.Sum(x => x.TotalAmount) - cut;
+                    return new ModalityProfitabilityDto
+                    {
+                        Modality = (g.Key ?? "GENERAL").ToUpper(),
+                        ScanCount = g.Count(),
+                        GrossRevenue = gross,
+                        ReferralCut = cut,
+                        NetRevenue = net,
+                        MarginPercentage = gross > 0 ? (double)Math.Round((net / gross) * 100, 1) : 0
+                    };
+                })
+                .OrderByDescending(m => m.GrossRevenue)
+                .ToList();
+
+            // ADVANCED REFERRAL CONTRIBUTION ANALYSIS
+            var referredInvoices = invoiceData.Where(i => i.HasReferrer).ToList();
+            var directInvoices = invoiceData.Where(i => !i.HasReferrer).ToList();
+            var totalNetBilled = invoiceData.Sum(i => i.TotalAmount);
+            
+            var referralContribution = new ReferralContributionDto
+            {
+                ReferredRevenue = referredInvoices.Sum(i => i.TotalAmount),
+                DirectRevenue = directInvoices.Sum(i => i.TotalAmount),
+                ReferralRatio = totalNetBilled > 0 ? (double)Math.Round((referredInvoices.Sum(i => i.TotalAmount) / totalNetBilled) * 100, 1) : 0,
+                ReferredScansCount = referredInvoices.Count,
+                DirectScansCount = directInvoices.Count
+            };
+
             return new FinancialMatrixDto
             {
                 Daily = daily,
                 Weekly = weekly,
                 Monthly = monthly,
                 Yearly = yearly,
-                ModalityBreakdown = modalityBreakdown
+                ModalityBreakdown = modalityBreakdown,
+                Performance = performance,
+                ModalityProfitability = modalityProfitability,
+                ReferralContribution = referralContribution
             };
         }
         catch (Exception ex)
