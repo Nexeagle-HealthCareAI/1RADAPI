@@ -1,4 +1,4 @@
-\]'POIJH2MediatR;
+using MediatR;
 using Microsoft.EntityFrameworkCore;
 using _1Rad.Application.Interfaces;
 

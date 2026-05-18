@@ -59,6 +59,8 @@ public class GetPatientTimelineQueryHandler : IRequestHandler<GetPatientTimeline
             x.Appointment.Modality ?? string.Empty,
             x.Appointment.DateTime,
             x.Appointment.Status ?? "BOOKED",
+            x.Appointment.ReferredBy ?? string.Empty,
+            x.Appointment.ReferredContact ?? string.Empty,
             x.Report,
             x.Assets
         )).ToList();

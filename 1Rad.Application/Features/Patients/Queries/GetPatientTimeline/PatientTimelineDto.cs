@@ -10,6 +10,8 @@ public record PatientTimelineDto(
     string Modality,
     DateTime DateTime,
     string Status,
+    string ReferredBy,
+    string ReferredContact,
     TimelineReportDto? Report,
     List<TimelineAssetDto> Assets
 );
