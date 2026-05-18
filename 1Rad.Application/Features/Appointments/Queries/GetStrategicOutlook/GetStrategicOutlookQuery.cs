@@ -9,7 +9,11 @@ using Microsoft.EntityFrameworkCore;
 
 namespace _1Rad.Application.Features.Appointments.Queries.GetStrategicOutlook;
 
-public record GetStrategicOutlookQuery(DateTime? ReferenceDate = null) : IRequest<StrategicOutlookDto>;
+public record GetStrategicOutlookQuery(
+    DateTime? ReferenceDate = null,
+    DateTime? StartDate = null,
+    DateTime? EndDate = null
+) : IRequest<StrategicOutlookDto>;
 
 public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlookQuery, StrategicOutlookDto>
 {
@@ -42,20 +46,33 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
                 throw new InvalidOperationException("User does not have an associated hospital context.");
             }
 
-            var today = (request.ReferenceDate ?? DateTime.Today).Date;
-            var tomorrow = today.AddDays(1);
-            var startOfWeek = today.AddDays(-6);
-            var last30Days = today.AddDays(-30);
+            DateTime rangeStart;
+            DateTime rangeEnd;
+
+            if (request.StartDate.HasValue || request.EndDate.HasValue)
+            {
+                rangeStart = request.StartDate ?? DateTime.MinValue;
+                rangeEnd = request.EndDate.HasValue ? request.EndDate.Value.Date.AddDays(1) : DateTime.Today.AddDays(1);
+            }
+            else
+            {
+                var todayDate = (request.ReferenceDate ?? DateTime.Today).Date;
+                rangeStart = todayDate;
+                rangeEnd = todayDate.AddDays(1);
+            }
+
+            var startOfWeek = rangeStart == DateTime.MinValue ? DateTime.Today.AddDays(-6) : rangeStart.AddDays(-6);
+            var last30Days = rangeStart == DateTime.MinValue ? DateTime.Today.AddDays(-30) : rangeStart.AddDays(-30);
 
             // --- 1. CORE MISSION DATA ---
             var todayMissions = await _context.Appointments
-                .Where(a => a.HospitalId == hospitalId && a.DateTime >= today && a.DateTime < tomorrow)
+                .Where(a => a.HospitalId == hospitalId && a.DateTime >= rangeStart && a.DateTime < rangeEnd)
                 .Select(a => new { a.Modality, a.PatientId })
                 .ToListAsync(cancellationToken);
 
             var dailyMissions = todayMissions.Count;
             var universalRegistryCount = await _context.Patients
-                .Where(p => p.HospitalId == hospitalId)
+                .Where(p => p.HospitalId == hospitalId && p.CreatedAt >= rangeStart && p.CreatedAt < rangeEnd)
                 .CountAsync(cancellationToken);
 
             // --- 2. FISCAL INTELLIGENCE (Real-Time Invoiced Yield) ---
@@ -63,7 +80,7 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
             try
             {
                 var financeStats = await _context.Invoices
-                    .Where(i => i.HospitalId == hospitalId && i.CreatedAt >= today && i.CreatedAt < tomorrow)
+                    .Where(i => i.HospitalId == hospitalId && i.CreatedAt >= rangeStart && i.CreatedAt < rangeEnd)
                     .ToListAsync(cancellationToken);
 
                 financialYield = financeStats.Sum(i => i.PaidAmount);
@@ -79,7 +96,7 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
             try
             {
                 operationalExpenses = await _context.Expenses
-                    .Where(e => e.HospitalId == hospitalId && e.TransactionDate >= today && e.TransactionDate < tomorrow)
+                    .Where(e => e.HospitalId == hospitalId && e.TransactionDate >= rangeStart && e.TransactionDate < rangeEnd)
                     .SumAsync(e => e.Amount, cancellationToken);
             }
             catch
@@ -114,20 +131,24 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
                 avgLatency = 38 + (dailyMissions % 7);
             }
 
-            // Calculate actual growth percentage of today's study volume vs. yesterday's
+            // Calculate actual growth percentage of this timeframe volume vs. preceding period
             double growthPercentage = 14.2; // Default fallback
             try
             {
-                var yesterday = today.AddDays(-1);
-                var yesterdayMissionsCount = await _context.Appointments
-                    .Where(a => a.HospitalId == hospitalId && a.DateTime >= yesterday && a.DateTime < today)
+                var duration = rangeEnd - rangeStart;
+                var prevStart = rangeStart == DateTime.MinValue ? DateTime.Today.AddDays(-30) : rangeStart - duration;
+                var prevEnd = rangeStart == DateTime.MinValue ? DateTime.Today : rangeStart;
+
+                var currentCount = dailyMissions;
+                var previousCount = await _context.Appointments
+                    .Where(a => a.HospitalId == hospitalId && a.DateTime >= prevStart && a.DateTime < prevEnd)
                     .CountAsync(cancellationToken);
 
-                if (yesterdayMissionsCount > 0)
+                if (previousCount > 0)
                 {
-                    growthPercentage = Math.Round(((double)(dailyMissions - yesterdayMissionsCount) / yesterdayMissionsCount) * 100, 1);
+                    growthPercentage = Math.Round(((double)(currentCount - previousCount) / previousCount) * 100, 1);
                 }
-                else if (dailyMissions > 0)
+                else if (currentCount > 0)
                 {
                     growthPercentage = 100.0;
                 }
@@ -171,7 +192,7 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
             try
             {
                 var todayInvoices = await _context.Invoices
-                    .Where(i => i.HospitalId == hospitalId && i.CreatedAt >= today && i.CreatedAt < tomorrow && i.AppointmentId != null)
+                    .Where(i => i.HospitalId == hospitalId && i.CreatedAt >= rangeStart && i.CreatedAt < rangeEnd && i.AppointmentId != null)
                     .Join(_context.Appointments,
                           i => i.AppointmentId,
                           a => a.AppointmentId,
@@ -203,7 +224,7 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
 
             // --- 4. VOLUME TRENDS (7-DAY SCAN) ---
             var weekRawData = await _context.Appointments
-                .Where(a => a.HospitalId == hospitalId && a.DateTime >= startOfWeek && a.DateTime < tomorrow)
+                .Where(a => a.HospitalId == hospitalId && a.DateTime >= startOfWeek && a.DateTime < rangeEnd)
                 .Select(a => new { a.DateTime.Date })
                 .ToListAsync(cancellationToken);
 
@@ -216,7 +237,7 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
 
             // --- 5. DEMOGRAPHIC SNAPSHOT ---
             var hospitalPatients = await _context.Patients
-                .Where(p => p.HospitalId == hospitalId)
+                .Where(p => p.HospitalId == hospitalId && p.CreatedAt >= rangeStart && p.CreatedAt < rangeEnd)
                 .Select(p => new { p.Gender, p.Age, p.Village, p.District })
                 .ToListAsync(cancellationToken);
 
@@ -265,7 +286,7 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
 
             // --- 6. TOP SOURCES (Refined to Reference Date) ---
             var topSourcesRaw = await _context.Appointments
-                .Where(a => a.HospitalId == hospitalId && a.DateTime >= today && a.DateTime < tomorrow && !string.IsNullOrEmpty(a.ReferredBy))
+                .Where(a => a.HospitalId == hospitalId && a.DateTime >= rangeStart && a.DateTime < rangeEnd && !string.IsNullOrEmpty(a.ReferredBy))
                 .Select(a => a.ReferredBy)
                 .ToListAsync(cancellationToken);
 
@@ -277,7 +298,7 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
             // --- 7. INSTITUTIONAL LOYALTY ---
             var todayPatientIds = todayMissions.Select(m => m.PatientId).Distinct().ToList();
             var returningCount = await _context.Appointments
-                .Where(a => a.HospitalId == hospitalId && a.DateTime < today && todayPatientIds.Contains(a.PatientId))
+                .Where(a => a.HospitalId == hospitalId && a.DateTime < rangeStart && todayPatientIds.Contains(a.PatientId))
                 .Select(a => a.PatientId).Distinct().CountAsync(cancellationToken);
             
             var loyalty = new InstitutionalLoyalty(
@@ -288,7 +309,7 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
 
             // --- 8. SERVICE FIDELITY (30-DAY PULSE) ---
             var historyCounts = await _context.Appointments
-                .Where(a => a.HospitalId == hospitalId && a.DateTime >= last30Days && a.DateTime < today)
+                .Where(a => a.HospitalId == hospitalId && a.DateTime >= last30Days && a.DateTime < rangeStart)
                 .GroupBy(a => a.DateTime.Date)
                 .Select(g => g.Count()).ToListAsync(cancellationToken);
 

@@ -19,9 +19,12 @@ public class IntelligenceController : ControllerBase
     }
 
     [HttpGet("outlook")]
-    public async Task<ActionResult<StrategicOutlookDto>> GetStrategicOutlook([FromQuery] DateTime? referenceDate)
+    public async Task<ActionResult<StrategicOutlookDto>> GetStrategicOutlook(
+        [FromQuery] DateTime? referenceDate,
+        [FromQuery] DateTime? startDate,
+        [FromQuery] DateTime? endDate)
     {
-        return Ok(await _mediator.Send(new GetStrategicOutlookQuery(referenceDate)));
+        return Ok(await _mediator.Send(new GetStrategicOutlookQuery(referenceDate, startDate, endDate)));
     }
 
     [HttpGet("export")]
