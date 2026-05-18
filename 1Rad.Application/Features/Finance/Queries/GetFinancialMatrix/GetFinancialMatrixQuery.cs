@@ -25,6 +25,7 @@ public class FinancialMatrixDto
     public List<DiscountLeakageAuditorDto> LeakageAudits { get; set; } = new();
     public List<PatientAcquisitionCohortDto> PatientAcquisitionBreakdown { get; set; } = new();
     public List<PhysicianRoiDto> PhysicianRoiLedger { get; set; } = new();
+    public PaymentChannelBreakdownDto CollectionChannels { get; set; } = new();
 }
 
 public class MatrixItemDto
@@ -84,6 +85,14 @@ public class AgingAnalysisDto
     public decimal Bucket61To90 { get; set; }
     public decimal Bucket91Plus { get; set; }
     public decimal TotalOutstanding => Bucket0To30 + Bucket31To60 + Bucket61To90 + Bucket91Plus;
+}
+
+public class PaymentChannelBreakdownDto
+{
+    public decimal CashAmount { get; set; }
+    public decimal UpiAmount { get; set; }
+    public decimal CardAmount { get; set; }
+    public decimal TotalCollected => CashAmount + UpiAmount + CardAmount;
 }
 
 public class DiscountDistributionDto
@@ -193,8 +202,29 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
             var commissionData = await commissionQuery
                 .Select(c => new { c.ReferrerId, c.ReferrerName, c.CommissionAmount, c.TransactionDate, c.Status })
                 .ToListAsync(cancellationToken);
+
+            var paymentQuery = _context.Payments.AsNoTracking().Where(p => p.HospitalId == hospitalId);
+            if (request.StartDate.HasValue)
+            {
+                paymentQuery = paymentQuery.Where(p => p.CreatedAt >= request.StartDate.Value);
+            }
+            if (request.EndDate.HasValue)
+            {
+                var end = request.EndDate.Value.Date.AddDays(1).AddTicks(-1);
+                paymentQuery = paymentQuery.Where(p => p.CreatedAt <= end);
+            }
+            var paymentData = await paymentQuery
+                .Select(p => new { p.Amount, p.PaymentMethod })
+                .ToListAsync(cancellationToken);
+
+            var collectionChannels = new PaymentChannelBreakdownDto
+            {
+                CashAmount = paymentData.Where(p => p.PaymentMethod != null && p.PaymentMethod.Equals("CASH", StringComparison.OrdinalIgnoreCase)).Sum(p => p.Amount),
+                UpiAmount = paymentData.Where(p => p.PaymentMethod != null && p.PaymentMethod.Equals("UPI", StringComparison.OrdinalIgnoreCase)).Sum(p => p.Amount),
+                CardAmount = paymentData.Where(p => p.PaymentMethod != null && p.PaymentMethod.Equals("CARD", StringComparison.OrdinalIgnoreCase)).Sum(p => p.Amount)
+            };
             
-            if (!invoiceData.Any() && !expenseData.Any()) return new FinancialMatrixDto();
+            if (!invoiceData.Any() && !expenseData.Any() && !paymentData.Any()) return new FinancialMatrixDto();
 
             var totalLifeTimeInvoiced = invoiceData.Sum(i => i.GrossAmount);
 
@@ -503,7 +533,8 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 DiscountAllocations = discountAllocations,
                 LeakageAudits = leakageAudits,
                 PatientAcquisitionBreakdown = patientAcquisitionBreakdown,
-                PhysicianRoiLedger = physicianRoiLedger
+                PhysicianRoiLedger = physicianRoiLedger,
+                CollectionChannels = collectionChannels
             };
         }
         catch (Exception ex)
