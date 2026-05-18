@@ -26,6 +26,7 @@ public class FinancialMatrixDto
     public List<PatientAcquisitionCohortDto> PatientAcquisitionBreakdown { get; set; } = new();
     public List<PhysicianRoiDto> PhysicianRoiLedger { get; set; } = new();
     public PaymentChannelBreakdownDto CollectionChannels { get; set; } = new();
+    public PatientLtvDto PatientLtv { get; set; } = new();
 }
 
 public class MatrixItemDto
@@ -67,6 +68,11 @@ public class ModalityProfitabilityDto
     public decimal NetRevenue { get; set; }
     public double MarginPercentage { get; set; }
     public double CollectionEfficiency { get; set; }
+    public decimal OperatingCost { get; set; }
+    public decimal NetOperatingProfit { get; set; }
+    public double OperatingMarginPercentage { get; set; }
+    public double EquipmentRoiRatio { get; set; }
+    public decimal BreakEvenScansNeeded { get; set; }
 }
 
 public class ReferralContributionDto
@@ -125,6 +131,41 @@ public class PhysicianRoiDto
     public decimal BilledRevenue { get; set; }
     public decimal CommissionPaid { get; set; }
     public double RoiMultiplier => CommissionPaid > 0 ? (double)Math.Round(BilledRevenue / CommissionPaid, 1) : 0;
+}
+
+public class PatientLtvDto
+{
+    public decimal AverageOrderValue { get; set; }
+    public double PurchaseFrequency { get; set; }
+    public decimal PatientValue { get; set; }
+    public decimal EstimatedLifetimeValue { get; set; }
+    public List<LtvSegmentDto> Segments { get; set; } = new();
+    public List<RetentionCohortDto> RetentionHeatmap { get; set; } = new();
+    public List<PatientChurnAlertDto> ChurnAlerts { get; set; } = new();
+}
+
+public class LtvSegmentDto
+{
+    public string Tier { get; set; } = string.Empty; // High Value, Mid Value, Low Value
+    public int PatientCount { get; set; }
+    public decimal TotalRevenue { get; set; }
+    public double Percentage { get; set; }
+}
+
+public class RetentionCohortDto
+{
+    public string CohortMonth { get; set; } = string.Empty;
+    public int Size { get; set; }
+    public List<double> RetentionRates { get; set; } = new();
+}
+
+public class PatientChurnAlertDto
+{
+    public string PatientName { get; set; } = string.Empty;
+    public string LastModality { get; set; } = string.Empty;
+    public DateTime LastScanDate { get; set; }
+    public int DaysSinceLastScan { get; set; }
+    public string RiskLevel { get; set; } = string.Empty;
 }
 
 public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrixQuery, FinancialMatrixDto>
@@ -196,7 +237,7 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 .ToListAsync(cancellationToken);
             
             var expenseData = await expenseQuery
-                .Select(e => new { e.Amount, e.TransactionDate })
+                .Select(e => new { e.Amount, e.TransactionDate, e.Category, e.CostCenter, e.Description })
                 .ToListAsync(cancellationToken);
 
             var commissionData = await commissionQuery
@@ -383,24 +424,83 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 .OrderByDescending(x => x.TotalDiscountApproved)
                 .ToList();
 
+            // Calculate total scan counts for proportional distribution of general Radiology expenses
+            var totalScans = invoiceData.Count();
+            
+            // Map expenses to modalities
+            var modalityExpenses = new Dictionary<string, decimal>();
+            var generalRadiologyExpenses = 0m;
+
+            foreach (var exp in expenseData)
+            {
+                var desc = exp.Description ?? "";
+                var cc = exp.CostCenter ?? "";
+                var cat = exp.Category ?? "";
+
+                // 1. Direct allocation by Description/CostCenter keywords
+                if (desc.Contains("MRI", StringComparison.OrdinalIgnoreCase) || cc.Equals("MRI", StringComparison.OrdinalIgnoreCase))
+                {
+                    modalityExpenses["MRI"] = modalityExpenses.GetValueOrDefault("MRI") + exp.Amount;
+                }
+                else if (desc.Contains("CT", StringComparison.OrdinalIgnoreCase) || cc.Equals("CT", StringComparison.OrdinalIgnoreCase))
+                {
+                    modalityExpenses["CT"] = modalityExpenses.GetValueOrDefault("CT") + exp.Amount;
+                }
+                else if (desc.Contains("X-RAY", StringComparison.OrdinalIgnoreCase) || desc.Contains("XRAY", StringComparison.OrdinalIgnoreCase) || cc.Equals("X-RAY", StringComparison.OrdinalIgnoreCase) || cc.Equals("XRAY", StringComparison.OrdinalIgnoreCase))
+                {
+                    modalityExpenses["X-RAY"] = modalityExpenses.GetValueOrDefault("X-RAY") + exp.Amount;
+                }
+                else if (desc.Contains("USG", StringComparison.OrdinalIgnoreCase) || desc.Contains("ULTRASOUND", StringComparison.OrdinalIgnoreCase) || cc.Equals("USG", StringComparison.OrdinalIgnoreCase))
+                {
+                    modalityExpenses["USG"] = modalityExpenses.GetValueOrDefault("USG") + exp.Amount;
+                }
+                // 2. Department-level allocation (Radiology general overhead)
+                else if (cc.Equals("Radiology", StringComparison.OrdinalIgnoreCase) || cat.Equals("Maintenance", StringComparison.OrdinalIgnoreCase))
+                {
+                    generalRadiologyExpenses += exp.Amount;
+                }
+            }
+
             // 5. Service Profitability Matrix with Collection Efficiency
             var modalityProfitability = invoiceData
                 .GroupBy(i => i.Modality)
                 .Select(g => 
                 {
+                    var mod = (g.Key ?? "GENERAL").ToUpper();
+                    var count = g.Count();
                     var gross = g.Sum(x => x.GrossAmount);
                     var cut = g.Sum(x => x.ReferralCutValue);
                     var net = g.Sum(x => x.GrossAmount) - cut;
                     var paid = g.Sum(x => x.PaidAmount);
+
+                    // Allocate operating costs
+                    var directCost = modalityExpenses.GetValueOrDefault(mod, 0m);
+                    var proportionalShare = totalScans > 0 ? (decimal)count / totalScans * generalRadiologyExpenses : 0m;
+                    var operatingCost = directCost + proportionalShare;
+
+                    // Net operating profit
+                    var netOpProfit = net - operatingCost;
+                    var opMarginPct = net > 0 ? (double)Math.Round((netOpProfit / net) * 100, 1) : 0;
+                    var roi = operatingCost > 0 ? (double)Math.Round(gross / operatingCost, 1) : 0;
+
+                    // Break-even scans needed: operating cost divided by average net yield per scan
+                    var avgNetYield = count > 0 ? net / count : 0m;
+                    var breakEven = avgNetYield > 0 ? Math.Round(operatingCost / avgNetYield, 1) : 0m;
+
                     return new ModalityProfitabilityDto
                     {
-                        Modality = (g.Key ?? "GENERAL").ToUpper(),
-                        ScanCount = g.Count(),
+                        Modality = mod,
+                        ScanCount = count,
                         GrossRevenue = gross,
                         ReferralCut = cut,
                         NetRevenue = net,
                         MarginPercentage = gross > 0 ? (double)Math.Round((net / gross) * 100, 1) : 0,
-                        CollectionEfficiency = gross > 0 ? (double)Math.Round((paid / gross) * 100, 1) : 0
+                        CollectionEfficiency = gross > 0 ? (double)Math.Round((paid / gross) * 100, 1) : 0,
+                        OperatingCost = operatingCost,
+                        NetOperatingProfit = netOpProfit,
+                        OperatingMarginPercentage = opMarginPct,
+                        EquipmentRoiRatio = roi,
+                        BreakEvenScansNeeded = breakEven
                     };
                 })
                 .OrderByDescending(m => m.GrossRevenue)
@@ -519,6 +619,138 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 DirectScansCount = directInvoices.Count()
             };
 
+            // 6. Patient Lifetime Value (LTV) & Cohort Retention Calculations
+            var patientInvoicesGrouped = invoiceData
+                .GroupBy(i => i.PatientId)
+                .Select(g => new 
+                {
+                    PatientId = g.Key,
+                    PatientName = g.First().PatientName,
+                    FirstVisit = g.Min(x => x.CreatedAt),
+                    Visits = g.Select(x => x.CreatedAt).ToList(),
+                    TotalRevenue = g.Sum(x => x.TotalAmount)
+                })
+                .ToList();
+
+            var totalInvoicesCount = invoiceData.Count;
+            var totalGrossRevenue = invoiceData.Sum(i => i.TotalAmount);
+            var uniquePatientCount = patientInvoicesGrouped.Count;
+
+            var aov = totalInvoicesCount > 0 ? totalGrossRevenue / totalInvoicesCount : 0m;
+            var pf = uniquePatientCount > 0 ? (double)totalInvoicesCount / uniquePatientCount : 0;
+            var pv = aov * (decimal)pf;
+            var estimatedLtv = pv * 3.0m; // 3-year projected lifespan
+
+            var highValueCount = 0;
+            var highValueRev = 0m;
+            var midValueCount = 0;
+            var midValueRev = 0m;
+            var lowValueCount = 0;
+            var lowValueRev = 0m;
+
+            foreach (var p in patientInvoicesGrouped)
+            {
+                if (p.TotalRevenue >= 15000m)
+                {
+                    highValueCount++;
+                    highValueRev += p.TotalRevenue;
+                }
+                else if (p.TotalRevenue >= 5000m)
+                {
+                    midValueCount++;
+                    midValueRev += p.TotalRevenue;
+                }
+                else
+                {
+                    lowValueCount++;
+                    lowValueRev += p.TotalRevenue;
+                }
+            }
+
+            var ltvSegments = new List<LtvSegmentDto>
+            {
+                new LtvSegmentDto { Tier = "High Value", PatientCount = highValueCount, TotalRevenue = highValueRev, Percentage = uniquePatientCount > 0 ? Math.Round((double)highValueCount / uniquePatientCount * 100, 1) : 0 },
+                new LtvSegmentDto { Tier = "Mid Value", PatientCount = midValueCount, TotalRevenue = midValueRev, Percentage = uniquePatientCount > 0 ? Math.Round((double)midValueCount / uniquePatientCount * 100, 1) : 0 },
+                new LtvSegmentDto { Tier = "Low Value", PatientCount = lowValueCount, TotalRevenue = lowValueRev, Percentage = uniquePatientCount > 0 ? Math.Round((double)lowValueCount / uniquePatientCount * 100, 1) : 0 }
+            };
+
+            var cohortHeatmap = new List<RetentionCohortDto>();
+            var cohortGroups = patientInvoicesGrouped
+                .GroupBy(p => p.FirstVisit.ToString("yyyy-MM"))
+                .OrderBy(g => g.Key)
+                .Take(6)
+                .ToList();
+
+            foreach (var cg in cohortGroups)
+            {
+                var cohortMonth = cg.Key;
+                var cohortPatients = cg.ToList();
+                var size = cohortPatients.Count;
+
+                var rates = new List<double> { 100.0 };
+
+                // Safely parse cohort year and month
+                var parts = cohortMonth.Split('-');
+                var year = parts.Length > 0 && int.TryParse(parts[0], out var y) ? y : DateTime.UtcNow.Year;
+                var month = parts.Length > 1 && int.TryParse(parts[1], out var m) ? m : DateTime.UtcNow.Month;
+                var cohortStartDateTime = new DateTime(year, month, 1);
+
+                for (int offset = 1; offset <= 5; offset++)
+                {
+                    var targetMonthStart = cohortStartDateTime.AddMonths(offset);
+                    var targetMonthEnd = targetMonthStart.AddMonths(1).AddTicks(-1);
+
+                    var activeCount = cohortPatients
+                        .Count(p => p.Visits.Any(v => v >= targetMonthStart && v <= targetMonthEnd));
+
+                    var rate = size > 0 ? Math.Round((double)activeCount / size * 100, 1) : 0;
+                    rates.Add(rate);
+                }
+
+                cohortHeatmap.Add(new RetentionCohortDto
+                {
+                    CohortMonth = cohortMonth,
+                    Size = size,
+                    RetentionRates = rates
+                });
+            }
+
+            var churnAlerts = new List<PatientChurnAlertDto>();
+            var localNow = DateTime.UtcNow;
+
+            foreach (var group in invoiceData.GroupBy(i => i.PatientId))
+            {
+                var invoices = group.OrderByDescending(i => i.CreatedAt).ToList();
+                var lastInvoice = invoices.First();
+                var daysSince = (localNow - lastInvoice.CreatedAt).Days;
+
+                if (daysSince > 45 && daysSince <= 180)
+                {
+                    var name = lastInvoice.PatientName ?? "Anonymous Patient";
+                    churnAlerts.Add(new PatientChurnAlertDto
+                    {
+                        PatientName = name,
+                        LastModality = lastInvoice.Modality,
+                        LastScanDate = lastInvoice.CreatedAt,
+                        DaysSinceLastScan = daysSince,
+                        RiskLevel = daysSince > 90 ? "CRITICAL" : "ELEVATED"
+                    });
+                }
+            }
+
+            churnAlerts = churnAlerts.OrderByDescending(c => c.DaysSinceLastScan).Take(3).ToList();
+
+            var patientLtv = new PatientLtvDto
+            {
+                AverageOrderValue = Math.Round(aov, 2),
+                PurchaseFrequency = Math.Round(pf, 2),
+                PatientValue = Math.Round(pv, 2),
+                EstimatedLifetimeValue = Math.Round(estimatedLtv, 2),
+                Segments = ltvSegments,
+                RetentionHeatmap = cohortHeatmap,
+                ChurnAlerts = churnAlerts
+            };
+
             return new FinancialMatrixDto
             {
                 Daily = daily,
@@ -534,7 +766,8 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 LeakageAudits = leakageAudits,
                 PatientAcquisitionBreakdown = patientAcquisitionBreakdown,
                 PhysicianRoiLedger = physicianRoiLedger,
-                CollectionChannels = collectionChannels
+                CollectionChannels = collectionChannels,
+                PatientLtv = patientLtv
             };
         }
         catch (Exception ex)
