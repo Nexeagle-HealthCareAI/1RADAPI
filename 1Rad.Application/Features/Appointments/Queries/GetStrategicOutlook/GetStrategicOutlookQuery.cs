@@ -217,7 +217,7 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
             // --- 5. DEMOGRAPHIC SNAPSHOT ---
             var hospitalPatients = await _context.Patients
                 .Where(p => p.HospitalId == hospitalId)
-                .Select(p => new { p.Gender, p.Age })
+                .Select(p => new { p.Gender, p.Age, p.Village, p.District })
                 .ToListAsync(cancellationToken);
 
             var genderBrief = new GenderBrief(
@@ -240,6 +240,28 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
                 var percentage = hospitalPatients.Count > 0 ? (double)count / hospitalPatients.Count * 100 : 0;
                 ageTiers.Add(new AgeTier(tier.Label, count, percentage, tier.Color));
             }
+
+            var villageMetrics = hospitalPatients
+                .GroupBy(p => string.IsNullOrWhiteSpace(p.Village) ? "Unknown" : p.Village.Trim())
+                .Select(g => new GeographicMetric(
+                    g.Key, 
+                    g.Count(), 
+                    hospitalPatients.Count > 0 ? (double)g.Count() / hospitalPatients.Count * 100 : 0
+                ))
+                .OrderByDescending(g => g.Count)
+                .Take(10)
+                .ToList();
+
+            var districtMetrics = hospitalPatients
+                .GroupBy(p => string.IsNullOrWhiteSpace(p.District) ? "Unknown" : p.District.Trim())
+                .Select(g => new GeographicMetric(
+                    g.Key, 
+                    g.Count(), 
+                    hospitalPatients.Count > 0 ? (double)g.Count() / hospitalPatients.Count * 100 : 0
+                ))
+                .OrderByDescending(g => g.Count)
+                .Take(10)
+                .ToList();
 
             // --- 6. TOP SOURCES (Refined to Reference Date) ---
             var topSourcesRaw = await _context.Appointments
@@ -278,7 +300,7 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
                 avg30Day > 0 ? ((dailyMissions - avg30Day) / avg30Day) * 100 : 0
             );
 
-            return new StrategicOutlookDto(kpis, modalities, revenueBreakdown, trend, new DemographicSnapshot(genderBrief, ageTiers), topSources, loyalty, fidelity);
+            return new StrategicOutlookDto(kpis, modalities, revenueBreakdown, trend, new DemographicSnapshot(genderBrief, ageTiers, villageMetrics, districtMetrics), topSources, loyalty, fidelity);
         }
         catch (Exception)
         {
@@ -288,7 +310,7 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
                 new List<ModalityMetric>(),
                 new List<ModalityRevenue>(),
                 Enumerable.Range(0, 7).Select(i => new VolumeDataPoint($"Day {i}", 0, false)).ToList(),
-                new DemographicSnapshot(new GenderBrief(0, 0, 0), new List<AgeTier>()),
+                new DemographicSnapshot(new GenderBrief(0, 0, 0), new List<AgeTier>(), new List<GeographicMetric>(), new List<GeographicMetric>()),
                 new List<SourceMetric>(),
                 new InstitutionalLoyalty(0, 0, 0),
                 new ServiceFidelity(0, 0, "FLAT", 0)

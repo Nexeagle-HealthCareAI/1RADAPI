@@ -38,7 +38,15 @@ public record VolumeDataPoint(
 
 public record DemographicSnapshot(
     GenderBrief Gender,
-    List<AgeTier> AgeGroups
+    List<AgeTier> AgeGroups,
+    List<GeographicMetric> Villages,
+    List<GeographicMetric> Districts
+);
+
+public record GeographicMetric(
+    string Name,
+    int Count,
+    double Percentage
 );
 
 public record GenderBrief(
