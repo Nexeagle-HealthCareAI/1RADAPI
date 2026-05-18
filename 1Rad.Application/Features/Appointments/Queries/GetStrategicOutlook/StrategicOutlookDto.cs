@@ -11,7 +11,13 @@ public record StrategicOutlookDto(
     DemographicSnapshot Demographics,
     List<SourceMetric> TopSources,
     InstitutionalLoyalty Loyalty,
-    ServiceFidelity Fidelity
+    ServiceFidelity Fidelity,
+    List<QueueMetric> PendingQueues
+);
+
+public record QueueMetric(
+    string Modality,
+    int Count
 );
 
 public record KpiSnapshot(

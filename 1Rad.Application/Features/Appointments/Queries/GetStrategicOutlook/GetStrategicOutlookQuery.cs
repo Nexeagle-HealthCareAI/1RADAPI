@@ -321,7 +321,21 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
                 avg30Day > 0 ? ((dailyMissions - avg30Day) / avg30Day) * 100 : 0
             );
 
-            return new StrategicOutlookDto(kpis, modalities, revenueBreakdown, trend, new DemographicSnapshot(genderBrief, ageTiers, villageMetrics, districtMetrics), topSources, loyalty, fidelity);
+            // --- 9. BOTTLENECK ANALYZER (PENDING QUEUES) ---
+            var finalizedReportAppointmentIds = await _context.DiagnosticReports
+                .Where(r => r.HospitalId == hospitalId && r.IsFinalized)
+                .Select(r => r.AppointmentId)
+                .ToListAsync(cancellationToken);
+
+            var pendingQueues = await _context.Appointments
+                .Where(a => a.HospitalId == hospitalId && a.DateTime >= rangeStart && a.DateTime < rangeEnd 
+                            && a.Status != "CANCELLED"
+                            && !finalizedReportAppointmentIds.Contains(a.AppointmentId))
+                .GroupBy(a => a.Modality)
+                .Select(g => new QueueMetric(g.Key ?? "UNKNOWN", g.Count()))
+                .ToListAsync(cancellationToken);
+
+            return new StrategicOutlookDto(kpis, modalities, revenueBreakdown, trend, new DemographicSnapshot(genderBrief, ageTiers, villageMetrics, districtMetrics), topSources, loyalty, fidelity, pendingQueues);
         }
         catch (Exception)
         {
@@ -334,7 +348,8 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
                 new DemographicSnapshot(new GenderBrief(0, 0, 0), new List<AgeTier>(), new List<GeographicMetric>(), new List<GeographicMetric>()),
                 new List<SourceMetric>(),
                 new InstitutionalLoyalty(0, 0, 0),
-                new ServiceFidelity(0, 0, "FLAT", 0)
+                new ServiceFidelity(0, 0, "FLAT", 0),
+                new List<QueueMetric>()
             );
         }
     }
