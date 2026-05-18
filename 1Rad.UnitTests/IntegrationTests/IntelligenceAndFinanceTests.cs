@@ -338,7 +338,7 @@ public class IntelligenceAndFinanceTests
         var result = await handler.Handle(query, CancellationToken.None);
 
         // Assert - Should not include other hospital's data
-        var allAppointments = await _context.Appointments.ToListAsync();
+        var allAppointments = await _context.Appointments.IgnoreQueryFilters().ToListAsync();
         allAppointments.Should().HaveCountGreaterThan(20); // Original + new
         
         var hospitalAppointments = await _context.Appointments
