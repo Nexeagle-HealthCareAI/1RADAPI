@@ -44,11 +44,20 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
 
             if (!string.IsNullOrEmpty(request.SearchQuery))
             {
-                var search = request.SearchQuery.ToLower();
-                query = query.Where(x => 
-                    (x.Appointment.Patient != null && x.Appointment.Patient.FullName != null && x.Appointment.Patient.FullName.ToLower().Contains(search)) || 
-                    (x.Appointment.Mobile != null && x.Appointment.Mobile.Contains(search)) || 
-                    (x.Appointment.DisplayId != null && x.Appointment.DisplayId.ToLower().Contains(search)));
+                var search = request.SearchQuery.ToLower().Trim();
+                
+                if (Guid.TryParse(search, out Guid parsedGuid))
+                {
+                    query = query.Where(x => x.Appointment.PatientId == parsedGuid || x.Appointment.AppointmentId == parsedGuid);
+                }
+                else
+                {
+                    query = query.Where(x => 
+                        (x.Appointment.Patient != null && x.Appointment.Patient.FullName != null && x.Appointment.Patient.FullName.ToLower().Contains(search)) || 
+                        (x.Appointment.Mobile != null && x.Appointment.Mobile.Contains(search)) || 
+                        (x.Appointment.DisplayId != null && x.Appointment.DisplayId.ToLower().Contains(search)) ||
+                        (x.Appointment.Patient != null && x.Appointment.Patient.PatientIdentifier != null && x.Appointment.Patient.PatientIdentifier.ToLower().Contains(search)));
+                }
             }
 
             // Project to DTO directly in the query to avoid entity materialization issues
