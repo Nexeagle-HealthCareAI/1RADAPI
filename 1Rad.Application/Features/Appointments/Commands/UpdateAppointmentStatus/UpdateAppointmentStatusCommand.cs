@@ -22,7 +22,8 @@ public class UpdateAppointmentStatusCommandHandler : IRequestHandler<UpdateAppoi
 
         if (appointment == null) return false;
 
-        appointment.Status = request.Status;
+        // Normalize to uppercase to match backend-set statuses (REPORTED, SCANNED, IN_PROGRESS, etc.)
+        appointment.Status = request.Status.ToUpperInvariant();
         await _context.SaveChangesAsync(cancellationToken);
 
         return true;
