@@ -257,4 +257,53 @@ public class CreateAppointmentCommandHandlerTests : BaseHandlerTest
         Assert.NotNull(commission); // Commission should be created because ReferralCutValue > 0
         Assert.Equal(150m, commission.CommissionAmount);
     }
+
+    [Fact]
+    public async Task Handle_WithAutoBillingDisabled_DoesNotCreateInvoice()
+    {
+        // Arrange
+        var patientId = Guid.NewGuid();
+        var patient = new Patient
+        {
+            PatientId = patientId,
+            FullName = "John Patient",
+            HospitalId = HospitalId,
+            Mobile = "9876543210"
+        };
+        Context.Patients.Add(patient);
+
+        // Ensure the hospital exists and auto-billing is disabled
+        var hospital = new Hospital
+        {
+            HospitalId = HospitalId,
+            HospitalName = "Test Hospital",
+            HospitalAddress = "123 Test St",
+            IsAutoBillingEnabled = false
+        };
+        Context.Hospitals.Add(hospital);
+        await Context.SaveChangesAsync();
+
+        var command = new CreateAppointmentCommand(
+            PatientId: patientId,
+            Service: "X-Ray Chest",
+            Modality: "XRAY",
+            DateTime: DateTime.UtcNow,
+            Type: "scheduled",
+            Doctor: "Dr. Radiologist",
+            ReferredBy: "",
+            ReferredContact: "",
+            Notes: "Testing",
+            Amount: 1000m,
+            ReferralCutValue: null
+        );
+
+        // Act
+        var appointmentId = await _handler.Handle(command, CancellationToken.None);
+
+        // Assert
+        var invoice = await Context.Invoices
+            .FirstOrDefaultAsync(i => i.AppointmentId == appointmentId);
+        Assert.Null(invoice); // Invoice should NOT be created because auto-billing is disabled
+    }
 }
+
