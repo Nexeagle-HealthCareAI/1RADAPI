@@ -36,9 +36,11 @@ public class GetReferralCommissionsQueryHandler : IRequestHandler<GetReferralCom
 
     public async Task<List<ReferralCommissionDto>> Handle(GetReferralCommissionsQuery request, CancellationToken cancellationToken)
     {
-        // 1. Initial query from Commissions
+        // 1. Initial query from Commissions — scoped to current hospital (multi-tenant isolation)
+        var hospitalId = _context.UserContext.HospitalId;
         var commissionsQuery = _context.ReferralCommissions
             .AsNoTracking()
+            .Where(c => c.HospitalId == hospitalId)
             .AsQueryable();
 
         // 2. Apply Filters

@@ -36,6 +36,16 @@ public class DeleteInvoiceCommandHandler : IRequestHandler<DeleteInvoiceCommand,
             _context.ReferralCommissions.Remove(commission);
         }
 
+        if (invoice.Payments != null && invoice.Payments.Any())
+        {
+            _context.Payments.RemoveRange(invoice.Payments);
+        }
+
+        if (invoice.Items != null && invoice.Items.Any())
+        {
+            ((DbContext)_context).RemoveRange(invoice.Items);
+        }
+
         _context.Invoices.Remove(invoice);
         await _context.SaveChangesAsync(cancellationToken);
 
