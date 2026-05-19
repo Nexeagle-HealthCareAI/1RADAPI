@@ -75,16 +75,19 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
         var hospital = await _context.Hospitals.FindAsync(new object[] { appointment.HospitalId }, cancellationToken);
         bool isAutoBillingEnabled = hospital?.IsAutoBillingEnabled ?? false;
 
+        string? invoiceDisplayId = null;
+
         // Create Invoice if amount is provided AND auto-billing is authorized
         if (request.Amount > 0 && isAutoBillingEnabled)
         {
+            invoiceDisplayId = $"INV-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString().Substring(0, 8).ToUpper()}";
             var invoice = new Invoice
             {
                 AppointmentId = appointment.AppointmentId,
                 PatientId = request.PatientId,
                 PatientName = patient.FullName ?? "Unknown",
                 HospitalId = appointment.HospitalId,
-                InvoiceId = $"INV-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString().Substring(0, 8).ToUpper()}",
+                InvoiceId = invoiceDisplayId,
                 GrossAmount = request.Amount,
                 DiscountAmount = 0,
                 TotalAmount = request.Amount,
@@ -145,16 +148,23 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
             var cutAmount = request.ReferralCutValue ?? 0;
             if (isAutoBillingEnabled || cutAmount > 0)
             {
+                // Calculate accumulated total for this new record
+                var currentTotal = await _context.ReferralCommissions
+                    .Where(c => c.ReferrerId == referrer.ReferrerId && c.HospitalId == appointment.HospitalId)
+                    .SumAsync(c => (decimal?)c.CommissionAmount, cancellationToken) ?? 0;
+
                 var commission = new ReferralCommission
                 {
                     ReferrerId = referrer.ReferrerId,
                     ReferrerName = referrer.Name ?? request.ReferredBy ?? "Self-Referral",
                     Modality = request.Modality,
                     CommissionAmount = cutAmount,
+                    AccumulatedTotal = currentTotal + cutAmount,
                     Status = "UNPAID",
                     TransactionDate = DateTime.UtcNow,
                     HospitalId = appointment.HospitalId,
-                    AppointmentId = appointment.AppointmentId
+                    AppointmentId = appointment.AppointmentId,
+                    ReferenceNumber = invoiceDisplayId
                 };
 
                 _context.ReferralCommissions.Add(commission);
