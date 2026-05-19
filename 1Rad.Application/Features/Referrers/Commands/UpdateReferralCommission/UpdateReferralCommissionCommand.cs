@@ -41,6 +41,22 @@ public class UpdateReferralCommissionCommandHandler : IRequestHandler<UpdateRefe
             commission.PaymentDate = DateTime.UtcNow;
         }
 
+        // Save current changes first
+        await _context.SaveChangesAsync(cancellationToken);
+
+        // Recalculate Accumulated Total chronologically for this referrer to prevent drift
+        var allCommissions = await _context.ReferralCommissions
+            .Where(c => c.ReferrerId == commission.ReferrerId && c.HospitalId == commission.HospitalId)
+            .OrderBy(c => c.TransactionDate)
+            .ToListAsync(cancellationToken);
+
+        decimal runningTotal = 0;
+        foreach (var c in allCommissions)
+        {
+            runningTotal += c.CommissionAmount;
+            c.AccumulatedTotal = runningTotal;
+        }
+
         await _context.SaveChangesAsync(cancellationToken);
         return true;
     }
