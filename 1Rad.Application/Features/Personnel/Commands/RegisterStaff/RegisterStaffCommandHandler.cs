@@ -60,6 +60,21 @@ public class RegisterStaffCommandHandler : IRequestHandler<RegisterStaffCommand,
             };
             _context.Users.Add(user);
         }
+        else
+        {
+            // If the user already exists, update their profile, activate them, and set password if provided
+            user.FullName = request.FullName;
+            user.Status = UserStatus.Active;
+            user.IsVerified = true;
+            if (!string.IsNullOrWhiteSpace(request.Password))
+            {
+                user.Password = request.Password;
+                user.PasswordHash = _passwordHasher.Hash(request.Password);
+            }
+            if (!string.IsNullOrWhiteSpace(request.Specialization)) user.Specialization = request.Specialization;
+            if (!string.IsNullOrWhiteSpace(request.Degree)) user.Degree = request.Degree;
+            if (!string.IsNullOrWhiteSpace(request.LicenseNo)) user.LicenseNo = request.LicenseNo;
+        }
 
         // 4. Check for existing Mapping
         var existingMapping = await _context.UserHospitalMappings
