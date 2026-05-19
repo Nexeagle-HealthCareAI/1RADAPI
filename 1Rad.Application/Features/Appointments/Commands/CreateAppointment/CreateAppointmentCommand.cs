@@ -1,3 +1,6 @@
+using System;
+using System.Linq;
+using System.Text.RegularExpressions;
 using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Entities;
 using MediatR;
@@ -104,32 +107,57 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
         // --- REFERRAL SYNCHRONIZATION ---
         if (!string.IsNullOrEmpty(request.ReferredBy))
         {
+            var searchName = request.ReferredBy.Trim();
             var referrer = await _context.Referrers
-                .FirstOrDefaultAsync(r => r.Name == request.ReferredBy && r.HospitalId == appointment.HospitalId, cancellationToken);
+                .FirstOrDefaultAsync(r => r.Name.ToLower() == searchName.ToLower() && r.HospitalId == appointment.HospitalId, cancellationToken);
 
-            if (referrer != null)
+            if (referrer == null)
             {
-                // Ensure patient record is linked to this referrer for longitudinal tracking
-                patient.ReferrerId = referrer.ReferrerId;
-
-                // Only generate financial commissions automatically if auto-billing is enabled
-                if (isAutoBillingEnabled)
+                var digits = string.Empty;
+                if (!string.IsNullOrEmpty(request.ReferredContact))
                 {
-                    // Record commission even if amount is zero to maintain mission audit trail
-                    var commission = new ReferralCommission
+                    digits = new string(request.ReferredContact.Where(char.IsDigit).ToArray());
+                    if (digits.StartsWith("91") && digits.Length == 12)
                     {
-                        ReferrerId = referrer.ReferrerId,
-                        ReferrerName = referrer.Name ?? request.ReferredBy ?? "Self-Referral",
-                        Modality = request.Modality,
-                        CommissionAmount = request.ReferralCutValue ?? 0,
-                        Status = "UNPAID",
-                        TransactionDate = DateTime.UtcNow,
-                        HospitalId = appointment.HospitalId,
-                        AppointmentId = appointment.AppointmentId
-                    };
-
-                    _context.ReferralCommissions.Add(commission);
+                        digits = digits.Substring(2);
+                    }
+                    else if (digits.StartsWith("0") && digits.Length == 11)
+                    {
+                        digits = digits.Substring(1);
+                    }
                 }
+
+                referrer = new Referrer
+                {
+                    Name = searchName,
+                    Contact = digits,
+                    Address = string.Empty,
+                    HospitalId = appointment.HospitalId
+                };
+
+                _context.Referrers.Add(referrer);
+            }
+
+            // Ensure patient record is linked to this referrer for longitudinal tracking
+            patient.ReferrerId = referrer.ReferrerId;
+
+            // Generate commission if auto-billing is enabled OR if there is a positive referral cut value
+            var cutAmount = request.ReferralCutValue ?? 0;
+            if (isAutoBillingEnabled || cutAmount > 0)
+            {
+                var commission = new ReferralCommission
+                {
+                    ReferrerId = referrer.ReferrerId,
+                    ReferrerName = referrer.Name ?? request.ReferredBy ?? "Self-Referral",
+                    Modality = request.Modality,
+                    CommissionAmount = cutAmount,
+                    Status = "UNPAID",
+                    TransactionDate = DateTime.UtcNow,
+                    HospitalId = appointment.HospitalId,
+                    AppointmentId = appointment.AppointmentId
+                };
+
+                _context.ReferralCommissions.Add(commission);
             }
         }
 

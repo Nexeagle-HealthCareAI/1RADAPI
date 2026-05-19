@@ -1,3 +1,6 @@
+using System;
+using System.Linq;
+using System.Text.RegularExpressions;
 using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Entities;
 using MediatR;
@@ -88,9 +91,7 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         {
             if (finalCut <= 0 || string.IsNullOrEmpty(request.ReferredBy))
             {
-                // If cut removed or referrer removed, delete commission? 
-                // Or just set to 0. Let's keep it but set to 0 to preserve history if needed, 
-                // but usually user expects it to disappear from analytics if it's 0.
+                // If cut removed or referrer removed, set commission to 0 to preserve audit trail
                 commission.CommissionAmount = 0;
             }
             else
@@ -98,43 +99,56 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
                 commission.CommissionAmount = finalCut;
                 commission.Modality = request.Modality;
                 
-                if (commission.ReferrerName != request.ReferredBy)
+                var searchName = request.ReferredBy.Trim();
+                var referrer = await _context.Referrers
+                    .FirstOrDefaultAsync(r => r.Name.ToLower() == searchName.ToLower() && r.HospitalId == appointment.HospitalId, cancellationToken);
+                
+                if (referrer == null)
                 {
-                    var newReferrer = await _context.Referrers
-                        .FirstOrDefaultAsync(r => r.Name == request.ReferredBy && r.HospitalId == appointment.HospitalId, cancellationToken);
-                    
-                    if (newReferrer != null)
+                    referrer = new Referrer
                     {
-                        commission.ReferrerId = newReferrer.ReferrerId;
-                        commission.ReferrerName = newReferrer.Name ?? request.ReferredBy;
-                    }
-                    else
-                    {
-                        commission.ReferrerName = request.ReferredBy;
-                    }
+                        Name = searchName,
+                        Contact = string.Empty,
+                        Address = string.Empty,
+                        HospitalId = appointment.HospitalId
+                    };
+                    _context.Referrers.Add(referrer);
                 }
+
+                commission.ReferrerId = referrer.ReferrerId;
+                commission.ReferrerName = referrer.Name ?? request.ReferredBy;
             }
         }
         else if (finalCut > 0 && !string.IsNullOrEmpty(request.ReferredBy))
         {
+            var searchName = request.ReferredBy.Trim();
             var referrer = await _context.Referrers
-                .FirstOrDefaultAsync(r => r.Name == request.ReferredBy && r.HospitalId == appointment.HospitalId, cancellationToken);
+                .FirstOrDefaultAsync(r => r.Name.ToLower() == searchName.ToLower() && r.HospitalId == appointment.HospitalId, cancellationToken);
 
-            if (referrer != null)
+            if (referrer == null)
             {
-                var newCommission = new ReferralCommission
+                referrer = new Referrer
                 {
-                    ReferrerId = referrer.ReferrerId,
-                    ReferrerName = referrer.Name ?? request.ReferredBy,
-                    Modality = request.Modality,
-                    CommissionAmount = finalCut,
-                    Status = "UNPAID",
-                    TransactionDate = DateTime.UtcNow,
-                    HospitalId = appointment.HospitalId,
-                    AppointmentId = appointment.AppointmentId
+                    Name = searchName,
+                    Contact = string.Empty,
+                    Address = string.Empty,
+                    HospitalId = appointment.HospitalId
                 };
-                _context.ReferralCommissions.Add(newCommission);
+                _context.Referrers.Add(referrer);
             }
+
+            var newCommission = new ReferralCommission
+            {
+                ReferrerId = referrer.ReferrerId,
+                ReferrerName = referrer.Name ?? request.ReferredBy,
+                Modality = request.Modality,
+                CommissionAmount = finalCut,
+                Status = "UNPAID",
+                TransactionDate = DateTime.UtcNow,
+                HospitalId = appointment.HospitalId,
+                AppointmentId = appointment.AppointmentId
+            };
+            _context.ReferralCommissions.Add(newCommission);
         }
 
 

@@ -32,6 +32,7 @@ public class GenerateInvoiceCommandHandlerTests : BaseHandlerTest
         {
             AppointmentId = appointmentId,
             PatientId = patientId,
+            PatientName = "John Doe",
             HospitalId = HospitalId
         };
 
@@ -290,6 +291,7 @@ public class GenerateInvoiceCommandHandlerTests : BaseHandlerTest
         {
             AppointmentId = appointmentId,
             PatientId = Guid.NewGuid(), // Different patient
+            PatientName = "John Doe Mismatch",
             HospitalId = HospitalId
         };
 
