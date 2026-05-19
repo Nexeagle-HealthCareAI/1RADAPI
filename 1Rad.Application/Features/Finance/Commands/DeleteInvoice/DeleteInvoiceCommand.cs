@@ -28,11 +28,23 @@ public class DeleteInvoiceCommandHandler : IRequestHandler<DeleteInvoiceCommand,
             throw new Exception("Invoice not found or unauthorized.");
         }
 
+        var invoiceGuidStr = invoice.Id.ToString();
+        var invoiceStr = invoice.InvoiceId;
+        var appointmentId = invoice.AppointmentId;
+        var hospitalId = _context.UserContext.HospitalId;
+
+        // Enhanced multi-strategy lookup for related referral commissions
         var commission = await _context.ReferralCommissions
-            .FirstOrDefaultAsync(c => c.ReferenceNumber == invoice.InvoiceId && c.HospitalId == _context.UserContext.HospitalId, cancellationToken);
+            .FirstOrDefaultAsync(c => 
+                ((c.ReferenceNumber == invoiceStr) || 
+                 (c.ReferenceNumber == invoiceGuidStr) ||
+                 (appointmentId != null && c.AppointmentId == appointmentId)) &&
+                c.HospitalId == hospitalId, cancellationToken);
         
+        Guid? referrerIdToRecalculate = null;
         if (commission != null)
         {
+            referrerIdToRecalculate = commission.ReferrerId;
             _context.ReferralCommissions.Remove(commission);
         }
 
@@ -48,6 +60,24 @@ public class DeleteInvoiceCommandHandler : IRequestHandler<DeleteInvoiceCommand,
 
         _context.Invoices.Remove(invoice);
         await _context.SaveChangesAsync(cancellationToken);
+
+        // Cascade recalculation of Accumulated Totals for the referrer to prevent ledger drift after deletion
+        if (referrerIdToRecalculate.HasValue)
+        {
+            var allCommissions = await _context.ReferralCommissions
+                .Where(c => c.ReferrerId == referrerIdToRecalculate.Value && c.HospitalId == hospitalId)
+                .OrderBy(c => c.TransactionDate)
+                .ToListAsync(cancellationToken);
+
+            decimal runningTotal = 0;
+            foreach (var c in allCommissions)
+            {
+                runningTotal += c.CommissionAmount;
+                c.AccumulatedTotal = runningTotal;
+            }
+
+            await _context.SaveChangesAsync(cancellationToken);
+        }
 
         return true;
     }
