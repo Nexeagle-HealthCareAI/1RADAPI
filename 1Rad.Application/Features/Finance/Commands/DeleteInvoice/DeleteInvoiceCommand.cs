@@ -19,11 +19,21 @@ public class DeleteInvoiceCommandHandler : IRequestHandler<DeleteInvoiceCommand,
     public async Task<bool> Handle(DeleteInvoiceCommand request, CancellationToken cancellationToken)
     {
         var invoice = await _context.Invoices
+            .Include(i => i.Items)
+            .Include(i => i.Payments)
             .FirstOrDefaultAsync(i => i.Id == request.InvoiceId && i.HospitalId == _context.UserContext.HospitalId, cancellationToken);
 
         if (invoice == null)
         {
             throw new Exception("Invoice not found or unauthorized.");
+        }
+
+        var commission = await _context.ReferralCommissions
+            .FirstOrDefaultAsync(c => c.ReferenceNumber == invoice.InvoiceId && c.HospitalId == _context.UserContext.HospitalId, cancellationToken);
+        
+        if (commission != null)
+        {
+            _context.ReferralCommissions.Remove(commission);
         }
 
         _context.Invoices.Remove(invoice);
