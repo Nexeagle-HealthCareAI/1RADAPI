@@ -7,6 +7,8 @@ using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
+using _1Rad.Application.Features.Appointments.Commands.UpdateReportProgress;
+
 namespace _1RadAPI.Controllers;
 
 [Authorize]
@@ -59,6 +61,14 @@ public class AppointmentsController : ControllerBase
         if (id != command.AppointmentId) return BadRequest("Appointment ID mismatch.");
         var result = await _mediator.Send(command);
         return result ? Ok() : NotFound();
+    }
+
+    [HttpPut("{id}/operations-status")]
+    public async Task<IActionResult> UpdateOperationsStatus(Guid id, [FromBody] UpdateReportProgressCommand command)
+    {
+        if (id != command.AppointmentId) return BadRequest("Appointment ID mismatch.");
+        var result = await _mediator.Send(command);
+        return result ? Ok(new { success = true }) : NotFound();
     }
 
     [HttpPost("import")]

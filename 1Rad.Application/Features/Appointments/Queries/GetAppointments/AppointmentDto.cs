@@ -25,6 +25,8 @@ public record AppointmentDto(
     decimal ReferralCutValue = 0,
     int AssetCount = 0,
     string? ReportImpression = null,
-    int? DailyTokenNumber = null
+    int? DailyTokenNumber = null,
+    string? DelayReason = null,
+    string ReportProgressStatus = "NOT_STARTED"
 );
 

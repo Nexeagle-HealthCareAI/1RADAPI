@@ -28,6 +28,9 @@ public class Appointment : BaseEntity, IHospitalContext
     public DateTime? ScannedAt { get; set; }
     public int? DailyTokenNumber { get; set; }  // Persisted token, assigned atomically on creation
     
+    public string? DelayReason { get; set; }
+    public string ReportProgressStatus { get; set; } = "NOT_STARTED";
+    
     public Guid HospitalId { get; set; }
     
     // Navigation
