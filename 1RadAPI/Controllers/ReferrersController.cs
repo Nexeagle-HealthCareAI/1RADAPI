@@ -2,6 +2,7 @@ using _1Rad.Application.Features.Referrers.Queries.GetReferrers;
 using _1Rad.Application.Features.Referrers.Queries.GetReferralIntelligence;
 using _1Rad.Application.Features.Referrers.Queries.GetReferralMatrix;
 using _1Rad.Application.Features.Referrers.Queries.GetReferralCommissions;
+using _1Rad.Application.Features.Referrers.Queries.GetDetailedReferralLedger;
 using _1Rad.Application.Features.Referrers.Commands.CreateReferrer;
 using _1Rad.Application.Features.Referrers.Commands.UpdateReferrer;
 using _1Rad.Application.Features.Referrers.Commands.RecordReferralCommission;
@@ -76,6 +77,13 @@ public class ReferrersController : ControllerBase
     public async Task<IActionResult> GetCommissions([FromQuery] DateTime? startDate, [FromQuery] DateTime? endDate, [FromQuery] Guid? referrerId)
     {
         var result = await _mediator.Send(new GetReferralCommissionsQuery(startDate, endDate, referrerId));
+        return Ok(result);
+    }
+
+    [HttpGet("ledger")]
+    public async Task<IActionResult> GetLedger([FromQuery] DateTime? startDate, [FromQuery] DateTime? endDate, [FromQuery] Guid? referrerId)
+    {
+        var result = await _mediator.Send(new GetDetailedReferralLedgerQuery(startDate, endDate, referrerId));
         return Ok(result);
     }
 
