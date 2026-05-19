@@ -4,9 +4,16 @@ using Microsoft.EntityFrameworkCore;
 
 namespace _1Rad.Application.Features.Appointments.Commands.UpdateAppointmentStatus;
 
-public record UpdateAppointmentStatusCommand(Guid AppointmentId, string Status) : IRequest<bool>;
+public class UpdateAppointmentStatusResult
+{
+    public bool Success { get; set; }
+    public string Message { get; set; } = string.Empty;
+    public bool NotAllowed { get; set; }
+}
 
-public class UpdateAppointmentStatusCommandHandler : IRequestHandler<UpdateAppointmentStatusCommand, bool>
+public record UpdateAppointmentStatusCommand(Guid AppointmentId, string Status) : IRequest<UpdateAppointmentStatusResult>;
+
+public class UpdateAppointmentStatusCommandHandler : IRequestHandler<UpdateAppointmentStatusCommand, UpdateAppointmentStatusResult>
 {
     private readonly IApplicationDbContext _context;
 
@@ -15,20 +22,33 @@ public class UpdateAppointmentStatusCommandHandler : IRequestHandler<UpdateAppoi
         _context = context;
     }
 
-    public async Task<bool> Handle(UpdateAppointmentStatusCommand request, CancellationToken cancellationToken)
+    public async Task<UpdateAppointmentStatusResult> Handle(UpdateAppointmentStatusCommand request, CancellationToken cancellationToken)
     {
         var appointment = await _context.Appointments
             .FirstOrDefaultAsync(a => a.AppointmentId == request.AppointmentId, cancellationToken);
 
-        if (appointment == null) return false;
+        if (appointment == null)
+        {
+            return new UpdateAppointmentStatusResult { Success = false, Message = "Appointment not found." };
+        }
 
         var newStatus = request.Status.ToUpperInvariant();
 
         if (newStatus == "CANCELLED")
         {
-            var hospitalId = appointment.HospitalId;
+            // Enforce validation: Check if study is currently being reported or already finalized
+            var isReportingOrFinalized = appointment.Status == "REPORTING" || appointment.Status == "REPORTED" || appointment.Status == "DELIVERED";
+            if (isReportingOrFinalized)
+            {
+                return new UpdateAppointmentStatusResult
+                {
+                    Success = true,
+                    NotAllowed = true,
+                    Message = "The study is currently in reporting or has already been reported. You cannot cancel this appointment."
+                };
+            }
 
-            // Airtight business validation: Enforce that an appointment can ONLY be cancelled if no payments have been collected
+            // Enforce validation: Enforce that an appointment can ONLY be cancelled if no payments have been collected
             var hasPayments = await _context.Invoices
                 .AnyAsync(i => i.AppointmentId == request.AppointmentId && (i.PaidAmount > 0 || i.Status == "PAID" || i.Status == "PARTIAL"), cancellationToken)
                 || await _context.Payments
@@ -36,8 +56,15 @@ public class UpdateAppointmentStatusCommandHandler : IRequestHandler<UpdateAppoi
 
             if (hasPayments)
             {
-                throw new System.Exception("Cannot cancel appointment. Payment has already been collected.");
+                return new UpdateAppointmentStatusResult
+                {
+                    Success = true,
+                    NotAllowed = true,
+                    Message = "Payment has already been collected for this appointment. You are not allowed to cancel it at this time."
+                };
             }
+
+            var hospitalId = appointment.HospitalId;
 
             // 1. Fetch related invoices, items, and payments
             var invoices = await _context.Invoices
@@ -105,6 +132,6 @@ public class UpdateAppointmentStatusCommandHandler : IRequestHandler<UpdateAppoi
         appointment.Status = newStatus;
         await _context.SaveChangesAsync(cancellationToken);
 
-        return true;
+        return new UpdateAppointmentStatusResult { Success = true };
     }
 }

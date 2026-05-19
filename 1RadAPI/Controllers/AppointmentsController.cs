@@ -46,7 +46,11 @@ public class AppointmentsController : ControllerBase
     public async Task<IActionResult> UpdateStatus(Guid id, [FromBody] string status)
     {
         var result = await _mediator.Send(new UpdateAppointmentStatusCommand(id, status));
-        return result ? Ok() : NotFound();
+        if (!result.Success && result.Message == "Appointment not found.")
+        {
+            return NotFound();
+        }
+        return Ok(result);
     }
 
     [HttpPut("{id}")]
