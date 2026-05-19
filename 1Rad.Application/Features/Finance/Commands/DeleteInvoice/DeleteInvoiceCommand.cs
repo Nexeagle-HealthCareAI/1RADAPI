@@ -5,7 +5,7 @@ using _1Rad.Domain.Entities;
 
 namespace _1Rad.Application.Features.Finance.Commands.DeleteInvoice;
 
-public record DeleteInvoiceCommand(Guid InvoiceId) : IRequest<bool>;
+public record DeleteInvoiceCommand(Guid InvoiceId, Guid? CommissionId = null) : IRequest<bool>;
 
 public class DeleteInvoiceCommandHandler : IRequestHandler<DeleteInvoiceCommand, bool>
 {
@@ -33,13 +33,23 @@ public class DeleteInvoiceCommandHandler : IRequestHandler<DeleteInvoiceCommand,
         var appointmentId = invoice.AppointmentId;
         var hospitalId = _context.UserContext.HospitalId;
 
-        // Enhanced multi-strategy lookup for related referral commissions
-        var commission = await _context.ReferralCommissions
-            .FirstOrDefaultAsync(c => 
-                ((c.ReferenceNumber == invoiceStr) || 
-                 (c.ReferenceNumber == invoiceGuidStr) ||
-                 (appointmentId != null && c.AppointmentId == appointmentId)) &&
-                c.HospitalId == hospitalId, cancellationToken);
+        ReferralCommission? commission = null;
+        if (request.CommissionId.HasValue)
+        {
+            commission = await _context.ReferralCommissions
+                .FirstOrDefaultAsync(c => c.Id == request.CommissionId.Value && c.HospitalId == hospitalId, cancellationToken);
+        }
+
+        if (commission == null)
+        {
+            // Enhanced multi-strategy lookup for related referral commissions
+            commission = await _context.ReferralCommissions
+                .FirstOrDefaultAsync(c => 
+                    ((c.ReferenceNumber == invoiceStr) || 
+                     (c.ReferenceNumber == invoiceGuidStr) ||
+                     (appointmentId != null && c.AppointmentId == appointmentId)) &&
+                    c.HospitalId == hospitalId, cancellationToken);
+        }
         
         Guid? referrerIdToRecalculate = null;
         if (commission != null)
