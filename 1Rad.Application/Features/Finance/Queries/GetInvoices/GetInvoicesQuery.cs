@@ -29,6 +29,7 @@ public class InvoiceDto
     public Guid? ReferrerId { get; set; }
     public string? Modality { get; set; }
     public decimal CommissionAmount { get; set; }
+    public Guid? CommissionId { get; set; }
     public List<InvoiceItemDto> Items { get; set; } = new();
 }
 
@@ -109,6 +110,10 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
                     ReferrerId = i.Patient.ReferrerId ?? (i.Appointment != null ? _context.Referrers.Where(r => r.Name == i.Appointment.ReferredBy && r.HospitalId == i.HospitalId).Select(r => (Guid?)r.ReferrerId).FirstOrDefault() : null),
                     Modality = i.Appointment != null ? i.Appointment.Modality : null,
                     CommissionAmount = (_context.ReferralCommissions.Where(c => ((i.AppointmentId != null && c.AppointmentId == i.AppointmentId) || (i.InvoiceId != null && c.ReferenceNumber == i.InvoiceId)) && c.HospitalId == i.HospitalId).Sum(c => (decimal?)c.CommissionAmount) ?? 0),
+                    CommissionId = _context.ReferralCommissions
+                        .Where(c => ((i.AppointmentId != null && c.AppointmentId == i.AppointmentId) || (i.InvoiceId != null && c.ReferenceNumber == i.InvoiceId)) && c.HospitalId == i.HospitalId)
+                        .Select(c => (Guid?)c.Id)
+                        .FirstOrDefault(),
 
                     Items = i.Items.Select(it => new InvoiceItemDto
                     {
