@@ -13,6 +13,7 @@ using _1Rad.Application.Features.Finance.Queries.ExportFinancials;
 using _1Rad.Application.Features.Finance.Queries.GetFinancialMatrix;
 using _1Rad.Application.Features.Finance.Queries.GetPendingBillables;
 using _1Rad.Application.Features.Finance.Commands.RecordExpense;
+using _1Rad.Application.Features.Finance.Commands.UpdateExpense;
 
 using _1Rad.Application.Features.Finance.Queries.GetExpenses;
 
@@ -129,6 +130,14 @@ public class FinanceController : ControllerBase
     {
         var result = await _mediator.Send(command);
         return Ok(new { id = result });
+    }
+
+    [HttpPut("expenses/{id}")]
+    public async Task<IActionResult> UpdateExpense(Guid id, [FromBody] UpdateExpenseCommand command)
+    {
+        var updated = command with { Id = id };
+        var result = await _mediator.Send(updated);
+        return result ? Ok() : NotFound();
     }
 
     [HttpDelete("invoices/{id}")]

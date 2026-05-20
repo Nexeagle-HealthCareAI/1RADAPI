@@ -10,6 +10,8 @@ public interface IApplicationDbContext
     DbSet<Hospital> Hospitals { get; }
     DbSet<Role> Roles { get; }
     DbSet<UserHospitalMapping> UserHospitalMappings { get; }
+    DbSet<CustomRole> CustomRoles { get; }
+    DbSet<CustomRolePermission> CustomRolePermissions { get; }
     DbSet<OTPVerification> OTPVerifications { get; }
     DbSet<RefreshToken> RefreshTokens { get; }
     DbSet<Patient> Patients { get; }

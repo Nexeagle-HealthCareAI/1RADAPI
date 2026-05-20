@@ -23,20 +23,25 @@ public class RegisterStaffCommandHandler : IRequestHandler<RegisterStaffCommand,
         var hospital = await _context.Hospitals.FindAsync(new object[] { request.HospitalId }, cancellationToken);
         if (hospital == null) return (Guid.Empty, "Hospital not found.");
 
-        // 2. Resolve Roles
+        // 2. Resolve Roles (System Roles & Custom Roles)
         var normalizedRequestRoles = request.RoleNames.Select(r => r.Trim().ToLower()).ToList();
         var roles = await _context.Roles
             .Where(r => normalizedRequestRoles.Contains(r.RoleName.ToLower()))
             .ToListAsync(cancellationToken);
         
-        if (!roles.Any())
+        if (!roles.Any() && request.RoleNames.Any())
         {
             // Fallback for strict database collations: Fetch and filter in-memory if query returns nothing
             var allRoles = await _context.Roles.ToListAsync(cancellationToken);
             roles = allRoles.Where(r => normalizedRequestRoles.Contains(r.RoleName.ToLower())).ToList();
         }
 
-        if (!roles.Any()) return (Guid.Empty, "Invalid roles selected. Please verify system role naming.");
+        var customRoles = await _context.CustomRoles
+            .Where(cr => cr.HospitalId == request.HospitalId && normalizedRequestRoles.Contains(cr.RoleName.ToLower()))
+            .ToListAsync(cancellationToken);
+
+        if (!roles.Any() && !customRoles.Any()) 
+            return (Guid.Empty, "Invalid roles selected. Please verify system/custom role naming.");
 
         // 3. Check for existing User
         var user = await _context.Users
@@ -79,6 +84,7 @@ public class RegisterStaffCommandHandler : IRequestHandler<RegisterStaffCommand,
         // 4. Check for existing Mapping
         var existingMapping = await _context.UserHospitalMappings
             .Include(m => m.Roles)
+            .Include(m => m.CustomRoles)
             .FirstOrDefaultAsync(m => m.UserId == user.UserId && m.HospitalId == request.HospitalId, cancellationToken);
 
         if (existingMapping != null)
@@ -86,6 +92,9 @@ public class RegisterStaffCommandHandler : IRequestHandler<RegisterStaffCommand,
             // Update roles if they differ
             existingMapping.Roles.Clear();
             foreach (var role in roles) existingMapping.Roles.Add(role);
+
+            existingMapping.CustomRoles.Clear();
+            foreach (var cr in customRoles) existingMapping.CustomRoles.Add(cr);
         }
         else
         {
@@ -94,7 +103,8 @@ public class RegisterStaffCommandHandler : IRequestHandler<RegisterStaffCommand,
                 UserId = user.UserId,
                 HospitalId = request.HospitalId,
                 AssignedAt = DateTime.UtcNow,
-                Roles = roles
+                Roles = roles,
+                CustomRoles = customRoles
             };
             _context.UserHospitalMappings.Add(mapping);
         }

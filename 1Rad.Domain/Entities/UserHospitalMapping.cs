@@ -12,4 +12,5 @@ public class UserHospitalMapping
     public User User { get; set; } = null!;
     public Hospital Hospital { get; set; } = null!;
     public ICollection<Role> Roles { get; set; } = new List<Role>();
+    public ICollection<CustomRole> CustomRoles { get; set; } = new List<CustomRole>();
 }

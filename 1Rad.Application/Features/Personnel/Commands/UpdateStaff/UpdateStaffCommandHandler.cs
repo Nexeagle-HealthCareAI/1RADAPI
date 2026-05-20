@@ -22,6 +22,7 @@ public class UpdateStaffCommandHandler : IRequestHandler<UpdateStaffCommand, (bo
 
         var mapping = await _context.UserHospitalMappings
             .Include(m => m.Roles)
+            .Include(m => m.CustomRoles)
             .FirstOrDefaultAsync(m => m.UserId == request.UserId && m.HospitalId == request.HospitalId, cancellationToken);
 
         if (mapping == null) return (false, "Staff mapping for this hospital not found.");
@@ -44,8 +45,15 @@ public class UpdateStaffCommandHandler : IRequestHandler<UpdateStaffCommand, (bo
             .Where(r => normalizedRoleNames.Contains(r.RoleName.ToLower()))
             .ToListAsync(cancellationToken);
 
+        var customRoles = await _context.CustomRoles
+            .Where(cr => cr.HospitalId == request.HospitalId && normalizedRoleNames.Contains(cr.RoleName.ToLower()))
+            .ToListAsync(cancellationToken);
+
         mapping.Roles.Clear();
         foreach (var role in roles) mapping.Roles.Add(role);
+
+        mapping.CustomRoles.Clear();
+        foreach (var cr in customRoles) mapping.CustomRoles.Add(cr);
 
         await _context.SaveChangesAsync(cancellationToken);
         return (true, null);

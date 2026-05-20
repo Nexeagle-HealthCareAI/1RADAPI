@@ -25,6 +25,8 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<Hospital> Hospitals => Set<Hospital>();
     public DbSet<Role> Roles => Set<Role>();
     public DbSet<UserHospitalMapping> UserHospitalMappings => Set<UserHospitalMapping>();
+    public DbSet<CustomRole> CustomRoles => Set<CustomRole>();
+    public DbSet<CustomRolePermission> CustomRolePermissions => Set<CustomRolePermission>();
     public DbSet<OTPVerification> OTPVerifications => Set<OTPVerification>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<Patient> Patients => Set<Patient>();
@@ -507,6 +509,42 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
         );
 
 
+
+        modelBuilder.Entity<CustomRole>(entity =>
+        {
+            entity.ToTable("CustomRoles", "dbo");
+            entity.HasKey(e => e.CustomRoleId);
+            entity.Property(e => e.RoleName).IsRequired().HasMaxLength(100);
+            entity.HasIndex(e => new { e.HospitalId, e.RoleName }).IsUnique();
+
+            entity.HasOne(e => e.Hospital)
+                .WithMany()
+                .HasForeignKey(e => e.HospitalId);
+        });
+
+        modelBuilder.Entity<CustomRolePermission>(entity =>
+        {
+            entity.ToTable("CustomRolePermissions", "dbo");
+            entity.HasKey(e => new { e.CustomRoleId, e.RoutePath });
+            entity.Property(e => e.RoutePath).HasMaxLength(255);
+
+            entity.HasOne(e => e.CustomRole)
+                .WithMany(cr => cr.Permissions)
+                .HasForeignKey(e => e.CustomRoleId);
+        });
+
+        modelBuilder.Entity<UserHospitalMapping>()
+            .HasMany(e => e.CustomRoles)
+            .WithMany(cr => cr.UserHospitalMappings)
+            .UsingEntity<Dictionary<string, object>>(
+                "UserHospitalCustomRole",
+                j => j.HasOne<CustomRole>().WithMany().HasForeignKey("CustomRoleId"),
+                j => j.HasOne<UserHospitalMapping>().WithMany().HasForeignKey("MappingId"),
+                j =>
+                {
+                    j.ToTable("UserHospitalCustomRoles", "dbo");
+                    j.HasKey("MappingId", "CustomRoleId");
+                });
 
         // Tactical Global Query Filters for Multi-Facility Isolation
         foreach (var entityType in modelBuilder.Model.GetEntityTypes())
