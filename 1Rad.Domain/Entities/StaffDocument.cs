@@ -14,7 +14,9 @@ public class StaffDocument : BaseEntity
     public string FileName { get; set; } = string.Empty;
     public string? ContentType { get; set; }
     public int? FileSizeBytes { get; set; }
-    public string? FileContentB64 { get; set; }
+
+    /// <summary>Absolute URL of the file in Azure Blob Storage</summary>
+    public string? BlobUrl { get; set; }
 
     /// <summary>Pending | Verified | Rejected</summary>
     public string VerificationStatus { get; set; } = "Pending";

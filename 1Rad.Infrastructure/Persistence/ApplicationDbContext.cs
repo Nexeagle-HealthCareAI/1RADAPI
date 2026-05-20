@@ -541,6 +541,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.FileName).IsRequired().HasMaxLength(500);
             entity.Property(e => e.ContentType).HasMaxLength(200);
             entity.Property(e => e.VerificationStatus).HasMaxLength(50).HasDefaultValue("Pending");
+            entity.Property(e => e.BlobUrl).HasMaxLength(2000);
         });
 
         // Seed Subscription Plans
