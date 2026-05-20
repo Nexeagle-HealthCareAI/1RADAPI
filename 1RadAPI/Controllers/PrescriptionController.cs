@@ -1,5 +1,7 @@
 using _1Rad.Application.Interfaces;
+using _1Rad.Domain.Constants;
 using _1Rad.Domain.Entities;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -10,6 +12,7 @@ namespace _1RadAPI.Controllers
 {
     [Route("api/v1/[controller]")]
     [ApiController]
+    [Authorize] // All endpoints require a valid JWT. Hospital isolation is enforced via HospitalId claim in the DB query.
     public class PrescriptionController : ControllerBase
     {
         private readonly IApplicationDbContext _context;
@@ -52,7 +55,12 @@ namespace _1RadAPI.Controllers
             }
         }
 
+        /// <summary>
+        /// Create or update a doctor's prescription layout protocol.
+        /// Restricted to AdminDoctor, Admin, and Doctor roles only.
+        /// </summary>
         [HttpPost]
+        [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Doctor}")]
         public async Task<IActionResult> SaveProtocol([FromForm] PrescriptionRequest request)
         {
             try

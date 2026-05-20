@@ -1,7 +1,9 @@
 using System.Net;
 using System.Security.Claims;
 using _1Rad.Application.Interfaces;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
 namespace _1Rad.Infrastructure.Middleware;
@@ -17,13 +19,13 @@ public class ContextualSentinelMiddleware
         _logger = logger;
     }
 
-    public async Task InvokeAsync(HttpContext context, IUserContext userContext)
+    public async Task InvokeAsync(HttpContext context, IUserContext userContext, IApplicationDbContext db)
     {
         // Skip validation for public endpoints or endpoints explicitly allowing anonymous access
         var endpoint = context.GetEndpoint();
-        if (endpoint != null && 
-            (endpoint.Metadata.GetMetadata<Microsoft.AspNetCore.Authorization.IAllowAnonymous>() != null || 
-             !endpoint.Metadata.Any(m => m is Microsoft.AspNetCore.Authorization.IAuthorizeData)))
+        if (endpoint != null &&
+            (endpoint.Metadata.GetMetadata<IAllowAnonymous>() != null ||
+             !endpoint.Metadata.Any(m => m is IAuthorizeData)))
         {
             await _next(context);
             return;
@@ -62,6 +64,68 @@ public class ContextualSentinelMiddleware
 
             // Context is validated and ready for Global Query Filters
             _logger.LogDebug("Context Verified: User {UserId} | Hospital {cid}", userId, currentHospitalId);
+
+            // --- Custom Role Permission Gate ---
+            // For endpoints with [Authorize(Roles=...)]:
+            //   1. Check if the user already has a matching system role in their JWT — if yes, pass through normally.
+            //   2. If NOT, query the DB for a custom role (hospital-scoped) with a RoutePath matching this request.
+            //      - Match found  → inject the required role claim into the ClaimsPrincipal so ASP.NET's
+            //                       [Authorize(Roles=...)] passes naturally downstream.
+            //      - No match     → return 403 here before the pipeline continues.
+            var roleRestrictedAttributes = endpoint?.Metadata
+                .OfType<AuthorizeAttribute>()
+                .Where(a => !string.IsNullOrEmpty(a.Roles))
+                .ToList();
+
+            if (roleRestrictedAttributes?.Count > 0)
+            {
+                var userSystemRoles = context.User
+                    .FindAll(ClaimTypes.Role)
+                    .Select(c => c.Value)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                var requiredRoles = roleRestrictedAttributes
+                    .SelectMany(a => a.Roles!.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                // Only hit the DB if the user lacks a matching system role
+                if (!userSystemRoles.Overlaps(requiredRoles))
+                {
+                    var requestPath = context.Request.Path.Value?.TrimStart('/').ToLowerInvariant() ?? string.Empty;
+
+                    var hasCustomPermission = await db.UserHospitalMappings
+                        .Where(m => m.UserId == userId && m.HospitalId == currentHospitalId)
+                        .SelectMany(m => m.CustomRoles)
+                        .SelectMany(cr => cr.Permissions)
+                        .AnyAsync(p => requestPath.StartsWith(
+                            p.RoutePath.TrimStart('/').ToLowerInvariant()));
+
+                    if (!hasCustomPermission)
+                    {
+                        // Neither system role nor custom role grants access — deny
+                        _logger.LogWarning(
+                            "Authorization Denied: User {UserId} at Hospital {HospitalId} lacks both system role and custom role permission for {Path}.",
+                            userId, currentHospitalId, requestPath);
+                        context.Response.StatusCode = (int)HttpStatusCode.Forbidden;
+                        await context.Response.WriteAsJsonAsync(new
+                        {
+                            success = false,
+                            error = "Access Denied: You do not have the required role or custom permission for this action."
+                        });
+                        return;
+                    }
+
+                    // Custom role matches — inject one of the required role claims so that
+                    // ASP.NET's [Authorize(Roles=...)] evaluation passes downstream.
+                    var grantRole = requiredRoles.First();
+                    var identity = context.User.Identity as ClaimsIdentity;
+                    identity?.AddClaim(new Claim(ClaimTypes.Role, grantRole));
+
+                    _logger.LogDebug(
+                        "Custom Role Override: User {UserId} granted access to {Path} via custom role permission (injected role '{Role}').",
+                        userId, requestPath, grantRole);
+                }
+            }
         }
 
         await _next(context);
