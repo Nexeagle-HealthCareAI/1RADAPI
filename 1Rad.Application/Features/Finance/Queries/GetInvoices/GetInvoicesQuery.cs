@@ -30,6 +30,8 @@ public class InvoiceDto
     public string? Modality { get; set; }
     public decimal CommissionAmount { get; set; }
     public Guid? CommissionId { get; set; }
+    public string? AppointmentStatus { get; set; }
+    public Guid? AppointmentId { get; set; }
     public List<InvoiceItemDto> Items { get; set; } = new();
 }
 
@@ -114,6 +116,8 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
                         .Where(c => ((i.AppointmentId != null && c.AppointmentId == i.AppointmentId) || (i.InvoiceId != null && c.ReferenceNumber == i.InvoiceId)) && c.HospitalId == i.HospitalId)
                         .Select(c => (Guid?)c.Id)
                         .FirstOrDefault(),
+                    AppointmentStatus = i.Appointment != null ? i.Appointment.Status : null,
+                    AppointmentId = i.AppointmentId,
 
                     Items = i.Items.Select(it => new InvoiceItemDto
                     {

@@ -5,9 +5,9 @@ using _1Rad.Domain.Entities;
 
 namespace _1Rad.Application.Features.Finance.Commands.DeleteInvoice;
 
-public record DeleteInvoiceCommand(Guid InvoiceId, Guid? CommissionId = null) : IRequest<bool>;
+public record DeleteInvoiceCommand(Guid InvoiceId, Guid? CommissionId = null) : IRequest<(bool Success, string? Error)>;
 
-public class DeleteInvoiceCommandHandler : IRequestHandler<DeleteInvoiceCommand, bool>
+public class DeleteInvoiceCommandHandler : IRequestHandler<DeleteInvoiceCommand, (bool Success, string? Error)>
 {
     private readonly IApplicationDbContext _context;
 
@@ -16,16 +16,26 @@ public class DeleteInvoiceCommandHandler : IRequestHandler<DeleteInvoiceCommand,
         _context = context;
     }
 
-    public async Task<bool> Handle(DeleteInvoiceCommand request, CancellationToken cancellationToken)
+    public async Task<(bool Success, string? Error)> Handle(DeleteInvoiceCommand request, CancellationToken cancellationToken)
     {
         var invoice = await _context.Invoices
             .Include(i => i.Items)
             .Include(i => i.Payments)
+            .Include(i => i.Appointment)
             .FirstOrDefaultAsync(i => i.Id == request.InvoiceId && i.HospitalId == _context.UserContext.HospitalId, cancellationToken);
 
         if (invoice == null)
         {
-            throw new Exception("Invoice not found or unauthorized.");
+            return (false, "Invoice not found or unauthorized.");
+        }
+
+        if (invoice.Status != "PAID" && invoice.Appointment != null)
+        {
+            var appStatus = invoice.Appointment.Status?.ToLower();
+            if (appStatus == "scanned" || appStatus == "reporting" || appStatus == "reported" || appStatus == "completed")
+            {
+                return (false, "This invoice cannot be deleted because the associated study has already been scanned or processed.");
+            }
         }
 
         var invoiceGuidStr = invoice.Id.ToString();
@@ -89,6 +99,6 @@ public class DeleteInvoiceCommandHandler : IRequestHandler<DeleteInvoiceCommand,
             await _context.SaveChangesAsync(cancellationToken);
         }
 
-        return true;
+        return (true, null);
     }
 }
