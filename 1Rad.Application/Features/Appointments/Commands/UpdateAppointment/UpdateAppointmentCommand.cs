@@ -41,6 +41,16 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
 
         if (appointment == null) return false;
 
+        // If the date has changed, calculate a new token number for the new date
+        if (appointment.DateTime.Date != request.DateTime.Date)
+        {
+            var appointmentDate = request.DateTime.Date;
+            var newDailyTokenNumber = await _context.Appointments
+                .CountAsync(a => a.HospitalId == appointment.HospitalId && a.DateTime.Date == appointmentDate, cancellationToken) + 1;
+            
+            appointment.DailyTokenNumber = newDailyTokenNumber;
+        }
+
         // Update Appointment fields
         appointment.Service = request.Service;
         appointment.Modality = request.Modality;
