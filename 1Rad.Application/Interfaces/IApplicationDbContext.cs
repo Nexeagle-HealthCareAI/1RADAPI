@@ -30,6 +30,9 @@ public interface IApplicationDbContext
     DbSet<ReferralCommission> ReferralCommissions { get; }
     DbSet<SubscriptionPlan> SubscriptionPlans { get; }
     DbSet<HospitalSubscription> HospitalSubscriptions { get; }
+    DbSet<StaffMember> StaffMembers { get; }
+    DbSet<StaffMemberRole> StaffMemberRoles { get; }
+    DbSet<StaffDocument> StaffDocuments { get; }
     IUserContext UserContext { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken);

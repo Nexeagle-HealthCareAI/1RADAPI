@@ -45,6 +45,9 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<ReferralCommission> ReferralCommissions => Set<ReferralCommission>();
     public DbSet<SubscriptionPlan> SubscriptionPlans => Set<SubscriptionPlan>();
     public DbSet<HospitalSubscription> HospitalSubscriptions => Set<HospitalSubscription>();
+    public DbSet<StaffMember> StaffMembers => Set<StaffMember>();
+    public DbSet<StaffMemberRole> StaffMemberRoles => Set<StaffMemberRole>();
+    public DbSet<StaffDocument> StaffDocuments => Set<StaffDocument>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -484,6 +487,60 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
                 .WithMany()
                 .HasForeignKey(e => e.PlanId)
                 .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        // StaffMember Configuration
+        modelBuilder.Entity<StaffMember>(entity =>
+        {
+            entity.ToTable("StaffMembers", "dbo");
+            entity.HasKey(e => e.StaffId);
+            entity.Property(e => e.FullName).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Email).HasMaxLength(200);
+            entity.Property(e => e.Mobile).HasMaxLength(30);
+            entity.Property(e => e.Designation).HasMaxLength(200);
+            entity.Property(e => e.Department).HasMaxLength(200);
+            entity.Property(e => e.EmploymentType).IsRequired().HasMaxLength(50).HasDefaultValue("Full-Time");
+            entity.Property(e => e.Status).IsRequired().HasMaxLength(50).HasDefaultValue("Active");
+
+            entity.HasOne(e => e.Hospital)
+                .WithMany()
+                .HasForeignKey(e => e.HospitalId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.BoardAccessUser)
+                .WithMany()
+                .HasForeignKey(e => e.BoardAccessUserId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasMany(e => e.Roles)
+                .WithOne(r => r.StaffMember)
+                .HasForeignKey(r => r.StaffId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasMany(e => e.Documents)
+                .WithOne(d => d.StaffMember)
+                .HasForeignKey(d => d.StaffId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // StaffMemberRole Configuration
+        modelBuilder.Entity<StaffMemberRole>(entity =>
+        {
+            entity.ToTable("StaffMemberRoles", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.RoleName).IsRequired().HasMaxLength(100);
+            entity.HasIndex(e => new { e.StaffId, e.RoleName }).IsUnique();
+        });
+
+        // StaffDocument Configuration
+        modelBuilder.Entity<StaffDocument>(entity =>
+        {
+            entity.ToTable("StaffDocuments", "dbo");
+            entity.HasKey(e => e.DocumentId);
+            entity.Property(e => e.Category).HasMaxLength(100).HasDefaultValue("Other");
+            entity.Property(e => e.FileName).IsRequired().HasMaxLength(500);
+            entity.Property(e => e.ContentType).HasMaxLength(200);
+            entity.Property(e => e.VerificationStatus).HasMaxLength(50).HasDefaultValue("Pending");
         });
 
         // Seed Subscription Plans
