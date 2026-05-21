@@ -46,7 +46,7 @@ public class JwtProvider : IJwtProvider
             
             // Tactical Context Claims
             new Claim("cid", activeMapping.HospitalId.ToString()), // Current Hospital ID
-            new Claim("rid", string.Join(",", activeMapping.Roles.Select(r => r.RoleId))), // Comma-separated Role IDs
+            new Claim("rid", string.Join(",", activeMapping.Roles.Select(r => r.RoleId.ToString()).Concat(activeMapping.CustomRoles?.Select(cr => cr.CustomRoleId.ToString()) ?? Enumerable.Empty<string>()))), // Comma-separated Role IDs
             new Claim("gid", activeMapping.Hospital?.GroupId?.ToString() ?? string.Empty), // Group / Chain ID
             new Claim("hubs", string.Join(",", authorizedHospitalIds)) // Comma-separated list of authorized Hubs
         };
@@ -57,7 +57,15 @@ public class JwtProvider : IJwtProvider
             claims.Add(new Claim(ClaimTypes.Role, role.RoleName));
         }
 
-        if (!activeMapping.Roles.Any())
+        if (activeMapping.CustomRoles != null)
+        {
+            foreach (var customRole in activeMapping.CustomRoles)
+            {
+                claims.Add(new Claim(ClaimTypes.Role, customRole.RoleName));
+            }
+        }
+
+        if (!activeMapping.Roles.Any() && (activeMapping.CustomRoles == null || !activeMapping.CustomRoles.Any()))
         {
             claims.Add(new Claim(ClaimTypes.Role, "User"));
         }

@@ -53,6 +53,8 @@ public class VerifyOTPCommandHandler : IRequestHandler<VerifyOTPCommand, VerifyO
                         .ThenInclude(h => h.Group)
                 .Include(u => u.HospitalMappings)
                     .ThenInclude(m => m.Roles)
+                .Include(u => u.HospitalMappings)
+                    .ThenInclude(m => m.CustomRoles)
                 .FirstOrDefaultAsync(u => u.Mobile == request.Mobile, cancellationToken);
 
             if (user != null && user.Status == _1Rad.Domain.Enums.UserStatus.Active)
@@ -88,12 +90,12 @@ public class VerifyOTPCommandHandler : IRequestHandler<VerifyOTPCommand, VerifyO
                         user.FullName, 
                         user.Email, 
                         user.Mobile, 
-                        string.Join(", ", activeMapping.Roles.Select(r => r.RoleName).DefaultIfEmpty("User")),
+                        string.Join(", ", activeMapping.Roles.Select(r => r.RoleName).Concat(activeMapping.CustomRoles.Select(cr => cr.RoleName)).DefaultIfEmpty("User")),
                         user.HospitalMappings.Select(m => new AuthorizedHospitalDto(
                             m.HospitalId,
                             m.Hospital?.HospitalName ?? "Unknown Hub",
                             m.Hospital?.Group?.GroupName ?? string.Empty,
-                            string.Join(", ", m.Roles.Select(r => r.RoleName).DefaultIfEmpty("User")),
+                            string.Join(", ", m.Roles.Select(r => r.RoleName).Concat(m.CustomRoles.Select(cr => cr.RoleName)).DefaultIfEmpty("User")),
                             m.IsDefault
                         )).ToList())
                     );

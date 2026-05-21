@@ -29,6 +29,8 @@ public class GetAuthorizedHospitalsQueryHandler : IRequestHandler<GetAuthorizedH
                         .ThenInclude(h => h.Group)
                 .Include(u => u.HospitalMappings)
                     .ThenInclude(m => m.Roles)
+                .Include(u => u.HospitalMappings)
+                    .ThenInclude(m => m.CustomRoles)
                 .FirstOrDefaultAsync(u => u.UserId == request.UserId, cancellationToken);
 
             if (user == null)
@@ -43,7 +45,7 @@ public class GetAuthorizedHospitalsQueryHandler : IRequestHandler<GetAuthorizedH
                 GroupName = m.Hospital.Group?.GroupName ?? string.Empty,
                 IsDefault = m.IsDefault,
                 IsAutoBillingEnabled = m.Hospital.IsAutoBillingEnabled,
-                RoleNames = m.Roles.Select(r => r.RoleName).ToList()
+                RoleNames = m.Roles.Select(r => r.RoleName).Concat(m.CustomRoles.Select(cr => cr.RoleName)).ToList()
             }).ToList();
 
             return new GetAuthorizedHospitalsResponse

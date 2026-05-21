@@ -36,6 +36,7 @@ public class SwitchContextCommandHandler : IRequestHandler<SwitchContextCommand,
                 .Include(m => m.User)
                 .Include(m => m.Hospital)
                 .Include(m => m.Roles)
+                .Include(m => m.CustomRoles)
                 .FirstOrDefaultAsync(m => m.UserId == userId && m.HospitalId == request.TargetHospitalId, cancellationToken);
 
             if (mapping == null)
@@ -57,7 +58,7 @@ public class SwitchContextCommandHandler : IRequestHandler<SwitchContextCommand,
             {
                 Success = true,
                 AccessToken = accessToken,
-                Roles = mapping.Roles.Select(r => r.RoleName).ToList()
+                Roles = mapping.Roles.Select(r => r.RoleName).Concat(mapping.CustomRoles.Select(cr => cr.RoleName)).ToList()
             };
         }
         catch (Exception ex)

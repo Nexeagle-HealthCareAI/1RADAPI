@@ -33,6 +33,9 @@ public class RefreshTokenCommandHandler : IRequestHandler<RefreshTokenCommand, R
                 .Include(t => t.User)
                     .ThenInclude(u => u.HospitalMappings)
                         .ThenInclude(m => m.Roles)
+                .Include(t => t.User)
+                    .ThenInclude(u => u.HospitalMappings)
+                        .ThenInclude(m => m.CustomRoles)
                 .FirstOrDefaultAsync(t => t.Token == request.RefreshToken, cancellationToken);
 
             if (refreshToken == null || !refreshToken.IsActive)
