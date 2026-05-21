@@ -12,6 +12,9 @@ public class StaffMember : BaseEntity, IHospitalContext
     public Guid StaffId { get; set; } = Guid.NewGuid();
     public Guid HospitalId { get; set; }
 
+    /// <summary>Human-readable, per-hospital employee code (e.g. "EMP-0001"). Assigned on create.</summary>
+    public string? EmployeeCode { get; set; }
+
     public string FullName { get; set; } = string.Empty;
     public string? Email { get; set; }
     public string? Mobile { get; set; }
@@ -38,4 +41,6 @@ public class StaffMember : BaseEntity, IHospitalContext
     public User? BoardAccessUser { get; set; }
     public ICollection<StaffMemberRole> Roles { get; set; } = new List<StaffMemberRole>();
     public ICollection<StaffDocument> Documents { get; set; } = new List<StaffDocument>();
+    public ICollection<SalaryRevision> SalaryRevisions { get; set; } = new List<SalaryRevision>();
+    public ICollection<SalaryDisbursement> SalaryDisbursements { get; set; } = new List<SalaryDisbursement>();
 }

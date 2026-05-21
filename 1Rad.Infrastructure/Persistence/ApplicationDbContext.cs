@@ -48,6 +48,9 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<StaffMember> StaffMembers => Set<StaffMember>();
     public DbSet<StaffMemberRole> StaffMemberRoles => Set<StaffMemberRole>();
     public DbSet<StaffDocument> StaffDocuments => Set<StaffDocument>();
+    public DbSet<SalaryRevision> SalaryRevisions => Set<SalaryRevision>();
+    public DbSet<SalaryDisbursement> SalaryDisbursements => Set<SalaryDisbursement>();
+    public DbSet<HospitalLeavePolicy> HospitalLeavePolicies => Set<HospitalLeavePolicy>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -494,6 +497,8 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
         {
             entity.ToTable("StaffMembers", "dbo");
             entity.HasKey(e => e.StaffId);
+            entity.Property(e => e.EmployeeCode).HasMaxLength(20);
+            entity.HasIndex(e => new { e.HospitalId, e.EmployeeCode }).IsUnique().HasFilter("[EmployeeCode] IS NOT NULL");
             entity.Property(e => e.FullName).IsRequired().HasMaxLength(200);
             entity.Property(e => e.Email).HasMaxLength(200);
             entity.Property(e => e.Mobile).HasMaxLength(30);
@@ -542,6 +547,76 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.ContentType).HasMaxLength(200);
             entity.Property(e => e.VerificationStatus).HasMaxLength(50).HasDefaultValue("Pending");
             entity.Property(e => e.BlobUrl).HasMaxLength(2000);
+        });
+
+        // SalaryRevision Configuration
+        modelBuilder.Entity<SalaryRevision>(entity =>
+        {
+            entity.ToTable("SalaryRevisions", "dbo");
+            entity.HasKey(e => e.RevisionId);
+            entity.Property(e => e.BasicPay).HasColumnType("decimal(12,2)");
+            entity.Property(e => e.Hra).HasColumnType("decimal(12,2)");
+            entity.Property(e => e.Travel).HasColumnType("decimal(12,2)");
+            entity.Property(e => e.OtherAllowances).HasColumnType("decimal(12,2)");
+            entity.Property(e => e.PfDeduction).HasColumnType("decimal(12,2)");
+            entity.Property(e => e.Tds).HasColumnType("decimal(12,2)");
+            entity.Property(e => e.OtherDeductions).HasColumnType("decimal(12,2)");
+            entity.Property(e => e.Note).HasMaxLength(500);
+
+            entity.HasOne(e => e.StaffMember)
+                .WithMany(s => s.SalaryRevisions)
+                .HasForeignKey(e => e.StaffId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasIndex(e => new { e.StaffId, e.EffectiveFrom });
+            entity.HasIndex(e => e.HospitalId);
+        });
+
+        // SalaryDisbursement Configuration
+        modelBuilder.Entity<SalaryDisbursement>(entity =>
+        {
+            entity.ToTable("SalaryDisbursements", "dbo");
+            entity.HasKey(e => e.DisbursementId);
+            entity.Property(e => e.Month).IsRequired().HasMaxLength(7); // "YYYY-MM"
+            entity.Property(e => e.GrossPay).HasColumnType("decimal(12,2)");
+            entity.Property(e => e.NetPay).HasColumnType("decimal(12,2)");
+            entity.Property(e => e.StructureGross).HasColumnType("decimal(12,2)");
+            entity.Property(e => e.StructureNet).HasColumnType("decimal(12,2)");
+            entity.Property(e => e.LwpDays).HasColumnType("decimal(5,2)");
+            entity.Property(e => e.LwpDeduction).HasColumnType("decimal(12,2)");
+            entity.Property(e => e.PerDayRate).HasColumnType("decimal(12,2)");
+            entity.Property(e => e.PaymentMode).IsRequired().HasMaxLength(20).HasDefaultValue("bank");
+            entity.Property(e => e.Reference).HasMaxLength(200);
+            entity.Property(e => e.Notes).HasMaxLength(1000);
+            entity.Property(e => e.AttendanceJson).HasMaxLength(2000);
+
+            entity.HasOne(e => e.StaffMember)
+                .WithMany(s => s.SalaryDisbursements)
+                .HasForeignKey(e => e.StaffId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Revision)
+                .WithMany()
+                .HasForeignKey(e => e.RevisionId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasIndex(e => new { e.StaffId, e.Month }).IsUnique();
+            entity.HasIndex(e => e.HospitalId);
+        });
+
+        // HospitalLeavePolicy Configuration
+        modelBuilder.Entity<HospitalLeavePolicy>(entity =>
+        {
+            entity.ToTable("HospitalLeavePolicies", "dbo");
+            entity.HasKey(e => e.PolicyId);
+            entity.Property(e => e.LeaveTypesJson).IsRequired().HasMaxLength(4000).HasDefaultValue("[]");
+
+            entity.HasOne(e => e.Hospital)
+                .WithMany()
+                .HasForeignKey(e => e.HospitalId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasIndex(e => e.HospitalId).IsUnique();
         });
 
         // Seed Subscription Plans

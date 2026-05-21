@@ -1,11 +1,15 @@
+using _1Rad.Application.Features.Staff.Commands.AddSalaryDisbursement;
 using _1Rad.Application.Features.Staff.Commands.AddStaffMember;
+using _1Rad.Application.Features.Staff.Commands.DeleteSalaryRevision;
 using _1Rad.Application.Features.Staff.Commands.DeleteStaffDocument;
 using _1Rad.Application.Features.Staff.Commands.GrantBoardAccess;
 using _1Rad.Application.Features.Staff.Commands.RemoveStaffMember;
+using _1Rad.Application.Features.Staff.Commands.SaveSalaryRevision;
 using _1Rad.Application.Features.Staff.Commands.UpdateStaffMember;
 using _1Rad.Application.Features.Staff.Commands.UploadStaffDocument;
 using _1Rad.Application.Features.Staff.Queries.GetHospitalStaff;
 using _1Rad.Application.Features.Staff.Queries.GetStaffDocuments;
+using _1Rad.Application.Features.Staff.Queries.GetStaffSalary;
 using _1Rad.Application.Interfaces;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
@@ -124,6 +128,111 @@ public class StaffController : ControllerBase
             ? Ok(new { message = "Document deleted." })
             : BadRequest(new { message = error });
     }
+
+    // ── Payroll ────────────────────────────────────────────────────────
+
+    // GET /api/v1/staff/{id}/salary
+    [HttpGet("{id:guid}/salary")]
+    public async Task<IActionResult> GetSalary(Guid id)
+    {
+        var result = await _mediator.Send(new GetStaffSalaryQuery(id, _userContext.HospitalId));
+        return result == null ? NotFound(new { message = "Staff not found." }) : Ok(result);
+    }
+
+    // POST /api/v1/staff/{id}/salary/revisions  (also acts as upsert by EffectiveFrom)
+    [HttpPost("{id:guid}/salary/revisions")]
+    public async Task<IActionResult> SaveSalaryRevision(Guid id, [FromBody] SaveSalaryRevisionRequest body)
+    {
+        var cmd = new SaveSalaryRevisionCommand(
+            StaffId:         id,
+            HospitalId:      _userContext.HospitalId,
+            CreatedByUserId: _userContext.UserId,
+            EffectiveFrom:   body.EffectiveFrom,
+            BasicPay:        body.BasicPay,
+            Hra:             body.Hra,
+            Travel:          body.Travel,
+            OtherAllowances: body.OtherAllowances,
+            PfDeduction:     body.PfDeduction,
+            Tds:             body.Tds,
+            OtherDeductions: body.OtherDeductions,
+            Note:            body.Note);
+
+        var (revisionId, error) = await _mediator.Send(cmd);
+        return error == null
+            ? Ok(new { revisionId, message = "Salary revision saved." })
+            : BadRequest(new { message = error });
+    }
+
+    // DELETE /api/v1/staff/{id}/salary/revisions/{revId}
+    [HttpDelete("{id:guid}/salary/revisions/{revId:guid}")]
+    public async Task<IActionResult> DeleteSalaryRevision(Guid id, Guid revId)
+    {
+        var (success, error) = await _mediator.Send(
+            new DeleteSalaryRevisionCommand(revId, id, _userContext.HospitalId));
+        return success
+            ? Ok(new { message = "Revision deleted." })
+            : BadRequest(new { message = error });
+    }
+
+    // POST /api/v1/staff/{id}/salary/disbursements
+    [HttpPost("{id:guid}/salary/disbursements")]
+    public async Task<IActionResult> AddDisbursement(Guid id, [FromBody] AddDisbursementRequest body)
+    {
+        var cmd = new AddSalaryDisbursementCommand(
+            StaffId:          id,
+            HospitalId:       _userContext.HospitalId,
+            CreatedByUserId:  _userContext.UserId,
+            RevisionId:       body.RevisionId,
+            Month:            body.Month,
+            GrossPay:         body.GrossPay,
+            NetPay:           body.NetPay,
+            StructureGross:   body.StructureGross,
+            StructureNet:     body.StructureNet,
+            LwpDays:          body.LwpDays,
+            LwpDeduction:     body.LwpDeduction,
+            PerDayRate:       body.PerDayRate,
+            PaidLeaveInMonth: body.PaidLeaveInMonth,
+            LwpLeaveInMonth:  body.LwpLeaveInMonth,
+            AttendanceJson:   body.AttendanceJson,
+            PaymentMode:      body.PaymentMode,
+            Reference:        body.Reference,
+            PaidOnDate:       body.PaidOnDate,
+            Notes:            body.Notes);
+
+        var (disbursementId, error) = await _mediator.Send(cmd);
+        return error == null
+            ? Ok(new { disbursementId, message = "Salary disbursed." })
+            : BadRequest(new { message = error });
+    }
 }
 
 public record GrantAccessRequest(string Password, List<string> RoleNames);
+
+public record SaveSalaryRevisionRequest(
+    string EffectiveFrom,
+    decimal BasicPay,
+    decimal Hra,
+    decimal Travel,
+    decimal OtherAllowances,
+    decimal PfDeduction,
+    decimal Tds,
+    decimal OtherDeductions,
+    string? Note);
+
+public record AddDisbursementRequest(
+    Guid? RevisionId,
+    string Month,
+    decimal GrossPay,
+    decimal NetPay,
+    decimal StructureGross,
+    decimal StructureNet,
+    decimal LwpDays,
+    decimal LwpDeduction,
+    decimal PerDayRate,
+    int PaidLeaveInMonth,
+    int LwpLeaveInMonth,
+    string? AttendanceJson,
+    string PaymentMode,
+    string? Reference,
+    string PaidOnDate,
+    string? Notes);

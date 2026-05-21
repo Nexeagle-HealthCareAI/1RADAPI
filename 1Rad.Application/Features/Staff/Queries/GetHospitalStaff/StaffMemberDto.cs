@@ -2,6 +2,7 @@ namespace _1Rad.Application.Features.Staff.Queries.GetHospitalStaff;
 
 public record StaffMemberDto(
     Guid StaffId,
+    string? EmployeeCode,
     string FullName,
     string? Email,
     string? Mobile,

@@ -1,3 +1,4 @@
+using _1Rad.Application.Features.Staff.Common;
 using _1Rad.Application.Interfaces;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
@@ -15,6 +16,9 @@ public class GetHospitalStaffQueryHandler : IRequestHandler<GetHospitalStaffQuer
 
     public async Task<List<StaffMemberDto>> Handle(GetHospitalStaffQuery request, CancellationToken cancellationToken)
     {
+        // One-time backfill for any legacy staff without an EmployeeCode.
+        await EmployeeCodeGenerator.BackfillMissingCodesAsync(_context, request.HospitalId, cancellationToken);
+
         var members = await _context.StaffMembers
             .Where(s => s.HospitalId == request.HospitalId)
             .Include(s => s.Roles)
@@ -23,6 +27,7 @@ public class GetHospitalStaffQueryHandler : IRequestHandler<GetHospitalStaffQuer
 
         return members.Select(s => new StaffMemberDto(
             s.StaffId,
+            s.EmployeeCode,
             s.FullName,
             s.Email,
             s.Mobile,

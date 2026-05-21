@@ -1,3 +1,4 @@
+using _1Rad.Application.Features.Staff.Common;
 using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Entities;
 using MediatR;
@@ -25,9 +26,12 @@ public class AddStaffMemberCommandHandler : IRequestHandler<AddStaffMemberComman
             DateOnly.TryParse(request.JoiningDate, out var parsedDate))
             joiningDate = parsedDate;
 
+        var employeeCode = await EmployeeCodeGenerator.NextCodeAsync(_context, request.HospitalId, cancellationToken);
+
         var member = new StaffMember
         {
             HospitalId     = request.HospitalId,
+            EmployeeCode   = employeeCode,
             FullName       = request.FullName.Trim(),
             Email          = request.Email?.Trim(),
             Mobile         = request.Mobile?.Trim(),

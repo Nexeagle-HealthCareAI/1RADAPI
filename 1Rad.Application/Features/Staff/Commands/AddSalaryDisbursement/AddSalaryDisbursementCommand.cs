@@ -1,0 +1,25 @@
+using MediatR;
+
+namespace _1Rad.Application.Features.Staff.Commands.AddSalaryDisbursement;
+
+public record AddSalaryDisbursementCommand(
+    Guid StaffId,
+    Guid HospitalId,
+    Guid? CreatedByUserId,
+    Guid? RevisionId,
+    string Month,            // "YYYY-MM"
+    decimal GrossPay,
+    decimal NetPay,
+    decimal StructureGross,
+    decimal StructureNet,
+    decimal LwpDays,
+    decimal LwpDeduction,
+    decimal PerDayRate,
+    int PaidLeaveInMonth,
+    int LwpLeaveInMonth,
+    string? AttendanceJson,
+    string PaymentMode,      // bank | cash | upi | cheque
+    string? Reference,
+    string PaidOnDate,       // "YYYY-MM-DD"
+    string? Notes
+) : IRequest<(Guid DisbursementId, string? Error)>;
