@@ -36,6 +36,8 @@ public interface IApplicationDbContext
     DbSet<SalaryRevision> SalaryRevisions { get; }
     DbSet<SalaryDisbursement> SalaryDisbursements { get; }
     DbSet<HospitalLeavePolicy> HospitalLeavePolicies { get; }
+    DbSet<StaffAttendance> StaffAttendances { get; }
+    DbSet<StaffLeaveRequest> StaffLeaveRequests { get; }
     IUserContext UserContext { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken);

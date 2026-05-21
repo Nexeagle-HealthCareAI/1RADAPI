@@ -51,6 +51,8 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<SalaryRevision> SalaryRevisions => Set<SalaryRevision>();
     public DbSet<SalaryDisbursement> SalaryDisbursements => Set<SalaryDisbursement>();
     public DbSet<HospitalLeavePolicy> HospitalLeavePolicies => Set<HospitalLeavePolicy>();
+    public DbSet<StaffAttendance> StaffAttendances => Set<StaffAttendance>();
+    public DbSet<StaffLeaveRequest> StaffLeaveRequests => Set<StaffLeaveRequest>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -620,6 +622,41 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
                 .OnDelete(DeleteBehavior.Cascade);
 
             entity.HasIndex(e => e.HospitalId).IsUnique();
+        });
+
+        // StaffAttendance Configuration
+        modelBuilder.Entity<StaffAttendance>(entity =>
+        {
+            entity.ToTable("StaffAttendance", "dbo");
+            entity.HasKey(e => e.AttendanceId);
+            entity.Property(e => e.Status).IsRequired().HasMaxLength(20).HasDefaultValue("present");
+            entity.Property(e => e.Note).HasMaxLength(500);
+
+            entity.HasOne(e => e.StaffMember)
+                .WithMany(s => s.Attendances)
+                .HasForeignKey(e => e.StaffId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasIndex(e => new { e.StaffId, e.AttendanceDate }).IsUnique();
+            entity.HasIndex(e => new { e.HospitalId, e.AttendanceDate });
+        });
+
+        // StaffLeaveRequest Configuration
+        modelBuilder.Entity<StaffLeaveRequest>(entity =>
+        {
+            entity.ToTable("StaffLeaveRequests", "dbo");
+            entity.HasKey(e => e.LeaveRequestId);
+            entity.Property(e => e.LeaveType).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.Reason).HasMaxLength(1000);
+            entity.Property(e => e.Status).IsRequired().HasMaxLength(20).HasDefaultValue("pending");
+
+            entity.HasOne(e => e.StaffMember)
+                .WithMany(s => s.LeaveRequests)
+                .HasForeignKey(e => e.StaffId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasIndex(e => e.StaffId);
+            entity.HasIndex(e => e.HospitalId);
         });
 
         // Seed Subscription Plans

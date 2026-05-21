@@ -38,4 +38,6 @@ public class StaffMember : BaseEntity, IHospitalContext
     public ICollection<StaffDocument> Documents { get; set; } = new List<StaffDocument>();
     public ICollection<SalaryRevision> SalaryRevisions { get; set; } = new List<SalaryRevision>();
     public ICollection<SalaryDisbursement> SalaryDisbursements { get; set; } = new List<SalaryDisbursement>();
+    public ICollection<StaffAttendance> Attendances { get; set; } = new List<StaffAttendance>();
+    public ICollection<StaffLeaveRequest> LeaveRequests { get; set; } = new List<StaffLeaveRequest>();
 }
