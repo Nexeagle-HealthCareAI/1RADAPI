@@ -2,7 +2,6 @@ using _1Rad.Application.Features.Staff.Commands.AddSalaryDisbursement;
 using _1Rad.Application.Features.Staff.Commands.AddStaffMember;
 using _1Rad.Application.Features.Staff.Commands.DeleteSalaryRevision;
 using _1Rad.Application.Features.Staff.Commands.DeleteStaffDocument;
-using _1Rad.Application.Features.Staff.Commands.GrantBoardAccess;
 using _1Rad.Application.Features.Staff.Commands.RemoveStaffMember;
 using _1Rad.Application.Features.Staff.Commands.SaveSalaryRevision;
 using _1Rad.Application.Features.Staff.Commands.SetDisbursementStatus;
@@ -72,17 +71,6 @@ public class StaffController : ControllerBase
         var (success, error) = await _mediator.Send(new RemoveStaffMemberCommand(id, _userContext.HospitalId));
         return success
             ? Ok(new { message = "Staff member removed." })
-            : BadRequest(new { message = error });
-    }
-
-    // POST /api/v1/staff/{id}/grant-access
-    [HttpPost("{id:guid}/grant-access")]
-    public async Task<IActionResult> GrantAccess(Guid id, [FromBody] GrantAccessRequest body)
-    {
-        var cmd = new GrantBoardAccessCommand(id, _userContext.HospitalId, body.Password, body.RoleNames);
-        var (success, error) = await _mediator.Send(cmd);
-        return success
-            ? Ok(new { message = "Board access granted." })
             : BadRequest(new { message = error });
     }
 
@@ -226,8 +214,6 @@ public class StaffController : ControllerBase
             : BadRequest(new { message = error });
     }
 }
-
-public record GrantAccessRequest(string Password, List<string> RoleNames);
 
 public record SaveSalaryRevisionRequest(
     string EffectiveFrom,

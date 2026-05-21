@@ -519,11 +519,6 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
                 .HasForeignKey(e => e.HospitalId)
                 .OnDelete(DeleteBehavior.Cascade);
 
-            entity.HasOne(e => e.BoardAccessUser)
-                .WithMany()
-                .HasForeignKey(e => e.BoardAccessUserId)
-                .OnDelete(DeleteBehavior.SetNull);
-
             entity.HasMany(e => e.Roles)
                 .WithOne(r => r.StaffMember)
                 .HasForeignKey(r => r.StaffId)

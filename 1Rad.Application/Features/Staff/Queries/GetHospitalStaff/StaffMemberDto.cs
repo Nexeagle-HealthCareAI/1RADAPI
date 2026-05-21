@@ -15,7 +15,6 @@ public record StaffMemberDto(
     string? LicenseNo,
     string? JoiningDate,
     string Status,
-    Guid? BoardAccessUserId,
     DateTime CreatedAt,
     DateTime? UpdatedAt
 );

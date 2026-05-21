@@ -40,7 +40,6 @@ public class GetHospitalStaffQueryHandler : IRequestHandler<GetHospitalStaffQuer
             s.LicenseNo,
             s.JoiningDate?.ToString("yyyy-MM-dd"),
             s.Status,
-            s.BoardAccessUserId,
             s.CreatedAt,
             s.UpdatedAt
         )).ToList();
