@@ -439,6 +439,13 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.HasOne(e => e.Hospital)
                 .WithMany()
                 .HasForeignKey(e => e.HospitalId);
+
+            entity.HasOne(e => e.LinkedDisbursement)
+                .WithMany()
+                .HasForeignKey(e => e.LinkedDisbursementId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasIndex(e => e.LinkedDisbursementId);
         });
 
         // ReferralCommission Configuration
@@ -578,6 +585,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.ToTable("SalaryDisbursements", "dbo");
             entity.HasKey(e => e.DisbursementId);
             entity.Property(e => e.Month).IsRequired().HasMaxLength(7); // "YYYY-MM"
+            entity.Property(e => e.Status).IsRequired().HasMaxLength(20).HasDefaultValue("Draft");
             entity.Property(e => e.GrossPay).HasColumnType("decimal(12,2)");
             entity.Property(e => e.NetPay).HasColumnType("decimal(12,2)");
             entity.Property(e => e.StructureGross).HasColumnType("decimal(12,2)");

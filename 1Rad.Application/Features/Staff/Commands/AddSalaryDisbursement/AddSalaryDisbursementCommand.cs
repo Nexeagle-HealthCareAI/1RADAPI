@@ -21,5 +21,6 @@ public record AddSalaryDisbursementCommand(
     string PaymentMode,      // bank | cash | upi | cheque
     string? Reference,
     string PaidOnDate,       // "YYYY-MM-DD"
-    string? Notes
+    string? Notes,
+    string Status = "Paid"   // Draft | Paid — defaults to Paid for backwards compatibility
 ) : IRequest<(Guid DisbursementId, string? Error)>;

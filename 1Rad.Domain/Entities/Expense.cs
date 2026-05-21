@@ -18,7 +18,11 @@ public class Expense : BaseEntity, IHospitalContext
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     public Guid HospitalId { get; set; }
-    
+
+    /// <summary>When this expense was auto-generated from a salary disbursement, FK to it. Null for manual expenses.</summary>
+    public Guid? LinkedDisbursementId { get; set; }
+
     // Navigation
     public Hospital Hospital { get; set; } = null!;
+    public SalaryDisbursement? LinkedDisbursement { get; set; }
 }

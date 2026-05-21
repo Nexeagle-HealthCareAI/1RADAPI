@@ -5,6 +5,7 @@ using _1Rad.Application.Features.Staff.Commands.DeleteStaffDocument;
 using _1Rad.Application.Features.Staff.Commands.GrantBoardAccess;
 using _1Rad.Application.Features.Staff.Commands.RemoveStaffMember;
 using _1Rad.Application.Features.Staff.Commands.SaveSalaryRevision;
+using _1Rad.Application.Features.Staff.Commands.SetDisbursementStatus;
 using _1Rad.Application.Features.Staff.Commands.UpdateStaffMember;
 using _1Rad.Application.Features.Staff.Commands.UploadStaffDocument;
 using _1Rad.Application.Features.Staff.Queries.GetHospitalStaff;
@@ -197,11 +198,31 @@ public class StaffController : ControllerBase
             PaymentMode:      body.PaymentMode,
             Reference:        body.Reference,
             PaidOnDate:       body.PaidOnDate,
-            Notes:            body.Notes);
+            Notes:            body.Notes,
+            Status:           body.Status ?? "Paid");
 
         var (disbursementId, error) = await _mediator.Send(cmd);
         return error == null
-            ? Ok(new { disbursementId, message = "Salary disbursed." })
+            ? Ok(new { disbursementId, message = "Salary recorded." })
+            : BadRequest(new { message = error });
+    }
+
+    // PATCH /api/v1/staff/{id}/salary/disbursements/{disbId}/status
+    [HttpPatch("{id:guid}/salary/disbursements/{disbId:guid}/status")]
+    public async Task<IActionResult> SetDisbursementStatus(Guid id, Guid disbId, [FromBody] SetDisbursementStatusRequest body)
+    {
+        var cmd = new SetDisbursementStatusCommand(
+            DisbursementId:  disbId,
+            HospitalId:      _userContext.HospitalId,
+            UpdatedByUserId: _userContext.UserId,
+            Status:          body.Status,
+            PaymentMode:     body.PaymentMode,
+            Reference:       body.Reference,
+            PaidOnDate:      body.PaidOnDate);
+
+        var (success, error) = await _mediator.Send(cmd);
+        return success
+            ? Ok(new { message = $"Disbursement marked as {body.Status}." })
             : BadRequest(new { message = error });
     }
 }
@@ -235,4 +256,11 @@ public record AddDisbursementRequest(
     string PaymentMode,
     string? Reference,
     string PaidOnDate,
-    string? Notes);
+    string? Notes,
+    string? Status); // Draft | Paid — defaults to Paid when omitted
+
+public record SetDisbursementStatusRequest(
+    string Status,           // Draft | Paid
+    string? PaymentMode,     // optional override
+    string? Reference,       // optional UTR / cheque #
+    string? PaidOnDate);     // optional "YYYY-MM-DD"

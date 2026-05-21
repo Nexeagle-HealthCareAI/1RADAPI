@@ -39,7 +39,7 @@ public class GetStaffSalaryQueryHandler : IRequestHandler<GetStaffSalaryQuery, S
                 r.Note, r.CreatedAt
             )).ToList(),
             disbursements.Select(d => new SalaryDisbursementDto(
-                d.DisbursementId, d.RevisionId, d.Month,
+                d.DisbursementId, d.RevisionId, d.Month, d.Status,
                 d.GrossPay, d.NetPay, d.StructureGross, d.StructureNet,
                 d.LwpDays, d.LwpDeduction, d.PerDayRate,
                 d.PaidLeaveInMonth, d.LwpLeaveInMonth, d.AttendanceJson,

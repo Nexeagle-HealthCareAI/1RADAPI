@@ -16,6 +16,9 @@ public class SalaryDisbursement : BaseEntity, IHospitalContext
     /// <summary>"YYYY-MM" — the pay-period month.</summary>
     public string Month { get; set; } = string.Empty;
 
+    /// <summary>Draft | Paid. Draft = generated but not yet actually paid out.</summary>
+    public string Status { get; set; } = "Draft";
+
     // Pay snapshot (LWP applied)
     public decimal GrossPay { get; set; }
     public decimal NetPay { get; set; }

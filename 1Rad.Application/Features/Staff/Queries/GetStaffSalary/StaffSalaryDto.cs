@@ -18,6 +18,7 @@ public record SalaryDisbursementDto(
     Guid DisbursementId,
     Guid? RevisionId,
     string Month,
+    string Status,
     decimal GrossPay,
     decimal NetPay,
     decimal StructureGross,
