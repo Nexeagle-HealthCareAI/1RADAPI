@@ -16,5 +16,6 @@ public record StaffMemberDto(
     string? JoiningDate,
     string Status,
     Guid? BoardAccessUserId,
-    DateTime CreatedAt
+    DateTime CreatedAt,
+    DateTime? UpdatedAt
 );
