@@ -15,6 +15,7 @@ public record StaffMemberDto(
     string? LicenseNo,
     string? JoiningDate,
     string Status,
+    string? PhotoUrl,
     DateTime CreatedAt,
     DateTime? UpdatedAt
 );

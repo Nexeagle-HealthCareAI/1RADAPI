@@ -5,6 +5,7 @@ using _1Rad.Application.Features.Staff.Commands.DeleteStaffDocument;
 using _1Rad.Application.Features.Staff.Commands.RemoveStaffMember;
 using _1Rad.Application.Features.Staff.Commands.SaveSalaryRevision;
 using _1Rad.Application.Features.Staff.Commands.SetDisbursementStatus;
+using _1Rad.Application.Features.Staff.Commands.SetStaffPhoto;
 using _1Rad.Application.Features.Staff.Commands.UpdateStaffMember;
 using _1Rad.Application.Features.Staff.Commands.UploadStaffDocument;
 using _1Rad.Application.Features.Staff.Queries.GetHospitalStaff;
@@ -115,6 +116,46 @@ public class StaffController : ControllerBase
             new DeleteStaffDocumentCommand(docId, id, _userContext.HospitalId));
         return success
             ? Ok(new { message = "Document deleted." })
+            : BadRequest(new { message = error });
+    }
+
+    // ── Photo ──────────────────────────────────────────────────────────
+
+    // POST /api/v1/staff/{id}/photo  (multipart/form-data, field name: "photo")
+    [HttpPost("{id:guid}/photo")]
+    [RequestSizeLimit(5 * 1024 * 1024)] // 5 MB
+    public async Task<IActionResult> UploadPhoto(Guid id, IFormFile photo)
+    {
+        if (photo == null || photo.Length == 0)
+            return BadRequest(new { message = "No photo provided." });
+
+        await using var stream = photo.OpenReadStream();
+        var cmd = new SetStaffPhotoCommand(
+            StaffId:     id,
+            HospitalId:  _userContext.HospitalId,
+            FileName:    photo.FileName,
+            ContentType: photo.ContentType,
+            FileStream:  stream);
+
+        var (photoUrl, error) = await _mediator.Send(cmd);
+        return error == null
+            ? Ok(new { photoUrl, message = "Photo uploaded." })
+            : BadRequest(new { message = error });
+    }
+
+    // DELETE /api/v1/staff/{id}/photo
+    [HttpDelete("{id:guid}/photo")]
+    public async Task<IActionResult> DeletePhoto(Guid id)
+    {
+        var cmd = new SetStaffPhotoCommand(
+            StaffId:     id,
+            HospitalId:  _userContext.HospitalId,
+            FileName:    null,
+            ContentType: null,
+            FileStream:  null);
+        var (_, error) = await _mediator.Send(cmd);
+        return error == null
+            ? Ok(new { message = "Photo removed." })
             : BadRequest(new { message = error });
     }
 

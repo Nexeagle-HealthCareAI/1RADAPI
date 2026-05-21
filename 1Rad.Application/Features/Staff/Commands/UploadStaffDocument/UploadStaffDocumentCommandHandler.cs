@@ -26,21 +26,32 @@ public class UploadStaffDocumentCommandHandler : IRequestHandler<UploadStaffDocu
         if (!staffExists)
             return (Guid.Empty, "Staff member not found.");
 
-        var blobUrl = await _blobService.UploadFileAsync(
+        // Folder layout inside the container:
+        //   {hospitalId}/{staffId}/{documentId}_{sanitised-fileName}
+        // Each staff member's documents live in their own virtual folder, scoped under
+        // the hospital so multi-tenant data is isolated even if container ACLs are misconfigured.
+        var documentId = Guid.NewGuid();
+        var safeName   = Path.GetFileName(request.FileName); // strip any client-side path
+        var blobPath   = $"{request.HospitalId}/{request.StaffId}/{documentId}_{safeName}";
+
+        var blobUrl = await _blobService.UploadFileAtPathAsync(
             request.FileStream,
-            request.FileName,
+            blobPath,
             request.ContentType,
             BlobContainer);
 
         var doc = new StaffDocument
         {
+            DocumentId         = documentId,
             StaffId            = request.StaffId,
             HospitalId         = request.HospitalId,
-            FileName           = request.FileName,
+            FileName           = safeName,
             ContentType        = request.ContentType,
             FileSizeBytes      = request.FileSizeBytes,
             Category           = request.Category,
             BlobUrl            = blobUrl,
+            BlobPath           = blobPath,
+            BlobContainer      = BlobContainer,
             VerificationStatus = "Pending",
             UploadedAt         = DateTime.UtcNow,
             UploadedByUserId   = request.UploadedByUserId == Guid.Empty ? null : request.UploadedByUserId,

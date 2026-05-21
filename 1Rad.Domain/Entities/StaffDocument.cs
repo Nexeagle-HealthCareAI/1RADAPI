@@ -18,6 +18,12 @@ public class StaffDocument : BaseEntity
     /// <summary>Absolute URL of the file in Azure Blob Storage</summary>
     public string? BlobUrl { get; set; }
 
+    /// <summary>Relative blob path inside the staff-documents container (e.g. "hospitalId/staffId/docId_file.pdf"). Used for reliable deletes.</summary>
+    public string? BlobPath { get; set; }
+
+    /// <summary>Azure container name (defaults to "staff-documents").</summary>
+    public string? BlobContainer { get; set; }
+
     /// <summary>Pending | Verified | Rejected</summary>
     public string VerificationStatus { get; set; } = "Pending";
     public string? Notes { get; set; }

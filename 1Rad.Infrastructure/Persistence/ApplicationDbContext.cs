@@ -507,6 +507,8 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.ToTable("StaffMembers", "dbo");
             entity.HasKey(e => e.StaffId);
             entity.Property(e => e.EmployeeCode).HasMaxLength(20);
+            entity.Property(e => e.PhotoUrl).HasMaxLength(2000);
+            entity.Property(e => e.PhotoPath).HasMaxLength(500);
             entity.HasIndex(e => new { e.HospitalId, e.EmployeeCode }).IsUnique().HasFilter("[EmployeeCode] IS NOT NULL");
             entity.Property(e => e.FullName).IsRequired().HasMaxLength(200);
             entity.Property(e => e.Email).HasMaxLength(200);
@@ -551,6 +553,8 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.ContentType).HasMaxLength(200);
             entity.Property(e => e.VerificationStatus).HasMaxLength(50).HasDefaultValue("Pending");
             entity.Property(e => e.BlobUrl).HasMaxLength(2000);
+            entity.Property(e => e.BlobPath).HasMaxLength(500);
+            entity.Property(e => e.BlobContainer).HasMaxLength(100);
         });
 
         // SalaryRevision Configuration

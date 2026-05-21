@@ -4,6 +4,7 @@ using Azure.Storage.Blobs.Models;
 using Microsoft.Extensions.Configuration;
 using System;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 
 namespace _1Rad.Infrastructure.Services
@@ -30,12 +31,34 @@ namespace _1Rad.Infrastructure.Services
             var containerClient = _blobServiceClient.GetBlobContainerClient(targetContainer);
             await containerClient.CreateIfNotExistsAsync(PublicAccessType.Blob);
 
-            var sanitizedFileName = fileName.Replace(" ", "_");
+            var sanitizedFileName = SanitiseFileName(fileName);
             var blobClient = containerClient.GetBlobClient($"{Guid.NewGuid()}_{sanitizedFileName}");
-            
+
             var blobHttpHeader = new BlobHttpHeaders { ContentType = contentType };
-            
             await blobClient.UploadAsync(fileStream, new BlobUploadOptions { HttpHeaders = blobHttpHeader });
+
+            return blobClient.Uri.ToString();
+        }
+
+        public async Task<string> UploadFileAtPathAsync(Stream fileStream, string blobPath, string contentType, string containerName)
+        {
+            if (string.IsNullOrWhiteSpace(blobPath))
+                throw new ArgumentException("blobPath is required", nameof(blobPath));
+            if (string.IsNullOrWhiteSpace(containerName))
+                throw new ArgumentException("containerName is required", nameof(containerName));
+
+            var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
+            await containerClient.CreateIfNotExistsAsync(PublicAccessType.Blob);
+
+            // Sanitise each path segment but preserve the / separators (Azure treats / as virtual folders).
+            var sanitisedPath = string.Join('/',
+                blobPath.Split('/', StringSplitOptions.RemoveEmptyEntries)
+                        .Select(SanitiseFileName));
+
+            var blobClient = containerClient.GetBlobClient(sanitisedPath);
+
+            var blobHttpHeader = new BlobHttpHeaders { ContentType = contentType };
+            await blobClient.UploadAsync(fileStream, new BlobUploadOptions { HttpHeaders = blobHttpHeader, });
 
             return blobClient.Uri.ToString();
         }
@@ -45,13 +68,37 @@ namespace _1Rad.Infrastructure.Services
             if (string.IsNullOrEmpty(fileUrl)) return;
 
             var uri = new Uri(fileUrl);
-            var blobName = Path.GetFileName(uri.LocalPath);
-            
             var targetContainer = containerName ?? _containerName;
             var containerClient = _blobServiceClient.GetBlobContainerClient(targetContainer);
-            var blobClient = containerClient.GetBlobClient(blobName);
 
+            // Extract the full blob path (including virtual folders), not just the file name.
+            // URL shape: https://{account}.blob.core.windows.net/{container}/{folder/.../file}
+            // The segment after "/{container}/" is the blob's name, possibly with slashes.
+            var pathSegments = uri.AbsolutePath.TrimStart('/').Split('/', 2);
+            string blobName;
+            if (pathSegments.Length == 2 && string.Equals(pathSegments[0], targetContainer, StringComparison.OrdinalIgnoreCase))
+            {
+                blobName = Uri.UnescapeDataString(pathSegments[1]);
+            }
+            else
+            {
+                // Fallback for URLs that don't include the container in their path (e.g. CDN-fronted).
+                blobName = Uri.UnescapeDataString(uri.AbsolutePath.TrimStart('/'));
+            }
+
+            var blobClient = containerClient.GetBlobClient(blobName);
             await blobClient.DeleteIfExistsAsync();
+        }
+
+        private static string SanitiseFileName(string fileName)
+        {
+            // Strip Windows path components, replace whitespace, and remove characters that Azure dislikes.
+            var name = Path.GetFileName(fileName);
+            name = name.Replace(' ', '_');
+            // Azure blob names disallow none of these but keep things URL-safe.
+            foreach (var invalid in new[] { '\\', ':', '*', '?', '"', '<', '>', '|' })
+                name = name.Replace(invalid, '_');
+            return string.IsNullOrWhiteSpace(name) ? Guid.NewGuid().ToString("N") : name;
         }
 
         public async Task<Stream> DownloadFileAsync(string fileUrl)

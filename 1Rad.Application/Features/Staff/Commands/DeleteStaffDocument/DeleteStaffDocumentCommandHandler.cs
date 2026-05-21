@@ -27,9 +27,13 @@ public class DeleteStaffDocumentCommandHandler : IRequestHandler<DeleteStaffDocu
         if (doc == null)
             return (false, "Document not found.");
 
+        // Prefer the stored BlobPath + container (set on new uploads) so we delete the
+        // exact blob even if the public URL format changes. Fall back to BlobUrl parsing
+        // for legacy rows uploaded before the BlobPath column existed.
+        var container = !string.IsNullOrWhiteSpace(doc.BlobContainer) ? doc.BlobContainer : "staff-documents";
         if (!string.IsNullOrWhiteSpace(doc.BlobUrl))
         {
-            try { await _blobService.DeleteFileAsync(doc.BlobUrl, "staff-documents"); }
+            try { await _blobService.DeleteFileAsync(doc.BlobUrl, container); }
             catch { /* blob may already be gone — continue with DB removal */ }
         }
 

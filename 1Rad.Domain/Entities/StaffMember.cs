@@ -29,6 +29,12 @@ public class StaffMember : BaseEntity, IHospitalContext
     public DateOnly? JoiningDate { get; set; }
     public string Status { get; set; } = "Active"; // Active | Inactive
 
+    /// <summary>Public HTTPS URL of the staff member's profile photo (Azure Blob). Null if no photo uploaded.</summary>
+    public string? PhotoUrl { get; set; }
+
+    /// <summary>Relative blob path inside the staff-documents container, used for reliable deletes.</summary>
+    public string? PhotoPath { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? UpdatedAt { get; set; }
 
