@@ -54,13 +54,13 @@ public class SubscriptionsController : ControllerBase
     }
 
     /// <summary>
-    /// Returns subscription invoices for the authenticated hospital.
+    /// Returns subscription invoices/transactions for the authenticated hospital.
     /// </summary>
     [HttpGet("invoices")]
     public async Task<IActionResult> GetInvoices()
     {
-        // Phase 2: will return actual invoice records from SubscriptionPaymentRequests
-        return Ok(new { success = true, data = new List<object>() });
+        var result = await _mediator.Send(new _1Rad.Application.Features.Subscriptions.Queries.GetSubscriptionTransactions.GetSubscriptionTransactionsQuery());
+        return Ok(new { success = true, data = result });
     }
 }
 

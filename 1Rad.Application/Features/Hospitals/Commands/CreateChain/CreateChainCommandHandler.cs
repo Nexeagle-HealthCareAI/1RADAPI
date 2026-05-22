@@ -104,14 +104,17 @@ public class CreateChainCommandHandler : IRequestHandler<CreateChainCommand, Cre
             mapping.Roles.Add(adminRole);
             _context.UserHospitalMappings.Add(mapping);
 
-            // 5. Add 15-day Trial Subscription
+            // 5. Add 14-day Trial Subscription
             var trialSubscription = new HospitalSubscription
             {
                 HospitalId = hospital.HospitalId,
+                PlanId = null,
                 StartDate = DateTime.UtcNow,
-                EndDate = DateTime.UtcNow.AddDays(15),
+                EndDate = DateTime.UtcNow.AddDays(14),
                 IsTrial = true,
+                BillingCycle = "Trial",
                 Status = "Active",
+                IsLocked = false,
                 CreatedAt = DateTime.UtcNow
             };
             _context.HospitalSubscriptions.Add(trialSubscription);
