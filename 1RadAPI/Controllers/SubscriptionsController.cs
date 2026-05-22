@@ -1,6 +1,7 @@
 using _1Rad.Application.Features.Subscriptions.Commands.ApprovePaymentRequest;
 using _1Rad.Application.Features.Subscriptions.Commands.SubmitPaymentRequest;
 using _1Rad.Application.Features.Subscriptions.Queries.GetSubscriptionStatus;
+using _1Rad.Application.Features.Subscriptions.Queries.GetAllPaymentRequests;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -30,6 +31,16 @@ public class SubscriptionsController : ControllerBase
         if (result.IsLocked)
             return StatusCode(402, result); // Payment Required
         return Ok(result);
+    }
+
+    /// <summary>
+    /// [ADMIN ONLY] Fetch all payment requests across the platform.
+    /// </summary>
+    [HttpGet("admin/payment-requests")]
+    public async Task<IActionResult> GetAdminPaymentRequests()
+    {
+        var result = await _mediator.Send(new GetAllPaymentRequestsQuery());
+        return Ok(new { success = true, data = result });
     }
 
     /// <summary>
