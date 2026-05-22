@@ -45,6 +45,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<ReferralCommission> ReferralCommissions => Set<ReferralCommission>();
     public DbSet<SubscriptionPlan> SubscriptionPlans => Set<SubscriptionPlan>();
     public DbSet<HospitalSubscription> HospitalSubscriptions => Set<HospitalSubscription>();
+    public DbSet<SubscriptionPaymentRequest> SubscriptionPaymentRequests => Set<SubscriptionPaymentRequest>();
     public DbSet<StaffMember> StaffMembers => Set<StaffMember>();
     public DbSet<StaffMemberRole> StaffMemberRoles => Set<StaffMemberRole>();
     public DbSet<StaffDocument> StaffDocuments => Set<StaffDocument>();
@@ -489,6 +490,8 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.ToTable("HospitalSubscriptions", "dbo");
             entity.HasKey(e => e.SubscriptionId);
             entity.Property(e => e.Status).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.BillingCycle).IsRequired().HasMaxLength(20).HasDefaultValue("Trial");
+            entity.Property(e => e.LockReason).HasMaxLength(100);
 
             entity.HasOne(e => e.Hospital)
                 .WithMany(h => h.Subscriptions)
@@ -499,6 +502,33 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
                 .WithMany()
                 .HasForeignKey(e => e.PlanId)
                 .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasIndex(e => new { e.HospitalId, e.Status });
+        });
+
+        // SubscriptionPaymentRequest Configuration
+        modelBuilder.Entity<SubscriptionPaymentRequest>(entity =>
+        {
+            entity.ToTable("SubscriptionPaymentRequests", "dbo");
+            entity.HasKey(e => e.RequestId);
+            entity.Property(e => e.PlanName).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.BillingCycle).IsRequired().HasMaxLength(20);
+            entity.Property(e => e.Amount).HasPrecision(18, 2);
+            entity.Property(e => e.PayerName).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.PayerContact).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.TransactionReference).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.PaymentMode).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.Status).IsRequired().HasMaxLength(20).HasDefaultValue("Pending");
+            entity.Property(e => e.ReviewNote).HasMaxLength(500);
+            entity.Property(e => e.PaymentGatewayOrderId).HasMaxLength(255);
+            entity.Property(e => e.PaymentGatewayResponse).HasMaxLength(2000);
+
+            entity.HasOne(e => e.Hospital)
+                .WithMany()
+                .HasForeignKey(e => e.HospitalId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasIndex(e => new { e.HospitalId, e.Status });
         });
 
         // StaffMember Configuration
@@ -678,10 +708,10 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             { 
                 PlanId = Guid.Parse("B2C3D4E5-F6A7-4B6C-9D0E-1F2A3B4C5D6E"), 
                 Name = "Yearly", 
-                Price = 59988, 
+                Price = 53988, // 4499 x 12 (10% off monthly)
                 DurationInDays = 365, 
                 DiscountPercentage = 10,
-                PerAdditionalDoctorPrice = 10800 // 1000 * 12 * 0.9
+                PerAdditionalDoctorPrice = 10800 // 900 x 12
             }
         );
 

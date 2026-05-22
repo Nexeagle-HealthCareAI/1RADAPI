@@ -29,6 +29,7 @@ public static class DependencyInjection
         
         services.AddHostedService<DailyFinancialReportJob>();
         services.AddHostedService<DailyReferralExcelReportJob>();
+        services.AddHostedService<SubscriptionLifecycleJob>();
 
         return services;
     }

@@ -78,6 +78,21 @@ public class DeployInfrastructureCommandHandler : IRequestHandler<DeployInfrastr
 
             await _context.SaveChangesAsync(cancellationToken);
 
+            // Auto-activate 14-day free trial for newly registered hospital
+            var trialSubscription = new HospitalSubscription
+            {
+                HospitalId = hospital.HospitalId,
+                PlanId = null,
+                IsTrial = true,
+                BillingCycle = "Trial",
+                StartDate = DateTime.UtcNow,
+                EndDate = DateTime.UtcNow.AddDays(14),
+                Status = "Active",
+                IsLocked = false
+            };
+            _context.HospitalSubscriptions.Add(trialSubscription);
+            await _context.SaveChangesAsync(cancellationToken);
+
             return new DeployInfrastructureResponse { Success = true };
         }
         catch (Exception ex)

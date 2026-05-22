@@ -10,15 +10,17 @@ public class GetSubscriptionStatusQuery : IRequest<SubscriptionStatusResponse>
 
 public class SubscriptionStatusResponse
 {
-    public bool IsActive { get; set; }
+    public bool IsActive { get; set; }       // true if Status==Active or Expiring (and not locked)
+    public bool IsLocked { get; set; }
     public bool IsTrial { get; set; }
-    public DateTime EndDate { get; set; }
-    public int DaysRemaining { get; set; }
-    public string Status { get; set; } = string.Empty;
+    public string Status { get; set; } = string.Empty;       // Active|Expiring|Expired|Locked
+    public string BillingCycle { get; set; } = string.Empty; // Trial|Monthly|Yearly
     public string? PlanName { get; set; }
-    public int DoctorCount { get; set; }
-    public decimal AdditionalDoctorSurcharge { get; set; }
-    public decimal TotalBasePrice { get; set; }
+    public DateTime StartDate { get; set; }
+    public DateTime EndDate { get; set; }
+    public int DaysRemaining { get; set; }   // Math.Max(0, (int)(EndDate - UtcNow).TotalDays)
+    public bool HasPendingPaymentRequest { get; set; }
+    public string? PendingRequestStatus { get; set; }  // Pending|Approved|Rejected
 }
 
 public class GetSubscriptionStatusQueryHandler : IRequestHandler<GetSubscriptionStatusQuery, SubscriptionStatusResponse>
@@ -35,43 +37,49 @@ public class GetSubscriptionStatusQueryHandler : IRequestHandler<GetSubscription
     public async Task<SubscriptionStatusResponse> Handle(GetSubscriptionStatusQuery request, CancellationToken cancellationToken)
     {
         var hospitalId = _userContext.HospitalId;
-        
-        var currentSubscription = await _context.HospitalSubscriptions
+
+        var subscription = await _context.HospitalSubscriptions
             .Include(s => s.Plan)
             .Where(s => s.HospitalId == hospitalId)
-            .OrderByDescending(s => s.EndDate)
+            .OrderByDescending(s => s.CreatedAt)
             .FirstOrDefaultAsync(cancellationToken);
 
-        if (currentSubscription == null)
+        if (subscription == null)
         {
-            return new SubscriptionStatusResponse { IsActive = false, Status = "None" };
+            return new SubscriptionStatusResponse
+            {
+                IsActive = false,
+                IsLocked = false,
+                IsTrial = false,
+                Status = "None",
+                BillingCycle = string.Empty,
+                DaysRemaining = 0,
+                HasPendingPaymentRequest = false
+            };
         }
 
-        var daysRemaining = (currentSubscription.EndDate - DateTime.UtcNow).Days;
+        // Latest payment request for this hospital
+        var latestPaymentRequest = await _context.SubscriptionPaymentRequests
+            .Where(r => r.HospitalId == hospitalId)
+            .OrderByDescending(r => r.CreatedAt)
+            .FirstOrDefaultAsync(cancellationToken);
 
-        // Count doctors in this hospital
-        var doctorCount = await _context.UserHospitalMappings
-            .Where(m => m.HospitalId == hospitalId)
-            .Where(m => m.Roles.Any(r => r.RoleName == "Doctor" || r.RoleName == "AdminDoctor"))
-            .CountAsync(cancellationToken);
-
-        decimal surcharge = 0;
-        if (doctorCount > 1 && currentSubscription.Plan != null)
-        {
-            surcharge = (doctorCount - 1) * currentSubscription.Plan.PerAdditionalDoctorPrice;
-        }
+        var daysRemaining = Math.Max(0, (int)(subscription.EndDate - DateTime.UtcNow).TotalDays);
+        var isActive = (subscription.Status == "Active" || subscription.Status == "Expiring") && !subscription.IsLocked;
 
         return new SubscriptionStatusResponse
         {
-            IsActive = currentSubscription.Status == "Active" && currentSubscription.EndDate > DateTime.UtcNow,
-            IsTrial = currentSubscription.IsTrial,
-            EndDate = currentSubscription.EndDate,
-            DaysRemaining = daysRemaining > 0 ? daysRemaining : 0,
-            Status = currentSubscription.Status,
-            PlanName = currentSubscription.Plan?.Name ?? (currentSubscription.IsTrial ? "Trial" : "None"),
-            DoctorCount = doctorCount,
-            AdditionalDoctorSurcharge = surcharge,
-            TotalBasePrice = currentSubscription.Plan?.Price ?? 0
+            IsActive = isActive,
+            IsLocked = subscription.IsLocked,
+            IsTrial = subscription.IsTrial,
+            Status = subscription.Status,
+            BillingCycle = subscription.BillingCycle,
+            PlanName = subscription.Plan?.Name ?? (subscription.IsTrial ? "Trial" : null),
+            StartDate = subscription.StartDate,
+            EndDate = subscription.EndDate,
+            DaysRemaining = daysRemaining,
+            HasPendingPaymentRequest = latestPaymentRequest != null,
+            PendingRequestStatus = latestPaymentRequest?.Status
         };
     }
 }

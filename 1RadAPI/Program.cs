@@ -168,6 +168,7 @@ app.UseRateLimiter(); // Apply Rate Limiting
 app.UseAuthentication(); // Must be before UseAuthorization
 app.UseAuthorization();
 app.UseMiddleware<ContextualSentinelMiddleware>();
+app.UseMiddleware<SubscriptionValidationMiddleware>();
 
 app.MapControllers();
 

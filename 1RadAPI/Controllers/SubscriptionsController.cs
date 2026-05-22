@@ -1,3 +1,5 @@
+using _1Rad.Application.Features.Subscriptions.Commands.ApprovePaymentRequest;
+using _1Rad.Application.Features.Subscriptions.Commands.SubmitPaymentRequest;
 using _1Rad.Application.Features.Subscriptions.Queries.GetSubscriptionStatus;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
@@ -17,25 +19,49 @@ public class SubscriptionsController : ControllerBase
         _mediator = mediator;
     }
 
+    /// <summary>
+    /// Returns the current subscription status for the authenticated hospital.
+    /// Returns HTTP 402 if the subscription is locked.
+    /// </summary>
     [HttpGet("status")]
-    public async Task<ActionResult<SubscriptionStatusResponse>> GetStatus()
+    public async Task<IActionResult> GetStatus()
     {
-        return await _mediator.Send(new GetSubscriptionStatusQuery());
+        var result = await _mediator.Send(new GetSubscriptionStatusQuery());
+        if (result.IsLocked)
+            return StatusCode(402, result); // Payment Required
+        return Ok(result);
     }
 
+    /// <summary>
+    /// Submit payment evidence for plan activation review.
+    /// </summary>
+    [HttpPost("payment-request")]
+    public async Task<IActionResult> SubmitPaymentRequest([FromBody] SubmitPaymentRequestCommand command)
+    {
+        var result = await _mediator.Send(command);
+        return result.Success ? Ok(result) : BadRequest(new { error = result.Error });
+    }
+
+    /// <summary>
+    /// [INTERNAL] Approve a payment request and activate the plan.
+    /// Protected: only accessible by super-admin or internal API key.
+    /// </summary>
+    [HttpPost("approve-payment/{requestId:guid}")]
+    public async Task<IActionResult> ApprovePayment(Guid requestId, [FromBody] ApprovePaymentBody body)
+    {
+        var result = await _mediator.Send(new ApprovePaymentRequestCommand(requestId, body.ReviewNote));
+        return result.Success ? Ok(result) : BadRequest(new { error = result.Error });
+    }
+
+    /// <summary>
+    /// Returns subscription invoices for the authenticated hospital.
+    /// </summary>
     [HttpGet("invoices")]
     public async Task<IActionResult> GetInvoices()
     {
-        // For now, returning an empty list to satisfy the frontend dashboard and resolve 404 errors.
-        // In a future phase, this will fetch actual institutional billing records.
+        // Phase 2: will return actual invoice records from SubscriptionPaymentRequests
         return Ok(new { success = true, data = new List<object>() });
     }
-
-    [HttpPost("upgrade-request")]
-    public async Task<IActionResult> UpgradeRequest([FromBody] object request)
-    {
-        // Mock implementation for the protocol architect upgrade requests.
-        // This stops 404s and allows the administrative UI to show success states.
-        return Ok(new { success = true, message = "Upgrade protocol request successfully logged." });
-    }
 }
+
+public record ApprovePaymentBody(string? ReviewNote);
