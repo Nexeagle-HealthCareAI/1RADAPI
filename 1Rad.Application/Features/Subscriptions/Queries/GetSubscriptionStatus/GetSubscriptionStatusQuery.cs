@@ -64,15 +64,38 @@ public class GetSubscriptionStatusQueryHandler : IRequestHandler<GetSubscription
             .OrderByDescending(r => r.CreatedAt)
             .FirstOrDefaultAsync(cancellationToken);
 
-        var daysRemaining = Math.Max(0, (int)(subscription.EndDate - DateTime.UtcNow).TotalDays);
-        var isActive = (subscription.Status == "Active" || subscription.Status == "Expiring") && !subscription.IsLocked;
+        var now = DateTime.UtcNow;
+        var daysRemaining = Math.Max(0, (int)(subscription.EndDate - now).TotalDays);
+        
+        // Compute effective status
+        var effectiveStatus = subscription.Status;
+        var effectiveIsLocked = subscription.IsLocked;
+
+        if (!subscription.IsLocked && effectiveStatus != "None")
+        {
+            if (now > subscription.EndDate.AddDays(2))
+            {
+                effectiveStatus = "Locked";
+                effectiveIsLocked = true;
+            }
+            else if (now > subscription.EndDate)
+            {
+                effectiveStatus = "Expired";
+            }
+            else if ((subscription.EndDate - now).TotalDays <= 3 && effectiveStatus == "Active")
+            {
+                effectiveStatus = "Expiring";
+            }
+        }
+
+        var isActive = (effectiveStatus == "Active" || effectiveStatus == "Expiring") && !effectiveIsLocked;
 
         return new SubscriptionStatusResponse
         {
             IsActive = isActive,
-            IsLocked = subscription.IsLocked,
+            IsLocked = effectiveIsLocked,
             IsTrial = subscription.IsTrial,
-            Status = subscription.Status,
+            Status = effectiveStatus,
             BillingCycle = subscription.BillingCycle,
             PlanName = subscription.Plan?.Name ?? (subscription.IsTrial ? "Trial" : null),
             StartDate = subscription.StartDate,

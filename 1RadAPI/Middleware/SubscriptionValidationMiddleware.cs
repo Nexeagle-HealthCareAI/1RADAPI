@@ -50,12 +50,12 @@ public class SubscriptionValidationMiddleware
                     .FirstOrDefaultAsync();
 
                 bool isActive = currentSubscription != null &&
-                                currentSubscription.Status == "Active" &&
-                                currentSubscription.EndDate > DateTime.UtcNow;
+                                currentSubscription.Status != "Locked" &&
+                                currentSubscription.EndDate.AddDays(2) >= DateTime.UtcNow;
 
                 if (!isActive)
                 {
-                    _logger.LogWarning("Access denied for HospitalId {HospitalId} due to inactive subscription.", hospitalId);
+                    _logger.LogWarning("Access denied for HospitalId {HospitalId} due to expired subscription and grace period.", hospitalId);
                     
                     context.Response.StatusCode = 402; // Payment Required
                     context.Response.ContentType = "application/json";
