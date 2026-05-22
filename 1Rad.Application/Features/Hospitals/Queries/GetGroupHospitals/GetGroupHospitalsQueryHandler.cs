@@ -1,5 +1,4 @@
 using _1Rad.Application.Interfaces;
-using _1Rad.Application.Features.Hospitals.Queries.GetHospitalDetails;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
 using System.Collections.Generic;
@@ -9,7 +8,7 @@ using System.Threading.Tasks;
 
 namespace _1Rad.Application.Features.Hospitals.Queries.GetGroupHospitals;
 
-public class GetGroupHospitalsQueryHandler : IRequestHandler<GetGroupHospitalsQuery, List<HospitalDetailsDto>>
+public class GetGroupHospitalsQueryHandler : IRequestHandler<GetGroupHospitalsQuery, List<GroupHospitalDto>>
 {
     private readonly IApplicationDbContext _context;
     private readonly IUserContext _userContext;
@@ -20,13 +19,11 @@ public class GetGroupHospitalsQueryHandler : IRequestHandler<GetGroupHospitalsQu
         _userContext = userContext;
     }
 
-    public async Task<List<HospitalDetailsDto>> Handle(GetGroupHospitalsQuery request, CancellationToken cancellationToken)
+    public async Task<List<GroupHospitalDto>> Handle(GetGroupHospitalsQuery request, CancellationToken cancellationToken)
     {
         var authorizedIds = _userContext.AuthorizedHospitalIds.ToList();
         var currentGroupId = _userContext.GroupId;
 
-        // Fetch hospitals that the user is actively mapped to (Active Mapping Protocol)
-        // Furthermore, ensure they belong to the same institutional group if a group context exists.
         var query = _context.Hospitals.AsQueryable();
 
         if (currentGroupId.HasValue)
@@ -34,20 +31,19 @@ public class GetGroupHospitalsQueryHandler : IRequestHandler<GetGroupHospitalsQu
             query = query.Where(h => h.GroupId == currentGroupId.Value);
         }
 
-        // Apply Active Mapping Filter
         query = query.Where(h => authorizedIds.Contains(h.HospitalId));
 
         return await query
-            .Select(h => new HospitalDetailsDto(
+            .Select(h => new GroupHospitalDto(
                 h.HospitalId,
-                h.HospitalName,
-                h.HospitalAddress,
+                h.HospitalName ?? "Unknown",
+                h.HospitalAddress ?? "Unknown",
                 h.GSTIN,
                 h.RegistrationNumber,
                 h.PAN,
                 h.NABHNumber,
                 h.Status,
-                false // IsAutoBillingEnabled - default to false
+                h.IsAutoBillingEnabled
             ))
             .ToListAsync(cancellationToken);
     }
