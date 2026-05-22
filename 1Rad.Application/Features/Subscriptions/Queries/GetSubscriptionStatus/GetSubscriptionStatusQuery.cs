@@ -16,8 +16,8 @@ public class SubscriptionStatusResponse
     public string Status { get; set; } = string.Empty;       // Active|Expiring|Expired|Locked
     public string BillingCycle { get; set; } = string.Empty; // Trial|Monthly|Yearly
     public string? PlanName { get; set; }
-    public DateTime StartDate { get; set; }
-    public DateTime EndDate { get; set; }
+    public DateTime? StartDate { get; set; }
+    public DateTime? EndDate { get; set; }
     public int DaysRemaining { get; set; }   // Math.Max(0, (int)(EndDate - UtcNow).TotalDays)
     public bool HasPendingPaymentRequest { get; set; }
     public string? PendingRequestStatus { get; set; }  // Pending|Approved|Rejected
