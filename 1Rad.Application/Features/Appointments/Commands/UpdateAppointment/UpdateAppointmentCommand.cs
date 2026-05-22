@@ -41,8 +41,10 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
 
         if (appointment == null) return false;
 
+        bool dateChanged = appointment.DateTime.Date != request.DateTime.Date;
+
         // If the date has changed, calculate a new token number for the new date
-        if (appointment.DateTime.Date != request.DateTime.Date)
+        if (dateChanged)
         {
             var appointmentDate = request.DateTime.Date;
             var newDailyTokenNumber = await _context.Appointments
@@ -78,6 +80,10 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
 
         if (invoice != null)
         {
+            if (dateChanged)
+            {
+                invoice.CreatedAt = request.DateTime;
+            }
             if (request.Amount.HasValue && invoice.Items.Any())
             {
                 var item = invoice.Items.First();
@@ -99,6 +105,10 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
 
         if (commission != null)
         {
+            if (dateChanged)
+            {
+                commission.TransactionDate = request.DateTime;
+            }
             if (finalCut <= 0 || string.IsNullOrEmpty(request.ReferredBy))
             {
                 // If cut removed or referrer removed, set commission to 0 to preserve audit trail
