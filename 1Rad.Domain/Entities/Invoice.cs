@@ -22,6 +22,7 @@ public class Invoice : BaseEntity, IHospitalContext
     public string Status { get; set; } = "PENDING"; // PENDING, PARTIAL, PAID, CANCELLED
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime ServiceDate { get; set; } = DateTime.UtcNow;
     public DateTime? PaidAt { get; set; }
     
     public decimal ReferralCutValue { get; set; } = 0;
