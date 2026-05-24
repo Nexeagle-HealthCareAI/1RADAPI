@@ -64,6 +64,7 @@ public class ExceptionHandlingMiddleware
         {
             success = false,
             error = exception.Message,
+            message = exception.Message, // Alias for frontend compatibility
             errorCode = exception.ErrorCode,
             timestamp = DateTime.UtcNow,
             path = exception.AdditionalData?.ContainsKey("path") == true 
@@ -89,6 +90,7 @@ public class ExceptionHandlingMiddleware
         {
             success = false,
             error = "One or more validation errors occurred.",
+            message = "One or more validation errors occurred.", // Alias
             errorCode = "VALIDATION_ERROR",
             errors = errors,
             timestamp = DateTime.UtcNow,
@@ -104,6 +106,7 @@ public class ExceptionHandlingMiddleware
         {
             success = false,
             error = "You don't have permission to access this resource.",
+            message = "You don't have permission to access this resource.", // Alias
             errorCode = "FORBIDDEN",
             timestamp = DateTime.UtcNow
         };
@@ -117,6 +120,21 @@ public class ExceptionHandlingMiddleware
 
         var isDevelopment = _env.IsDevelopment();
         var msg = exception.Message ?? "";
+        
+        // Return 400 for Database Update Exceptions (like unique constraint violations)
+        if (exception is Microsoft.EntityFrameworkCore.DbUpdateException)
+        {
+            var errorResponseDb = new
+            {
+                success = false,
+                error = "Database operation failed. The record might already exist or violates a constraint.",
+                message = "Database operation failed. The record might already exist or violates a constraint.",
+                errorCode = "DB_CONSTRAINT_ERROR",
+                timestamp = DateTime.UtcNow
+            };
+            return ((int)HttpStatusCode.BadRequest, errorResponseDb);
+        }
+
         var errorMessage = isDevelopment 
             ? msg 
             : (msg.Contains("CONFIG_MISSING") || msg.Contains("FAILURE") || msg.Contains("Exception") || msg.Contains("Error") || msg.Contains("Sql") || msg.Contains("DbUpdate") || msg.Contains("Azure")
@@ -127,6 +145,7 @@ public class ExceptionHandlingMiddleware
         {
             success = false,
             error = errorMessage,
+            message = errorMessage, // Added to fix frontend swallowing errors where it expects err.response.data.message
             errorCode = "SYSTEM_ERROR",
             timestamp = DateTime.UtcNow,
             stackTrace = isDevelopment ? exception.StackTrace : null,
