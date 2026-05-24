@@ -97,6 +97,26 @@ public class AddSalaryDisbursementCommandHandler : IRequestHandler<AddSalaryDisb
         };
         _context.Expenses.Add(expense);
 
+        // Auto-create Leave Request for encashment if EncashmentDays > 0
+        if (request.EncashmentDays > 0)
+        {
+            var encashmentLeave = new StaffLeaveRequest
+            {
+                StaffId = request.StaffId,
+                HospitalId = request.HospitalId,
+                LeaveType = string.IsNullOrWhiteSpace(request.EncashmentType) ? "Earned Leave" : request.EncashmentType,
+                FromDate = paidOn,
+                ToDate = paidOn,
+                Days = (int)Math.Round(request.EncashmentDays),
+                Reason = "Encashed during salary payout",
+                Status = "approved",
+                AppliedOn = DateTime.UtcNow,
+                ReviewedByUserId = request.CreatedByUserId,
+                ReviewedAt = DateTime.UtcNow
+            };
+            _context.StaffLeaveRequests.Add(encashmentLeave);
+        }
+
         await _context.SaveChangesAsync(cancellationToken);
         return (entry.DisbursementId, null);
     }

@@ -23,6 +23,7 @@ public record AddSalaryDisbursementCommand(
     string PaidOnDate,       // "YYYY-MM-DD"
     string? Notes,
     decimal EncashmentDays = 0,
+    string? EncashmentType = null,
     decimal EncashmentBonus = 0,
     decimal ExtraPay = 0,
     string? ExtraPayReason = null,

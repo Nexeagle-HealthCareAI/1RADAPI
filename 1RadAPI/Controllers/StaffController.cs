@@ -225,6 +225,7 @@ public class StaffController : ControllerBase
             LwpLeaveInMonth:  body.LwpLeaveInMonth,
             AttendanceJson:   body.AttendanceJson,
             EncashmentDays:   body.EncashmentDays,
+            EncashmentType:   body.EncashmentType,
             EncashmentBonus:  body.EncashmentBonus,
             ExtraPay:         body.ExtraPay,
             ExtraPayReason:   body.ExtraPayReason,
@@ -237,6 +238,17 @@ public class StaffController : ControllerBase
         var (disbursementId, error) = await _mediator.Send(cmd);
         return error == null
             ? Ok(new { disbursementId, message = "Salary recorded." })
+            : BadRequest(new { message = error });
+    }
+
+    // DELETE /api/v1/staff/{id}/salary/disbursements/{disbId}
+    [HttpDelete("{id:guid}/salary/disbursements/{disbId:guid}")]
+    public async Task<IActionResult> DeleteDisbursement(Guid id, Guid disbId)
+    {
+        var (success, error) = await _mediator.Send(
+            new _1Rad.Application.Features.Staff.Commands.DeleteSalaryDisbursement.DeleteSalaryDisbursementCommand(disbId, id, _userContext.HospitalId));
+        return success
+            ? Ok(new { message = "Draft disbursement deleted." })
             : BadRequest(new { message = error });
     }
 
@@ -285,6 +297,7 @@ public record AddDisbursementRequest(
     int LwpLeaveInMonth,
     string? AttendanceJson,
     decimal EncashmentDays,
+    string? EncashmentType,
     decimal EncashmentBonus,
     decimal ExtraPay,
     string? ExtraPayReason,
