@@ -255,6 +255,140 @@ namespace _1RadAPI.Controllers
             }
         }
 
+        [HttpPost("upload-token")]
+        public async Task<IActionResult> RequestSasUploadToken([FromBody] SasUploadTokenRequest request)
+        {
+            try
+            {
+                if (request == null || request.AppointmentId == Guid.Empty)
+                    return BadRequest(new { success = false, error = "AppointmentId is required." });
+
+                if (string.IsNullOrWhiteSpace(request.FileName))
+                    return BadRequest(new { success = false, error = "FileName is required." });
+
+                // Hard size cap — adjust if you ever need bigger studies.
+                const long MaxBytes = 1_073_741_824L; // 1 GB
+                if (request.FileSize > MaxBytes)
+                    return BadRequest(new { success = false, error = $"File too large. Maximum allowed is {MaxBytes / (1024 * 1024)} MB." });
+
+                var appointment = await _context.Appointments
+                    .IgnoreQueryFilters()
+                    .FirstOrDefaultAsync(a => a.AppointmentId == request.AppointmentId);
+
+                if (appointment == null)
+                    return NotFound(new { success = false, error = "Appointment not found." });
+
+                var fileName = Path.GetFileName(request.FileName);
+                var extension = Path.GetExtension(fileName).ToLower().TrimStart('.');
+                // Foldered path keeps blobs organised + easy to delete by appointment.
+                var stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
+                var assetId = Guid.NewGuid();
+                var blobPath = $"{appointment.HospitalId:N}/{appointment.AppointmentId:N}/{stamp}_{assetId:N}_{fileName}";
+
+                SasUploadTarget target;
+                try
+                {
+                    target = await _blobService.GenerateSasUploadUrlAsync(
+                        blobPath,
+                        "dicom-files",
+                        TimeSpan.FromMinutes(30),
+                        request.ContentType);
+                }
+                catch (Exception ex)
+                {
+                    return StatusCode(500, new { success = false, error = $"SAS_GENERATION_FAILURE: {ex.Message}" });
+                }
+
+                // Pre-create a placeholder StudyAsset row (Status = "Pending"). The /upload-complete
+                // call will flip it to "Uploaded" once Azure confirms the blob is there.
+                var asset = new StudyAsset
+                {
+                    Id = assetId,
+                    AppointmentId = request.AppointmentId,
+                    BlobUrl = target.PublicReadUrl,
+                    FileName = fileName,
+                    FileType = string.IsNullOrEmpty(extension) ? "bin" : extension,
+                    UploadedAt = DateTime.UtcNow, // placeholder; updated on complete
+                    HospitalId = appointment.HospitalId,
+                };
+                _context.StudyAssets.Add(asset);
+                await _context.SaveChangesAsync(default);
+
+                return Ok(new
+                {
+                    success = true,
+                    data = new
+                    {
+                        assetId = asset.Id,
+                        sasUrl = target.SasUrl,
+                        publicReadUrl = target.PublicReadUrl,
+                        blobPath = target.BlobPath,
+                        containerName = target.ContainerName,
+                        expiresAt = target.ExpiresAt,
+                    },
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, error = $"UPLOAD_TOKEN_FAILURE: {ex.Message}" });
+            }
+        }
+
+        [HttpPost("upload-complete")]
+        public async Task<IActionResult> ConfirmSasUploadComplete([FromBody] SasUploadCompleteRequest request)
+        {
+            try
+            {
+                if (request == null || request.AssetId == Guid.Empty)
+                    return BadRequest(new { success = false, error = "AssetId is required." });
+
+                var asset = await _context.StudyAssets
+                    .IgnoreQueryFilters()
+                    .Include(a => a.Appointment)
+                    .FirstOrDefaultAsync(a => a.Id == request.AssetId);
+
+                if (asset == null)
+                    return NotFound(new { success = false, error = "Asset not found." });
+
+                // Re-derive the blob path from the public URL to verify Azure has the upload.
+                // URL shape: https://{account}.blob.core.windows.net/{container}/{blob-path}
+                var uri = new Uri(asset.BlobUrl);
+                var pathSegments = uri.AbsolutePath.TrimStart('/').Split('/', 2);
+                if (pathSegments.Length != 2)
+                    return BadRequest(new { success = false, error = "Asset has malformed BlobUrl." });
+
+                var containerName = pathSegments[0];
+                var blobPath = Uri.UnescapeDataString(pathSegments[1]);
+
+                var exists = await _blobService.BlobExistsAsync(blobPath, containerName);
+                if (!exists)
+                {
+                    return BadRequest(new
+                    {
+                        success = false,
+                        error = "Blob not found in Azure. The PUT may have failed or the SAS expired before upload finished.",
+                    });
+                }
+
+                asset.UploadedAt = DateTime.UtcNow;
+
+                // Auto-advance appointment status (same logic as legacy /upload).
+                var appointment = asset.Appointment;
+                if (appointment != null && appointment.Status != "SCANNED" && appointment.Status != "REPORTED")
+                {
+                    appointment.Status = "IN_PROGRESS";
+                }
+
+                await _context.SaveChangesAsync(default);
+
+                return Ok(new { success = true, data = asset });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, error = $"UPLOAD_COMPLETE_FAILURE: {ex.Message}" });
+            }
+        }
+
         [HttpGet("proxy-asset")]
         [HttpHead("proxy-asset")]
         [Microsoft.AspNetCore.Authorization.AllowAnonymous]
@@ -303,5 +437,19 @@ namespace _1RadAPI.Controllers
     {
         public Guid AppointmentId { get; set; }
         public string Comments { get; set; }
+    }
+
+    public class SasUploadTokenRequest
+    {
+        public Guid AppointmentId { get; set; }
+        public string FileName { get; set; } = string.Empty;
+        public long FileSize { get; set; }
+        public string? ContentType { get; set; }
+    }
+
+    public class SasUploadCompleteRequest
+    {
+        public Guid AssetId { get; set; }
+        public long? ActualSize { get; set; } // optional integrity check hint
     }
 }

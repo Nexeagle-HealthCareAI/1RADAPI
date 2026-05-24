@@ -1,6 +1,7 @@
 using _1Rad.Application.Interfaces;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
+using Azure.Storage.Sas;
 using Microsoft.Extensions.Configuration;
 using System;
 using System.IO;
@@ -99,6 +100,70 @@ namespace _1Rad.Infrastructure.Services
             foreach (var invalid in new[] { '\\', ':', '*', '?', '"', '<', '>', '|' })
                 name = name.Replace(invalid, '_');
             return string.IsNullOrWhiteSpace(name) ? Guid.NewGuid().ToString("N") : name;
+        }
+
+        public async Task<SasUploadTarget> GenerateSasUploadUrlAsync(string blobPath, string containerName, TimeSpan validFor, string? contentType = null)
+        {
+            if (string.IsNullOrWhiteSpace(blobPath))
+                throw new ArgumentException("blobPath is required", nameof(blobPath));
+            if (string.IsNullOrWhiteSpace(containerName))
+                throw new ArgumentException("containerName is required", nameof(containerName));
+
+            var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
+            await containerClient.CreateIfNotExistsAsync(PublicAccessType.Blob);
+
+            // Sanitise each path segment but preserve / separators (Azure treats / as virtual folders).
+            var sanitisedPath = string.Join('/',
+                blobPath.Split('/', StringSplitOptions.RemoveEmptyEntries)
+                        .Select(SanitiseFileName));
+
+            var blobClient = containerClient.GetBlobClient(sanitisedPath);
+
+            if (!blobClient.CanGenerateSasUri)
+            {
+                throw new InvalidOperationException(
+                    "AZURE_SAS_UNAVAILABLE: The storage client cannot generate SAS URIs. " +
+                    "This requires authentication via account key (storage connection string with AccountKey=...). " +
+                    "Managed-identity-only deployments must use user-delegation SAS instead.");
+            }
+
+            var sasBuilder = new BlobSasBuilder
+            {
+                BlobContainerName = containerName,
+                BlobName = sanitisedPath,
+                Resource = "b",  // blob-level (not container)
+                StartsOn = DateTimeOffset.UtcNow.AddMinutes(-5), // clock-skew tolerance
+                ExpiresOn = DateTimeOffset.UtcNow.Add(validFor),
+                Protocol = SasProtocol.Https,
+            };
+            // Write + Create lets the browser PUT a fresh blob OR overwrite (for retries).
+            sasBuilder.SetPermissions(BlobSasPermissions.Write | BlobSasPermissions.Create);
+
+            if (!string.IsNullOrEmpty(contentType))
+            {
+                sasBuilder.ContentType = contentType;
+            }
+
+            var sasUri = blobClient.GenerateSasUri(sasBuilder);
+
+            return new SasUploadTarget
+            {
+                SasUrl = sasUri.ToString(),
+                PublicReadUrl = blobClient.Uri.ToString(),
+                BlobPath = sanitisedPath,
+                ContainerName = containerName,
+                ExpiresAt = sasBuilder.ExpiresOn,
+            };
+        }
+
+        public async Task<bool> BlobExistsAsync(string blobPath, string containerName)
+        {
+            if (string.IsNullOrWhiteSpace(blobPath) || string.IsNullOrWhiteSpace(containerName))
+                return false;
+
+            var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
+            var blobClient = containerClient.GetBlobClient(blobPath);
+            return await blobClient.ExistsAsync();
         }
 
         public async Task<Stream> DownloadFileAsync(string fileUrl)
