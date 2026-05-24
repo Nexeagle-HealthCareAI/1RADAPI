@@ -37,6 +37,12 @@ public class SalaryDisbursement : BaseEntity, IHospitalContext
     /// <summary>JSON snapshot of the attendance counts (present, absent, halfday, late, leave).</summary>
     public string? AttendanceJson { get; set; }
 
+    // Extras
+    public decimal EncashmentDays { get; set; }
+    public decimal EncashmentBonus { get; set; }
+    public decimal ExtraPay { get; set; }
+    public string? ExtraPayReason { get; set; }
+
     // Payment metadata
     /// <summary>bank | cash | upi | cheque</summary>
     public string PaymentMode { get; set; } = "bank";

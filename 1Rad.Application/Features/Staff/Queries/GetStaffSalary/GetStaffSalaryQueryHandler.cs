@@ -43,6 +43,7 @@ public class GetStaffSalaryQueryHandler : IRequestHandler<GetStaffSalaryQuery, S
                 d.GrossPay, d.NetPay, d.StructureGross, d.StructureNet,
                 d.LwpDays, d.LwpDeduction, d.PerDayRate,
                 d.PaidLeaveInMonth, d.LwpLeaveInMonth, d.AttendanceJson,
+                d.EncashmentDays, d.EncashmentBonus, d.ExtraPay, d.ExtraPayReason,
                 d.PaymentMode, d.Reference,
                 d.PaidOnDate.ToString("yyyy-MM-dd"),
                 d.Notes, d.CreatedAt

@@ -22,5 +22,9 @@ public record AddSalaryDisbursementCommand(
     string? Reference,
     string PaidOnDate,       // "YYYY-MM-DD"
     string? Notes,
+    decimal EncashmentDays = 0,
+    decimal EncashmentBonus = 0,
+    decimal ExtraPay = 0,
+    string? ExtraPayReason = null,
     string Status = "Paid"   // Draft | Paid — defaults to Paid for backwards compatibility
 ) : IRequest<(Guid DisbursementId, string? Error)>;
