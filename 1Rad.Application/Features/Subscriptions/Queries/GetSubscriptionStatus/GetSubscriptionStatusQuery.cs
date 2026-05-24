@@ -101,7 +101,7 @@ public class GetSubscriptionStatusQueryHandler : IRequestHandler<GetSubscription
             StartDate = subscription.StartDate,
             EndDate = subscription.EndDate,
             DaysRemaining = daysRemaining,
-            HasPendingPaymentRequest = latestPaymentRequest != null,
+            HasPendingPaymentRequest = latestPaymentRequest?.Status == "Pending",
             PendingRequestStatus = latestPaymentRequest?.Status
         };
     }

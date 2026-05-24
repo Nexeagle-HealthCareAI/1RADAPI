@@ -279,7 +279,6 @@ namespace _1RadAPI.Controllers
                     return NotFound(new { success = false, error = "Appointment not found." });
 
                 var fileName = Path.GetFileName(request.FileName);
-                var extension = Path.GetExtension(fileName).ToLower().TrimStart('.');
                 // Foldered path keeps blobs organised + easy to delete by appointment.
                 var stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
                 var assetId = Guid.NewGuid();
@@ -299,27 +298,16 @@ namespace _1RadAPI.Controllers
                     return StatusCode(500, new { success = false, error = $"SAS_GENERATION_FAILURE: {ex.Message}" });
                 }
 
-                // Pre-create a placeholder StudyAsset row (Status = "Pending"). The /upload-complete
-                // call will flip it to "Uploaded" once Azure confirms the blob is there.
-                var asset = new StudyAsset
-                {
-                    Id = assetId,
-                    AppointmentId = request.AppointmentId,
-                    BlobUrl = target.PublicReadUrl,
-                    FileName = fileName,
-                    FileType = string.IsNullOrEmpty(extension) ? "bin" : extension,
-                    UploadedAt = DateTime.UtcNow, // placeholder; updated on complete
-                    HospitalId = appointment.HospitalId,
-                };
-                _context.StudyAssets.Add(asset);
-                await _context.SaveChangesAsync(default);
-
+                // NOTE: we deliberately do NOT create the StudyAsset row here. A pre-created row
+                // becomes a 404-causing orphan if the PUT fails (e.g., CORS, network drop, SAS
+                // expiry). The row is created in /upload-complete only after the blob is
+                // confirmed to exist in Azure.
                 return Ok(new
                 {
                     success = true,
                     data = new
                     {
-                        assetId = asset.Id,
+                        assetId,                              // freshly minted GUID — client sends back in /complete
                         sasUrl = target.SasUrl,
                         publicReadUrl = target.PublicReadUrl,
                         blobPath = target.BlobPath,
@@ -339,42 +327,63 @@ namespace _1RadAPI.Controllers
         {
             try
             {
-                if (request == null || request.AssetId == Guid.Empty)
-                    return BadRequest(new { success = false, error = "AssetId is required." });
+                if (request == null
+                    || request.AssetId == Guid.Empty
+                    || request.AppointmentId == Guid.Empty
+                    || string.IsNullOrWhiteSpace(request.BlobPath)
+                    || string.IsNullOrWhiteSpace(request.ContainerName)
+                    || string.IsNullOrWhiteSpace(request.PublicReadUrl)
+                    || string.IsNullOrWhiteSpace(request.FileName))
+                {
+                    return BadRequest(new { success = false, error = "AssetId, AppointmentId, BlobPath, ContainerName, PublicReadUrl and FileName are all required." });
+                }
 
-                var asset = await _context.StudyAssets
+                var appointment = await _context.Appointments
                     .IgnoreQueryFilters()
-                    .Include(a => a.Appointment)
-                    .FirstOrDefaultAsync(a => a.Id == request.AssetId);
+                    .FirstOrDefaultAsync(a => a.AppointmentId == request.AppointmentId);
+                if (appointment == null)
+                    return NotFound(new { success = false, error = "Appointment not found." });
 
-                if (asset == null)
-                    return NotFound(new { success = false, error = "Asset not found." });
-
-                // Re-derive the blob path from the public URL to verify Azure has the upload.
-                // URL shape: https://{account}.blob.core.windows.net/{container}/{blob-path}
-                var uri = new Uri(asset.BlobUrl);
-                var pathSegments = uri.AbsolutePath.TrimStart('/').Split('/', 2);
-                if (pathSegments.Length != 2)
-                    return BadRequest(new { success = false, error = "Asset has malformed BlobUrl." });
-
-                var containerName = pathSegments[0];
-                var blobPath = Uri.UnescapeDataString(pathSegments[1]);
-
-                var exists = await _blobService.BlobExistsAsync(blobPath, containerName);
+                // Verify the blob actually exists in Azure before we write any DB row.
+                var exists = await _blobService.BlobExistsAsync(request.BlobPath, request.ContainerName);
                 if (!exists)
                 {
                     return BadRequest(new
                     {
                         success = false,
-                        error = "Blob not found in Azure. The PUT may have failed or the SAS expired before upload finished.",
+                        error = "Blob not found in Azure. The PUT may have failed (most commonly: CORS not yet configured on the storage account) or the SAS expired before upload finished.",
                     });
                 }
 
-                asset.UploadedAt = DateTime.UtcNow;
+                var fileName = Path.GetFileName(request.FileName);
+                var extension = Path.GetExtension(fileName).ToLower().TrimStart('.');
 
-                // Auto-advance appointment status (same logic as legacy /upload).
-                var appointment = asset.Appointment;
-                if (appointment != null && appointment.Status != "SCANNED" && appointment.Status != "REPORTED")
+                // Idempotent: if this AssetId was already inserted (retry / double-tap),
+                // just bump UploadedAt instead of duplicating.
+                var asset = await _context.StudyAssets
+                    .IgnoreQueryFilters()
+                    .FirstOrDefaultAsync(a => a.Id == request.AssetId);
+                if (asset == null)
+                {
+                    asset = new StudyAsset
+                    {
+                        Id = request.AssetId,
+                        AppointmentId = request.AppointmentId,
+                        BlobUrl = request.PublicReadUrl,
+                        FileName = fileName,
+                        FileType = string.IsNullOrEmpty(extension) ? "bin" : extension,
+                        UploadedAt = DateTime.UtcNow,
+                        HospitalId = appointment.HospitalId,
+                    };
+                    _context.StudyAssets.Add(asset);
+                }
+                else
+                {
+                    asset.BlobUrl = request.PublicReadUrl;
+                    asset.UploadedAt = DateTime.UtcNow;
+                }
+
+                if (appointment.Status != "SCANNED" && appointment.Status != "REPORTED")
                 {
                     appointment.Status = "IN_PROGRESS";
                 }
@@ -450,6 +459,11 @@ namespace _1RadAPI.Controllers
     public class SasUploadCompleteRequest
     {
         public Guid AssetId { get; set; }
+        public Guid AppointmentId { get; set; }
+        public string BlobPath { get; set; } = string.Empty;
+        public string ContainerName { get; set; } = string.Empty;
+        public string PublicReadUrl { get; set; } = string.Empty;
+        public string FileName { get; set; } = string.Empty;
         public long? ActualSize { get; set; } // optional integrity check hint
     }
 }
