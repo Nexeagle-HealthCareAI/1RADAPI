@@ -198,7 +198,7 @@ stages:
                     package: '$(Pipeline.Workspace)/api-package/**/*.zip'
 
   # ────────────────────────────────────────────────────────────────────────
-  # Stage 3 — Deploy to Prod App Service (slot-swap, zero downtime)
+  # Stage 3 — Deploy to Prod App Service (DIRECT deploy, no slot)
   # Runs ONLY when:
   #   (1) Dev deploy succeeded
   #   (2) The run was queued with deployToProd: true
@@ -208,10 +208,10 @@ stages:
   # Production-API → Approvals and checks.
   #
   # Flow:
-  #   a. Download the SAME artifact built in Stage 1
-  #   b. Deploy zip to the 'staging' slot (no live-traffic impact)
-  #   c. Hit /health on the staging slot to warm it up
-  #   d. Swap staging ↔ production (atomic, near-zero downtime)
+  #   1) Apply Prod settings + connection strings directly to production
+  #   2) Deploy the zip directly to the production slot (brief 10-30s restart)
+  #   3) Smoke test the live URL — if it fails, the stage fails and the team
+  #      gets notified. Recovery: re-queue an earlier successful pipeline run.
   # ────────────────────────────────────────────────────────────────────────
   - stage: DeployProd
     displayName: Deploy to Prod (App Service)
@@ -219,14 +219,13 @@ stages:
     condition: and(succeeded(), eq('${{ parameters.deployToProd }}', true), ne(variables['Build.Reason'], 'PullRequest'))
     variables:
       # Variable group `api-prod-secrets` holds the Prod connection strings,
-      # JWT keys, third-party API keys, etc. Each variable is marked as
-      # 'secret' in the DevOps Library UI. The values are pushed to the
-      # STAGING slot in the AzureAppServiceSettings step below — when the
-      # slot swaps, they travel with the code to production.
+      # JWT keys, third-party API keys, etc. Each variable MUST be marked as
+      # 'secret' (🔒) in the DevOps Library UI — otherwise the values appear
+      # in plaintext in the build logs.
       - group: api-prod-secrets
     jobs:
       - deployment: DeployProd
-        displayName: Deploy to Prod staging slot, then swap
+        displayName: Deploy directly to Prod
         environment: 'Production-API'
         timeoutInMinutes: 60
         strategy:
@@ -243,35 +242,24 @@ stages:
                     echo Queued by:  $(Build.RequestedFor)
                     echo Pipeline:   $(Build.BuildNumber)
                     echo App:        $(prodAppName)
-                    echo Slot:       $(prodStagingSlot) -> production
                     echo RG:         $(prodResourceGroup)
                   displayName: 'Prod deploy audit log'
 
-                # 1) Push Prod app settings + connection strings to the STAGING
-                #    slot BEFORE the deploy. .NET nested config uses '__' as
-                #    the section separator (e.g. ConnectionStrings:Default →
-                #    ConnectionStrings__Default). Each value below references a
-                #    secret variable from the 'api-prod-secrets' variable group.
-                #
-                #    slotSetting: false → the value SWAPS with the code (what
-                #    we want for app config). Things that must stay slot-bound
-                #    (e.g. ASPNETCORE_ENVIRONMENT) should be set manually in
-                #    the Portal with "Deployment slot setting" ticked, NOT
-                #    here.
+                # 1) Push Prod app settings + connection strings directly to
+                #    the PRODUCTION slot. .NET nested config uses '__' as the
+                #    section separator (Jwt:Secret ↔ Jwt__Secret).
+                #    Each value references a secret variable from the
+                #    'api-prod-secrets' variable group.
                 - task: AzureAppServiceSettings@1
                   displayName: 'Apply Prod app settings + connection strings'
                   inputs:
                     azureSubscription: '$(prodServiceConnection)'
                     appName: '$(prodAppName)'
                     resourceGroupName: '$(prodResourceGroup)'
-                    slotName: '$(prodStagingSlot)'
-                    # Keys below match the actual section paths in appsettings.json
-                    # using .NET's '__' nested-config separator. Non-secret values
-                    # (Issuer, Audience, etc.) come from appsettings.Production.json
-                    # so they're NOT duplicated here — only secrets are injected.
                     appSettings: |
                       [
                         { "name": "ASPNETCORE_DETAILEDERRORS", "value": "false",                "slotSetting": false },
+                        { "name": "ASPNETCORE_ENVIRONMENT",    "value": "Production",           "slotSetting": false },
                         { "name": "Jwt__Secret",               "value": "$(ProdJwtSecret)",     "slotSetting": false },
                         { "name": "Smtp__AppPassword",         "value": "$(ProdSmtpAppPassword)","slotSetting": false },
                         { "name": "WhatsApp__AccessToken",     "value": "$(ProdWhatsAppToken)", "slotSetting": false }
@@ -282,63 +270,26 @@ stages:
                         { "name": "AzureBlobStorage",   "value": "$(ProdAzureBlobConnectionString)","type": "Custom",   "slotSetting": false }
                       ]
 
-                # 2) Push the zip to the staging slot — live traffic untouched
+                # 2) Push the zip to the production slot directly.
+                #    Brief restart (10-30s of 503s) while the app cold-starts.
                 - task: AzureWebApp@1
-                  displayName: 'Deploy to Prod staging slot'
+                  displayName: 'Deploy to Prod App Service'
                   inputs:
                     azureSubscription: '$(prodServiceConnection)'
                     appType: 'webApp'
                     appName: '$(prodAppName)'
-                    deployToSlotOrASE: true
-                    resourceGroupName: '$(prodResourceGroup)'
-                    slotName: '$(prodStagingSlot)'
                     package: '$(Pipeline.Workspace)/api-package/**/*.zip'
 
-                # 3) Warm up the staging slot so the swap is instant.
-                #    Hits /api/v1/health on the staging slot up to 5 times. The
-                #    HealthController returns 200 with JSON {"Status":"Healthy"}
-                #    when the app has booted. Best-effort — falls through after
-                #    5 attempts so a slow boot doesn't fail the deploy on its own.
-                - task: PowerShell@2
-                  displayName: 'Warm up staging slot'
-                  inputs:
-                    targetType: 'inline'
-                    script: |
-                      $url = "$(prodStagingUrl)/api/v1/health"
-                      Write-Host "Warming up: $url"
-                      for ($i = 1; $i -le 5; $i++) {
-                        try {
-                          $r = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 30
-                          Write-Host "Attempt $i -> $($r.StatusCode)"
-                          if ($r.StatusCode -eq 200) { break }
-                        } catch {
-                          Write-Host "Attempt $i -> error: $($_.Exception.Message)"
-                        }
-                        Start-Sleep -Seconds 8
-                      }
-
-                # 4) Atomic swap. After this step finishes, the new build is
-                #    serving production traffic and the OLD build is on the
-                #    staging slot — kept for instant rollback.
-                - task: AzureAppServiceManage@0
-                  displayName: 'Swap staging → production'
-                  inputs:
-                    azureSubscription: '$(prodServiceConnection)'
-                    action: 'Swap Slots'
-                    webAppName: '$(prodAppName)'
-                    resourceGroupName: '$(prodResourceGroup)'
-                    sourceSlot: '$(prodStagingSlot)'
-                    swapWithProduction: true
-
-                # 5) Smoke test the LIVE production /api/v1/health endpoint.
-                #    Up to 6 attempts over ~60 s. The contract is strict:
+                # 3) Smoke test the LIVE production /api/v1/health endpoint.
+                #    Up to 8 attempts over ~80 s — gives the cold-starting
+                #    production slot enough time to come back online before
+                #    declaring failure. Strict contract:
                 #      • HTTP status MUST be 200
-                #      • JSON response MUST contain "Status":"Healthy"
-                #    Anything else (5xx, timeout, wrong body) → rollback.
+                #      • JSON response MUST contain "status":"Healthy"
+                #    Anything else (5xx, timeout, wrong body) → fail the stage.
                 #
-                #    On failure we set SmokeFailed=true; the next steps pick
-                #    that up and (a) swap the previous build back into prod,
-                #    (b) fail the stage so the team gets notified.
+                #    Recovery if this fails: re-queue an earlier successful
+                #    pipeline run (which deploys the previous good build).
                 - task: PowerShell@2
                   name: SmokeTest
                   displayName: 'Smoke test production /api/v1/health'
@@ -348,15 +299,13 @@ stages:
                       $url = "$(prodAppUrl)/api/v1/health"
                       Write-Host "Smoke testing: $url"
                       $passed = $false
-                      for ($i = 1; $i -le 6; $i++) {
+                      for ($i = 1; $i -le 8; $i++) {
                         try {
                           $r = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 20
                           Write-Host "Attempt $i -> HTTP $($r.StatusCode)"
                           if ($r.StatusCode -eq 200) {
                             $body = $r.Content
                             Write-Host "Body: $body"
-                            # Match either PascalCase or camelCase serialization
-                            # ASP.NET Core defaults to camelCase, but be tolerant.
                             if ($body -match '"[Ss]tatus"\s*:\s*"Healthy"') {
                               $passed = $true
                               break
@@ -370,36 +319,8 @@ stages:
                         Start-Sleep -Seconds 10
                       }
                       if ($passed) {
-                        Write-Host "##vso[task.setvariable variable=SmokeFailed;isOutput=true]false"
                         Write-Host "##[section]Smoke test PASSED — production healthy"
                       } else {
-                        Write-Host "##vso[task.setvariable variable=SmokeFailed;isOutput=true]true"
-                        Write-Host "##[warning]Smoke test FAILED — will trigger automatic rollback"
+                        Write-Error "Smoke test FAILED — production may be unhealthy. To recover, re-queue an earlier successful pipeline run."
+                        exit 1
                       }
-
-                # 6) Auto-rollback: swap back if the smoke test failed.
-                #    Production returns to the previous build instantly. The
-                #    pipeline still fails so the team gets notified.
-                - task: AzureAppServiceManage@0
-                  displayName: 'AUTO-ROLLBACK: Swap back to previous build'
-                  condition: eq(variables['SmokeTest.SmokeFailed'], 'true')
-                  inputs:
-                    azureSubscription: '$(prodServiceConnection)'
-                    action: 'Swap Slots'
-                    webAppName: '$(prodAppName)'
-                    resourceGroupName: '$(prodResourceGroup)'
-                    sourceSlot: '$(prodStagingSlot)'
-                    swapWithProduction: true
-
-                # 7) Fail the stage explicitly if smoke test failed, so the
-                #    DevOps run is marked red and any downstream notifications
-                #    (Teams, Slack, email) fire. The rollback in step 6 still
-                #    runs before this — order matters.
-                - task: PowerShell@2
-                  displayName: 'Fail stage if smoke test failed'
-                  condition: eq(variables['SmokeTest.SmokeFailed'], 'true')
-                  inputs:
-                    targetType: 'inline'
-                    script: |
-                      Write-Error "Smoke test failed and an automatic rollback was performed. Investigate the failing build before re-promoting to Prod."
-                      exit 1
