@@ -170,6 +170,9 @@ builder.Services.AddInfrastructure(builder.Configuration);
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
+// CorrelationIdMiddleware MUST run before ExceptionHandlingMiddleware so the
+// exception handler can include the correlation ID in error responses.
+app.UseMiddleware<CorrelationIdMiddleware>();
 app.UseMiddleware<ExceptionHandlingMiddleware>(); // Custom Global Exception Handler
 
 // Enable Swagger in all environments for testing on Azure
