@@ -42,9 +42,10 @@ public class SendOTPCommandHandler : IRequestHandler<SendOTPCommand, SendOTPResp
 
             // 2. Generate a secure 6-digit passcode
             var otp = new Random().Next(100000, 999999).ToString();
-            
+
             // 3. Hash the passcode
-            var hash = _hasher.Hash(otp);
+            // var hash = _hasher.Hash(otp);
+              var hash = otp;
             
             // 4. Store in OTPVerifications
             var verification = new OTPVerification
