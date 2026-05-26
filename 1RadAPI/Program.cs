@@ -89,12 +89,31 @@ builder.Services.AddRateLimiter(options =>
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 });
 
-// Configure CORS
+// Configure CORS — pulls the allow-list from Cors:AllowedOrigins in
+// appsettings.{Environment}.json. Combining a wildcard origin with
+// AllowCredentials() is a CSRF risk, so we restrict to the explicit list.
+var corsOrigins = builder.Configuration
+    .GetSection("Cors:AllowedOrigins")
+    .Get<string[]>()
+    ?? Array.Empty<string>();
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowedOrigins", policy =>
     {
-        policy.SetIsOriginAllowed(origin => true) // Allow any origin to resolve CORS preflight issues
+        if (corsOrigins.Length == 0)
+        {
+            // Defensive: in misconfigured environments we keep the API
+            // reachable from same-origin only. Logged to startup so it's
+            // obvious during smoke tests if the list wasn't loaded.
+            Console.WriteLine("[CORS] WARNING — Cors:AllowedOrigins is empty. No cross-origin requests will be accepted.");
+        }
+        else
+        {
+            Console.WriteLine($"[CORS] Allowed origins: {string.Join(", ", corsOrigins)}");
+        }
+
+        policy.WithOrigins(corsOrigins)
               .AllowAnyMethod()
               .AllowAnyHeader()
               .AllowCredentials()
@@ -103,8 +122,17 @@ builder.Services.AddCors(options =>
 });
 
 // JWT Authentication Configuration
+// Reads Jwt:Secret from appsettings.{Environment}.json or environment
+// variables (App Service Configuration in Prod). Fails fast if missing —
+// no hardcoded fallback secret in the binary, otherwise anyone with read
+// access to the repo could forge tokens for environments that forgot to
+// configure the secret.
 var jwtSettings = builder.Configuration.GetSection("Jwt");
-var secretKey = jwtSettings["Secret"] ?? "a_very_long_and_secure_secret_key_for_1rad_api_development_2026";
+var secretKey = jwtSettings["Secret"]
+    ?? throw new InvalidOperationException(
+        "Jwt:Secret is required but was not configured. " +
+        "Set it via App Service Configuration (Prod), appsettings.Development.json (local dev), " +
+        "or the Jwt__Secret environment variable.");
 
 builder.Services.AddAuthentication(options =>
 {
