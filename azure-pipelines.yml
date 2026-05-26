@@ -49,6 +49,80 @@ stages:
         displayName: Restore / Build / Test / Publish
         timeoutInMinutes: 30
         steps:
+          # ── Secret-leak guard ───────────────────────────────────────────
+          # Fails the build if any committed appsettings*.json (except the
+          # local Development file) contains a value that looks like a real
+          # secret — DB password, Azure Storage account key, JWT secret, SMTP
+          # app password, or a long access token. Catches accidental commits
+          # before they ship to Prod.
+          #
+          # Bypass for one-off rescues: queue the run with a pipeline variable
+          # SkipSecretScan=true (Pipelines → Run → Variables tab). Use sparingly.
+          - task: PowerShell@2
+            displayName: 'Scan appsettings*.json for committed secrets'
+            inputs:
+              targetType: 'inline'
+              script: |
+                if ($env:SkipSecretScan -eq 'true') {
+                  Write-Host "##[warning]Secret scan SKIPPED (SkipSecretScan=true) — re-run without the bypass before shipping."
+                  exit 0
+                }
+
+                $root = "$(Build.SourcesDirectory)"
+                $files = Get-ChildItem -Path $root -Recurse -Filter "appsettings*.json" |
+                         Where-Object {
+                           $_.FullName -notmatch '\\(bin|obj|node_modules)\\' -and
+                           $_.Name -ne 'appsettings.Development.json'
+                         }
+
+                # Pattern catalogue. Each regex looks for a KEY immediately
+                # followed by a VALUE that looks like a real secret. Negative
+                # look-aheads excuse placeholders/pipeline variables/env-var
+                # references so the check stays signal-only.
+                $patterns = @(
+                  @{ Name = 'DB connection Password=';        Regex = 'Password\s*=\s*(?!\$\(|\$\{|YOUR|PLACEHOLDER|<)[^;""\s]{4,}' },
+                  @{ Name = 'Azure Storage AccountKey=';      Regex = 'AccountKey\s*=\s*(?!\$\(|\$\{|YOUR|PLACEHOLDER|<)[A-Za-z0-9+/]{20,}={0,2}' },
+                  @{ Name = 'SharedAccessKey=';               Regex = 'SharedAccessKey\s*=\s*(?!\$\(|\$\{)[A-Za-z0-9+/]{20,}={0,2}' },
+                  @{ Name = 'JWT "Secret":"..."';             Regex = '"Secret"\s*:\s*"(?!\$\(|\$\{|YOUR|PLACEHOLDER|your-|change-me|<)[^"]{12,}"' },
+                  @{ Name = 'SMTP "AppPassword":"..."';       Regex = '"AppPassword"\s*:\s*"(?!\$\(|\$\{|YOUR|PLACEHOLDER|<)[^"]{4,}"' },
+                  @{ Name = 'Long "AccessToken":"..."';       Regex = '"AccessToken"\s*:\s*"(?!\$\(|\$\{|YOUR|PLACEHOLDER|<)[A-Za-z0-9_\-\.]{30,}"' },
+                  @{ Name = 'Hex "ApiKey":"..."';             Regex = '"ApiKey"\s*:\s*"(?!\$\(|\$\{|YOUR|PLACEHOLDER|<)[A-Fa-f0-9]{24,}"' }
+                )
+
+                $violations = @()
+                foreach ($file in $files) {
+                  $lines = Get-Content -Path $file.FullName
+                  for ($i = 0; $i -lt $lines.Count; $i++) {
+                    $line = $lines[$i]
+                    # Ignore lines inside the _README array (free-text guidance)
+                    if ($line -match '^\s*"[^"]*"\s*,?\s*$' -and $line -notmatch '=' -and $line -notmatch ':\s*"[^"]*"\s*,?\s*$') { continue }
+                    foreach ($p in $patterns) {
+                      if ($line -match $p.Regex) {
+                        $excerpt = $line.Trim()
+                        if ($excerpt.Length -gt 100) { $excerpt = $excerpt.Substring(0, 100) + '...' }
+                        $violations += [PSCustomObject]@{
+                          File = $file.FullName.Replace($root, '').TrimStart('\','/')
+                          Line = $i + 1
+                          Pattern = $p.Name
+                          Excerpt = $excerpt
+                        }
+                      }
+                    }
+                  }
+                }
+
+                if ($violations.Count -gt 0) {
+                  Write-Host "##[error]Found $($violations.Count) potential secret(s) committed in appsettings*.json:"
+                  foreach ($v in $violations) {
+                    Write-Host ("  {0}:{1}  [{2}]  {3}" -f $v.File, $v.Line, $v.Pattern, $v.Excerpt)
+                  }
+                  Write-Host ""
+                  Write-Host "##[error]Move these values to App Service Configuration (via the api-prod-secrets variable group) and rotate the leaked credentials immediately."
+                  Write-Host "##[error]To bypass for an emergency build: queue with pipeline variable SkipSecretScan=true (and follow up with a clean-up commit)."
+                  exit 1
+                }
+                Write-Host "##[section]No committed secrets detected in appsettings*.json"
+
           - task: UseDotNet@2
             displayName: 'Install .NET SDK'
             inputs:
@@ -188,18 +262,21 @@ stages:
                     appName: '$(prodAppName)'
                     resourceGroupName: '$(prodResourceGroup)'
                     slotName: '$(prodStagingSlot)'
+                    # Keys below match the actual section paths in appsettings.json
+                    # using .NET's '__' nested-config separator. Non-secret values
+                    # (Issuer, Audience, etc.) come from appsettings.Production.json
+                    # so they're NOT duplicated here — only secrets are injected.
                     appSettings: |
                       [
-                        { "name": "ASPNETCORE_DETAILEDERRORS",        "value": "false",                              "slotSetting": false },
-                        { "name": "JwtSettings__SecretKey",           "value": "$(ProdJwtSecretKey)",                "slotSetting": false },
-                        { "name": "JwtSettings__Issuer",              "value": "$(ProdJwtIssuer)",                   "slotSetting": false },
-                        { "name": "JwtSettings__Audience",            "value": "$(ProdJwtAudience)",                 "slotSetting": false },
-                        { "name": "AzureStorage__ConnectionString",   "value": "$(ProdAzureStorageConnectionString)","slotSetting": false },
-                        { "name": "AzureStorage__ContainerName",      "value": "$(ProdAzureStorageContainerName)",   "slotSetting": false }
+                        { "name": "ASPNETCORE_DETAILEDERRORS", "value": "false",                "slotSetting": false },
+                        { "name": "Jwt__Secret",               "value": "$(ProdJwtSecret)",     "slotSetting": false },
+                        { "name": "Smtp__AppPassword",         "value": "$(ProdSmtpAppPassword)","slotSetting": false },
+                        { "name": "WhatsApp__AccessToken",     "value": "$(ProdWhatsAppToken)", "slotSetting": false }
                       ]
                     connectionStrings: |
                       [
-                        { "name": "DefaultConnection", "value": "$(ProdDbConnectionString)", "type": "SQLAzure", "slotSetting": false }
+                        { "name": "DefaultConnection",  "value": "$(ProdDbConnectionString)",      "type": "SQLAzure", "slotSetting": false },
+                        { "name": "AzureBlobStorage",   "value": "$(ProdAzureBlobConnectionString)","type": "Custom",   "slotSetting": false }
                       ]
 
                 # 2) Push the zip to the staging slot — live traffic untouched
