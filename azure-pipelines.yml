@@ -29,22 +29,14 @@ variables:
   devServiceConnection: 'onerad'
   devAppName: '1RadAPI'
 
-  # Prod
+  # Prod (direct deploy to production slot — no staging slot)
   prodServiceConnection: 'onerad-prod'
   prodAppName: '1RadAPIProd'
   prodResourceGroup: 'website-prod-rg'
-  prodStagingSlot: 'staging'
 
-  # Public hostnames (App Service URLs include a regional hash now —
-  # the old <appname>.azurewebsites.net pattern is no longer correct).
-  # `prodAppUrl`     → production slot URL (used by the post-swap smoke test)
-  # `prodStagingUrl` → staging slot URL (used by the pre-swap warmup)
-  # IMPORTANT: after you create the staging slot, Azure assigns it a
-  # different hash than the production slot. Look it up in
-  # Azure Portal → App Service → Deployment slots → staging → Overview,
-  # and replace the placeholder below.
+  # Full Prod URL (App Service URLs include a regional hash; the old
+  # <appname>.azurewebsites.net pattern no longer resolves).
   prodAppUrl: 'https://1radapiprod-h6bxhde8hgdtctee.centralindia-01.azurewebsites.net'
-  prodStagingUrl: 'https://1radapiprod-staging-REPLACE_WITH_REAL_HASH.centralindia-01.azurewebsites.net'
 
 stages:
   # ────────────────────────────────────────────────────────────────────────
