@@ -28,9 +28,8 @@ variables:
   # Dev
   devServiceConnection: 'onerad'
   devAppName: '1RadAPI'
-  # Resource group that hosts the Dev App Service. Update if your Dev
-  # resource group is named differently in your subscription.
-  devResourceGroup: '1rad-dev-rg'
+  # Resource group that hosts the Dev App Service.
+  devResourceGroup: 'website-dev-rg'
 
   # Prod (direct deploy to production slot — no staging slot)
   prodServiceConnection: 'onerad-prod'
