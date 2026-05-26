@@ -66,11 +66,25 @@ public class LoginCommandHandler : IRequestHandler<LoginCommand, LoginResponse>
             }
 
             // 3. Verify Password
+            // Guard: a user may exist with a NULL PasswordHash if account
+            // creation got stuck after OTP but before identity-setup.
+            // BCrypt.Verify throws ArgumentException on null/empty hash,
+            // which used to surface as a confusing "ARGUMENT_INVALID" 400.
+            if (string.IsNullOrEmpty(user.PasswordHash))
+            {
+                _logger.LogWarning("Login failed: User {UserId} has no PasswordHash (incomplete identity setup)", user.UserId);
+                return new LoginResponse {
+                    Success = false,
+                    Error = "Account setup is incomplete. Please finish identity setup before signing in.",
+                    ErrorCode = "PASSWORD_NOT_SET"
+                };
+            }
+
             if (!_passwordHasher.Verify(request.Password, user.PasswordHash))
             {
                 _logger.LogWarning("Login failed: Invalid password for user {UserId}", user.UserId);
-                return new LoginResponse { 
-                    Success = false, 
+                return new LoginResponse {
+                    Success = false,
                     Error = "Invalid credentials protocol failed. Verify your secure key.",
                     ErrorCode = "INVALID_CREDENTIALS"
                 };
