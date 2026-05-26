@@ -26,7 +26,13 @@ public static class DependencyInjection
         services.AddScoped<IBlobService, AzureBlobService>();
         services.AddHttpContextAccessor();
         services.AddScoped<IUserContext, UserContext>();
-        
+
+        // DICOM viewer Option C: per-slice extraction pipeline.
+        services.AddSingleton<IDicomExtractionQueue, DicomExtractionQueue>();
+        services.AddScoped<IDicomExtractionService, DicomExtractionService>();
+        services.AddHostedService<DicomExtractionWorker>();
+        services.AddHostedService<DicomExtractionBackfillJob>();
+
         services.AddHostedService<DailyFinancialReportJob>();
         services.AddHostedService<DailyReferralExcelReportJob>();
         services.AddHostedService<SubscriptionLifecycleJob>();

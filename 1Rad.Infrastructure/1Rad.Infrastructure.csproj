@@ -9,11 +9,16 @@
     <PackageReference Include="Azure.Storage.Blobs" Version="12.19.*" />
     <PackageReference Include="BCrypt.Net-Next" Version="4.0.3" />
     <PackageReference Include="ClosedXML" Version="0.105.0" />
+    <!-- DICOM parsing for Option C extraction pipeline. fo-dicom (Fellow Oak DICOM)
+         is the de-facto .NET DICOM library, BSD-licensed and actively maintained. -->
+    <PackageReference Include="fo-dicom" Version="5.1.2" />
+    <PackageReference Include="fo-dicom.Imaging.ImageSharp" Version="5.1.2" />
     <PackageReference Include="MailKit" Version="4.4.*" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.12" />
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="8.0.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="8.0.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="8.0.0" />
+    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.10" />
   </ItemGroup>
 
   <PropertyGroup>

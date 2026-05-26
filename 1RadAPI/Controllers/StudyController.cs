@@ -19,12 +19,21 @@ namespace _1RadAPI.Controllers
         private readonly IApplicationDbContext _context;
         private readonly IBlobService _blobService;
         private readonly IUserContext _userContext;
+        private readonly IDicomExtractionQueue _extractionQueue;
+        private readonly IDicomExtractionService _extractionService;
 
-        public StudyController(IApplicationDbContext context, IBlobService blobService, IUserContext userContext)
+        public StudyController(
+            IApplicationDbContext context,
+            IBlobService blobService,
+            IUserContext userContext,
+            IDicomExtractionQueue extractionQueue,
+            IDicomExtractionService extractionService)
         {
             _context = context;
             _blobService = blobService;
             _userContext = userContext;
+            _extractionQueue = extractionQueue;
+            _extractionService = extractionService;
         }
 
         [HttpGet("{appointmentId}/assets")]
@@ -38,6 +47,143 @@ namespace _1RadAPI.Controllers
                 .ToListAsync();
 
             return Ok(assets);
+        }
+
+        /// <summary>
+        /// Option C manifest endpoint. Returns the per-slice URL list for an
+        /// appointment, grouped by series. The viewer uses this to load slices
+        /// individually instead of downloading + unzipping the whole ZIP.
+        ///
+        /// Lazy extraction: if an asset hasn't been extracted yet (legacy ZIPs
+        /// from before this feature, or extraction still in flight), we kick
+        /// off extraction synchronously for the first viewer hit so subsequent
+        /// hits are instant. The response then includes a 202-style
+        /// <c>extracting: true</c> flag for assets the frontend should fall
+        /// back to ZIP-load for.
+        /// </summary>
+        [HttpGet("{appointmentId}/manifest")]
+        public async Task<IActionResult> GetManifest(string appointmentId, CancellationToken cancellationToken)
+        {
+            Guid.TryParse(appointmentId, out var guidId);
+
+            var appointment = await _context.Appointments
+                .FirstOrDefaultAsync(a => (guidId != Guid.Empty && a.AppointmentId == guidId) || a.DisplayId == appointmentId, cancellationToken);
+            if (appointment == null)
+                return NotFound(new { success = false, error = "Appointment not found." });
+
+            var assets = await _context.StudyAssets
+                .Where(a => a.AppointmentId == appointment.AppointmentId)
+                .OrderByDescending(a => a.UploadedAt)
+                .ToListAsync(cancellationToken);
+
+            if (assets.Count == 0)
+                return Ok(new { success = true, data = new { appointmentId = appointment.AppointmentId, assets = Array.Empty<object>() } });
+
+            // Lazy fallback: any ZIP without an ExtractionStatus row is a
+            // legacy upload — extract it now (blocking the first viewer hit).
+            // Statuses Queued / Running mean the worker will pick it up; we
+            // don't block, just tell the frontend to fall back to ZIP for now.
+            foreach (var a in assets.Where(a =>
+                         (a.FileType ?? "").Equals("zip", StringComparison.OrdinalIgnoreCase) &&
+                         string.IsNullOrEmpty(a.ExtractionStatus)))
+            {
+                try
+                {
+                    await _extractionService.ExtractAsync(a.Id, cancellationToken);
+                }
+                catch
+                {
+                    // ExtractAsync flagged the asset; just continue and the
+                    // response will tell the frontend to use ZIP fallback.
+                }
+            }
+
+            // Reload after potential lazy extraction so we see the new state.
+            assets = await _context.StudyAssets
+                .Where(a => a.AppointmentId == appointment.AppointmentId)
+                .Include(a => a.Slices)
+                .OrderByDescending(a => a.UploadedAt)
+                .ToListAsync(cancellationToken);
+
+            var assetDtos = assets.Select(a =>
+            {
+                if (!(a.FileType ?? "").Equals("zip", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Pass-through for non-ZIP attachments (single DCM, JPG, PNG).
+                    return new
+                    {
+                        assetId = a.Id,
+                        fileName = a.FileName,
+                        fileType = a.FileType,
+                        blobUrl = a.BlobUrl,
+                        extractionStatus = "NotApplicable",
+                        series = (object?)null,
+                    };
+                }
+
+                var isExtracted = a.ExtractionStatus == "Extracted" && a.Slices.Count > 0;
+                if (!isExtracted)
+                {
+                    // Frontend should download + unzip this asset itself (legacy path).
+                    return new
+                    {
+                        assetId = a.Id,
+                        fileName = a.FileName,
+                        fileType = a.FileType,
+                        blobUrl = a.BlobUrl,
+                        extractionStatus = a.ExtractionStatus ?? "Pending",
+                        series = (object?)null,
+                    };
+                }
+
+                var seriesGroups = a.Slices
+                    .GroupBy(s => s.SeriesUID)
+                    .Select(g =>
+                    {
+                        var first = g.OrderBy(s => s.InstanceNumber ?? int.MaxValue).First();
+                        return new
+                        {
+                            seriesUID = g.Key,
+                            seriesDescription = first.SeriesDescription,
+                            modality = first.Modality,
+                            thumbnailUrl = first.ThumbnailUrl,
+                            slices = g.OrderBy(s => s.InstanceNumber ?? int.MaxValue)
+                                      .ThenBy(s => s.SopInstanceUID)
+                                      .Select(s => new
+                                      {
+                                          sopInstanceUID = s.SopInstanceUID,
+                                          instanceNumber = s.InstanceNumber,
+                                          url = s.BlobUrl,
+                                          metadata = s.MetadataJson,
+                                      })
+                                      .ToList(),
+                        };
+                    })
+                    .ToList();
+
+                return new
+                {
+                    assetId = a.Id,
+                    fileName = a.FileName,
+                    fileType = a.FileType,
+                    blobUrl = a.BlobUrl, // kept for fallback compat
+                    extractionStatus = "Extracted",
+                    series = (object?)seriesGroups,
+                };
+            }).ToList();
+
+            return Ok(new
+            {
+                success = true,
+                data = new
+                {
+                    appointmentId = appointment.AppointmentId,
+                    patientName = appointment.PatientName,
+                    modality = appointment.Modality,
+                    studyDate = appointment.DateTime,
+                    assets = assetDtos,
+                },
+            });
         }
 
         [HttpGet("{appointmentId}/viewer")]
@@ -219,7 +365,17 @@ namespace _1RadAPI.Controllers
                     appointment.Status = "IN_PROGRESS";
                 }
 
+                // Mark for DICOM extraction (Option C). Only ZIPs need it; other
+                // file types fall through with NotApplicable.
+                if (asset.FileType?.Equals("zip", StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    asset.ExtractionStatus = "Queued";
+                }
+
                 await _context.SaveChangesAsync(default);
+
+                if (asset.ExtractionStatus == "Queued")
+                    _extractionQueue.Enqueue(asset.Id);
 
                 return Ok(new { success = true, data = asset });
             }
@@ -388,7 +544,16 @@ namespace _1RadAPI.Controllers
                     appointment.Status = "IN_PROGRESS";
                 }
 
+                // Mark for DICOM extraction (Option C). Only ZIPs need extraction.
+                if (asset.FileType?.Equals("zip", StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    asset.ExtractionStatus = "Queued";
+                }
+
                 await _context.SaveChangesAsync(default);
+
+                if (asset.ExtractionStatus == "Queued")
+                    _extractionQueue.Enqueue(asset.Id);
 
                 return Ok(new { success = true, data = asset });
             }

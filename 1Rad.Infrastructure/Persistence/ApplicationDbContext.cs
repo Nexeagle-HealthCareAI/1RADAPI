@@ -41,6 +41,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<ReportingKeyword> ReportingKeywords => Set<ReportingKeyword>();
     public DbSet<DiagnosticReportField> DiagnosticReportFields => Set<DiagnosticReportField>();
     public DbSet<StudyAsset> StudyAssets => Set<StudyAsset>();
+    public DbSet<StudySliceIndex> StudySliceIndexes => Set<StudySliceIndex>();
     public DbSet<PrescriptionProtocol> PrescriptionProtocols => Set<PrescriptionProtocol>();
     public DbSet<ReferralCommission> ReferralCommissions => Set<ReferralCommission>();
     public DbSet<SubscriptionPlan> SubscriptionPlans => Set<SubscriptionPlan>();
@@ -389,11 +390,40 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.BlobUrl).IsRequired().HasMaxLength(500);
             entity.Property(e => e.FileName).IsRequired().HasMaxLength(500);
             entity.Property(e => e.FileType).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.ExtractionStatus).HasMaxLength(20);
+            entity.Property(e => e.ExtractionError).HasMaxLength(2000);
 
             entity.HasOne(e => e.Appointment)
                 .WithMany(a => a.StudyAssets)
                 .HasForeignKey(e => e.AppointmentId)
                 .OnDelete(DeleteBehavior.Cascade);
+
+            // Filtered index — fast lookup for the extraction worker.
+            entity.HasIndex(e => e.ExtractionStatus).HasFilter("[ExtractionStatus] IS NOT NULL");
+        });
+
+        // StudySliceIndex Configuration (Option C — per-slice viewer manifest)
+        modelBuilder.Entity<StudySliceIndex>(entity =>
+        {
+            entity.ToTable("StudySliceIndexes", "dbo");
+            entity.HasKey(e => e.SliceId);
+            entity.Property(e => e.SeriesUID).IsRequired().HasMaxLength(128);
+            entity.Property(e => e.SopInstanceUID).IsRequired().HasMaxLength(128);
+            entity.Property(e => e.BlobUrl).IsRequired().HasMaxLength(700);
+            entity.Property(e => e.BlobPath).IsRequired().HasMaxLength(700);
+            entity.Property(e => e.SeriesDescription).HasMaxLength(200);
+            entity.Property(e => e.Modality).HasMaxLength(16);
+            entity.Property(e => e.ThumbnailUrl).HasMaxLength(700);
+
+            entity.HasOne(e => e.Asset)
+                .WithMany(a => a.Slices)
+                .HasForeignKey(e => e.AssetId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Primary read path: manifest endpoint groups by AssetId/SeriesUID/InstanceNumber.
+            entity.HasIndex(e => new { e.AssetId, e.SeriesUID, e.InstanceNumber });
+            entity.HasIndex(e => e.AppointmentId);
+            entity.HasIndex(e => e.HospitalId);
         });
 
         // PrescriptionProtocol Configuration

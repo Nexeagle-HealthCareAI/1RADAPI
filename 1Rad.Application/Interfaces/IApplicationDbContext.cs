@@ -26,6 +26,7 @@ public interface IApplicationDbContext
     DbSet<ReportTemplate> ReportTemplates { get; }
     DbSet<ReportingKeyword> ReportingKeywords { get; }
     DbSet<StudyAsset> StudyAssets { get; }
+    DbSet<StudySliceIndex> StudySliceIndexes { get; }
     DbSet<PrescriptionProtocol> PrescriptionProtocols { get; }
     DbSet<ReferralCommission> ReferralCommissions { get; }
     DbSet<SubscriptionPlan> SubscriptionPlans { get; }
