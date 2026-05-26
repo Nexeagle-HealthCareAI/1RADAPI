@@ -61,6 +61,7 @@ public record HospitalDetailsDto(
     string SubscriptionMode,
     string PaymentMode,
     string Status,
+    bool IsAutoBillingEnabled,
     List<HospitalUserDto> Users,
     List<HospitalDoctorDto> Doctors,
     HospitalStatsDto Stats

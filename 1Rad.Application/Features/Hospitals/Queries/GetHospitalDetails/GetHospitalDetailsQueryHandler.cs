@@ -94,6 +94,7 @@ public class GetHospitalDetailsQueryHandler : IRequestHandler<GetHospitalDetails
             sub?.Plan?.Name ?? "Trial",
             sub?.BillingCycle ?? "None",
             hospital.Status,
+            hospital.IsAutoBillingEnabled,
             usersDto,
             doctorsDto,
             statsDto
