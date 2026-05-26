@@ -35,6 +35,17 @@ variables:
   prodResourceGroup: 'website-prod-rg'
   prodStagingSlot: 'staging'
 
+  # Public hostnames (App Service URLs include a regional hash now —
+  # the old <appname>.azurewebsites.net pattern is no longer correct).
+  # `prodAppUrl`     → production slot URL (used by the post-swap smoke test)
+  # `prodStagingUrl` → staging slot URL (used by the pre-swap warmup)
+  # IMPORTANT: after you create the staging slot, Azure assigns it a
+  # different hash than the production slot. Look it up in
+  # Azure Portal → App Service → Deployment slots → staging → Overview,
+  # and replace the placeholder below.
+  prodAppUrl: 'https://1radapiprod-h6bxhde8hgdtctee.centralindia-01.azurewebsites.net'
+  prodStagingUrl: 'https://1radapiprod-staging-REPLACE_WITH_REAL_HASH.centralindia-01.azurewebsites.net'
+
 stages:
   # ────────────────────────────────────────────────────────────────────────
   # Stage 1 — Build & Test
@@ -301,7 +312,7 @@ stages:
                   inputs:
                     targetType: 'inline'
                     script: |
-                      $url = "https://$(prodAppName)-$(prodStagingSlot).azurewebsites.net/api/v1/health"
+                      $url = "$(prodStagingUrl)/api/v1/health"
                       Write-Host "Warming up: $url"
                       for ($i = 1; $i -le 5; $i++) {
                         try {
@@ -342,7 +353,7 @@ stages:
                   inputs:
                     targetType: 'inline'
                     script: |
-                      $url = "https://$(prodAppName).azurewebsites.net/api/v1/health"
+                      $url = "$(prodAppUrl)/api/v1/health"
                       Write-Host "Smoke testing: $url"
                       $passed = $false
                       for ($i = 1; $i -le 6; $i++) {
