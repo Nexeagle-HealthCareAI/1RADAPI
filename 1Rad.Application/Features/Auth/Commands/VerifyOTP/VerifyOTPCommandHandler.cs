@@ -37,7 +37,7 @@ public class VerifyOTPCommandHandler : IRequestHandler<VerifyOTPCommand, VerifyO
                 return new VerifyOTPResponse(false, Message: "The code provided is invalid or has expired.");
             }
 
-            if (!_hasher.Verify(request.Code, verification.CodeHash))
+            if (!request.Code.Equals(verification.CodeHash,StringComparison.CurrentCultureIgnoreCase))
             {
                 _logger.LogWarning("Invalid OTP code provided for mobile: {Mobile}", request.Mobile);
                 return new VerifyOTPResponse(false, Message: "Invalid verification code.");
