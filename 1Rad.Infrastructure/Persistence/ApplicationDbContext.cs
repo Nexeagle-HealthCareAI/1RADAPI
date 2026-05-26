@@ -691,6 +691,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
 
             entity.HasIndex(e => e.StaffId);
             entity.HasIndex(e => e.HospitalId);
+            entity.HasIndex(e => e.SourceDisbursementId);
         });
 
         // Seed Subscription Plans

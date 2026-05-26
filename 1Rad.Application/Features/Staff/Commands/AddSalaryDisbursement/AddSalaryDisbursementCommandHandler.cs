@@ -32,6 +32,19 @@ public class AddSalaryDisbursementCommandHandler : IRequestHandler<AddSalaryDisb
         if (string.IsNullOrWhiteSpace(request.Month) || request.Month.Length != 7 || request.Month[4] != '-')
             return (Guid.Empty, "Invalid month — expected YYYY-MM.");
 
+        // Refuse months that haven't happened yet. Server clock is authoritative
+        // so a client with a wrong date can't disburse for, say, next year.
+        if (!int.TryParse(request.Month.AsSpan(0, 4), out var reqYear) ||
+            !int.TryParse(request.Month.AsSpan(5, 2), out var reqMonth) ||
+            reqMonth < 1 || reqMonth > 12)
+            return (Guid.Empty, "Invalid month — expected YYYY-MM.");
+
+        var serverToday = DateTime.UtcNow;
+        var requested   = new DateTime(reqYear, reqMonth, 1);
+        var thisMonth   = new DateTime(serverToday.Year, serverToday.Month, 1);
+        if (requested > thisMonth)
+            return (Guid.Empty, $"Cannot disburse salary for {request.Month} — month has not started yet.");
+
         if (!ValidModes.Contains(request.PaymentMode))
             return (Guid.Empty, "Invalid payment mode.");
 
@@ -40,6 +53,12 @@ public class AddSalaryDisbursementCommandHandler : IRequestHandler<AddSalaryDisb
 
         if (!DateOnly.TryParse(request.PaidOnDate, out var paidOn))
             return (Guid.Empty, "Invalid paid-on date.");
+
+        // Encashment days must be a non-negative whole number — the linked
+        // leave row stores Days as int, and fractional encashment would orphan
+        // on cleanup (HQ would round, cleanup would mismatch).
+        if (request.EncashmentDays < 0 || request.EncashmentDays != Math.Floor(request.EncashmentDays))
+            return (Guid.Empty, "Encashment days must be a non-negative whole number.");
 
         // Idempotency — one disbursal per (staff, month).
         var existing = await _context.SalaryDisbursements
@@ -80,13 +99,16 @@ public class AddSalaryDisbursementCommandHandler : IRequestHandler<AddSalaryDisb
 
         // Auto-create a linked Expense row so Finance sees the salary in the ledger.
         // Status mirrors the disbursement: Draft → Pending, Paid → Paid.
+        // Amount must match what actually leaves the bank: NetPay (LWP-applied)
+        // plus EncashmentBonus and ExtraPay, both of which are additional cash out.
         var monthLabel = FormatMonth(request.Month);
+        var payoutAmount = request.NetPay + request.EncashmentBonus + request.ExtraPay;
         var expense = new Expense
         {
             HospitalId           = request.HospitalId,
             Description          = $"Salary · {staff.FullName} · {monthLabel}",
             Category             = "Salary",
-            Amount               = request.NetPay,
+            Amount               = payoutAmount,
             TaxAmount            = 0m,
             PaymentMode          = request.PaymentMode,
             ReferenceNumber      = request.Reference?.Trim(),
@@ -107,12 +129,13 @@ public class AddSalaryDisbursementCommandHandler : IRequestHandler<AddSalaryDisb
                 LeaveType = string.IsNullOrWhiteSpace(request.EncashmentType) ? "Earned Leave" : request.EncashmentType,
                 FromDate = paidOn,
                 ToDate = paidOn,
-                Days = (int)Math.Round(request.EncashmentDays),
+                Days = (int)request.EncashmentDays,
                 Reason = "Encashed during salary payout",
                 Status = "approved",
                 AppliedOn = DateTime.UtcNow,
                 ReviewedByUserId = request.CreatedByUserId,
-                ReviewedAt = DateTime.UtcNow
+                ReviewedAt = DateTime.UtcNow,
+                SourceDisbursementId = entry.DisbursementId
             };
             _context.StaffLeaveRequests.Add(encashmentLeave);
         }

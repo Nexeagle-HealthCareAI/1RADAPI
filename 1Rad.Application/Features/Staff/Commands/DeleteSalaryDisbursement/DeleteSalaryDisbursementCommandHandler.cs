@@ -33,16 +33,25 @@ public class DeleteSalaryDisbursementCommandHandler : IRequestHandler<DeleteSala
             _context.Expenses.Remove(expense);
         }
 
-        // We also need to see if there is an auto-created leave encashment request on the same day.
-        // It's a bit tricky to identify without a link, but we can look for "Encashed during salary payout"
-        // for this staff member on the PaidOnDate with the exact days.
+        // Remove the auto-created encashment leave row. Primary match is the
+        // SourceDisbursementId FK — exact 1:1. Fallback to the old fragile
+        // match (reason text + date + days) only for legacy rows created
+        // before the FK column existed.
         if (disbursement.EncashmentDays > 0)
         {
             var encashmentLeave = await _context.StaffLeaveRequests
-                .FirstOrDefaultAsync(l => l.StaffId == request.StaffId && 
-                                          l.Reason == "Encashed during salary payout" && 
-                                          l.FromDate == disbursement.PaidOnDate &&
-                                          l.Days == (int)Math.Round(disbursement.EncashmentDays), cancellationToken);
+                .FirstOrDefaultAsync(l => l.SourceDisbursementId == request.DisbursementId, cancellationToken);
+
+            if (encashmentLeave == null)
+            {
+                encashmentLeave = await _context.StaffLeaveRequests
+                    .FirstOrDefaultAsync(l => l.StaffId == request.StaffId &&
+                                              l.SourceDisbursementId == null &&
+                                              l.Reason == "Encashed during salary payout" &&
+                                              l.FromDate == disbursement.PaidOnDate &&
+                                              l.Days == (int)Math.Round(disbursement.EncashmentDays), cancellationToken);
+            }
+
             if (encashmentLeave != null)
             {
                 _context.StaffLeaveRequests.Remove(encashmentLeave);

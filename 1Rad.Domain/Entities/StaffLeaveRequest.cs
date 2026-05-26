@@ -28,6 +28,13 @@ public class StaffLeaveRequest : BaseEntity, IHospitalContext
     public Guid? ReviewedByUserId { get; set; }
     public DateTime? ReviewedAt { get; set; }
 
+    /// <summary>
+    /// Set when this leave row was auto-created by a salary disbursement
+    /// encashment. Lets the disbursement cleanup find the exact row to remove
+    /// without fragile string/date matching.
+    /// </summary>
+    public Guid? SourceDisbursementId { get; set; }
+
     // Navigation
     public StaffMember StaffMember { get; set; } = null!;
 }

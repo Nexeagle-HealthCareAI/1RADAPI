@@ -26,6 +26,20 @@ public class SetDisbursementStatusCommandHandler : IRequestHandler<SetDisburseme
         if (disbursement == null) return (false, "Disbursement not found.");
 
         var nextStatus = string.Equals(request.Status, "Paid", StringComparison.OrdinalIgnoreCase) ? "Paid" : "Draft";
+        var currentStatus = disbursement.Status;
+
+        // Idempotent no-op when already in the target state. Prevents repeated
+        // PATCHes from re-firing any side effects we add later (notifications,
+        // journal entries, etc.) and gives the UI a clean "nothing changed".
+        if (string.Equals(currentStatus, nextStatus, StringComparison.OrdinalIgnoreCase))
+            return (true, null);
+
+        // Only Draft<->Paid hops are allowed. Any other prior state is
+        // unexpected and we refuse rather than silently overwrite it.
+        var validCurrent = string.Equals(currentStatus, "Draft", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(currentStatus, "Paid",  StringComparison.OrdinalIgnoreCase);
+        if (!validCurrent)
+            return (false, $"Cannot transition from status '{currentStatus}'.");
 
         // Optional updates when transitioning Draft -> Paid: payment mode, reference, paidOn.
         if (!string.IsNullOrWhiteSpace(request.PaymentMode))
