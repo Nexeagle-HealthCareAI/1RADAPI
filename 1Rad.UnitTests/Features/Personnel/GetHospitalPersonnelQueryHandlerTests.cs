@@ -6,6 +6,7 @@ using _1Rad.Infrastructure.Persistence;
 using FluentAssertions;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Moq;
 
 namespace _1Rad.UnitTests.Features.Personnel;
@@ -14,12 +15,14 @@ public class GetHospitalPersonnelQueryHandlerTests
 {
     private readonly Mock<IUserContext> _userContextMock;
     private readonly Mock<IPublisher> _publisherMock;
+    private readonly Mock<ILogger<GetHospitalPersonnelQueryHandler>> _loggerMock;
     private readonly ApplicationDbContext _context;
 
     public GetHospitalPersonnelQueryHandlerTests()
     {
         _userContextMock = new Mock<IUserContext>();
         _publisherMock = new Mock<IPublisher>();
+        _loggerMock = new Mock<ILogger<GetHospitalPersonnelQueryHandler>>();
 
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()
             .UseInMemoryDatabase(databaseName: Guid.NewGuid().ToString())
@@ -88,7 +91,7 @@ public class GetHospitalPersonnelQueryHandlerTests
 
         _userContextMock.Setup(x => x.HospitalId).Returns(hospitalId);
 
-        var handler = new GetHospitalPersonnelQueryHandler(_context);
+        var handler = new GetHospitalPersonnelQueryHandler(_context, _loggerMock.Object);
         var query = new GetHospitalPersonnelQuery(hospitalId);
 
         // Act
@@ -160,7 +163,7 @@ public class GetHospitalPersonnelQueryHandlerTests
 
         _userContextMock.Setup(x => x.HospitalId).Returns(hospitalId1);
 
-        var handler = new GetHospitalPersonnelQueryHandler(_context);
+        var handler = new GetHospitalPersonnelQueryHandler(_context, _loggerMock.Object);
         var query = new GetHospitalPersonnelQuery(hospitalId1);
 
         // Act
@@ -182,7 +185,7 @@ public class GetHospitalPersonnelQueryHandlerTests
 
         _userContextMock.Setup(x => x.HospitalId).Returns(hospitalId);
 
-        var handler = new GetHospitalPersonnelQueryHandler(_context);
+        var handler = new GetHospitalPersonnelQueryHandler(_context, _loggerMock.Object);
         var query = new GetHospitalPersonnelQuery(hospitalId);
 
         // Act
@@ -231,7 +234,7 @@ public class GetHospitalPersonnelQueryHandlerTests
 
         _userContextMock.Setup(x => x.HospitalId).Returns(hospitalId);
 
-        var handler = new GetHospitalPersonnelQueryHandler(_context);
+        var handler = new GetHospitalPersonnelQueryHandler(_context, _loggerMock.Object);
         var query = new GetHospitalPersonnelQuery(hospitalId);
 
         // Act

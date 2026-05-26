@@ -54,15 +54,12 @@ public class GetHospitalDetailsQueryHandlerTests
         // Act
         var result = await handler.Handle(query, CancellationToken.None);
 
-        // Assert
+        // Assert — HospitalDetailsDto exposes Id / Name / Address / Status
+        // (regulatory fields like GSTIN/PAN/NABH live only on the entity).
         result.Should().NotBeNull();
-        result.HospitalId.Should().Be(hospitalId);
-        result.HospitalName.Should().Be("Test Hospital");
-        result.HospitalAddress.Should().Be("123 Test Street, Test City");
-        result.GSTIN.Should().Be("GSTIN123456");
-        result.RegistrationNumber.Should().Be("REG123");
-        result.PAN.Should().Be("PAN123");
-        result.NABHNumber.Should().Be("NABH123");
+        result!.Id.Should().Be(hospitalId);
+        result.Name.Should().Be("Test Hospital");
+        result.Address.Should().Be("123 Test Street, Test City");
         result.Status.Should().Be("Active");
     }
 
@@ -93,14 +90,14 @@ public class GetHospitalDetailsQueryHandlerTests
         // Act
         var result = await handler.Handle(query, CancellationToken.None);
 
-        // Assert
+        // Assert — the DTO doesn't surface GSTIN/PAN/etc, so just confirm
+        // the basic fields are mapped and the call succeeds when the
+        // hospital has no group attached.
         result.Should().NotBeNull();
-        result.HospitalId.Should().Be(hospitalId);
-        result.HospitalName.Should().Be("Independent Hospital");
-        result.GSTIN.Should().BeNull();
-        result.RegistrationNumber.Should().BeNull();
-        result.PAN.Should().BeNull();
-        result.NABHNumber.Should().BeNull();
+        result!.Id.Should().Be(hospitalId);
+        result.Name.Should().Be("Independent Hospital");
+        result.Address.Should().Be("456 Independent Ave");
+        result.Status.Should().Be("Active");
     }
 
     [Fact]
@@ -147,13 +144,10 @@ public class GetHospitalDetailsQueryHandlerTests
         var result = await handler.Handle(query, CancellationToken.None);
 
         // Assert
-        result.HospitalId.Should().Be(hospitalId);
-        result.HospitalName.Should().Be("Complete Hospital");
-        result.HospitalAddress.Should().Be("789 Complete Road");
-        result.GSTIN.Should().Be("COMPLETE789");
-        result.RegistrationNumber.Should().Be("REG789");
-        result.PAN.Should().Be("PAN789");
-        result.NABHNumber.Should().Be("NABH789");
+        result.Should().NotBeNull();
+        result!.Id.Should().Be(hospitalId);
+        result.Name.Should().Be("Complete Hospital");
+        result.Address.Should().Be("789 Complete Road");
         result.Status.Should().Be("Active");
     }
 }

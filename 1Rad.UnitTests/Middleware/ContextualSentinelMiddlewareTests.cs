@@ -15,12 +15,14 @@ public class ContextualSentinelMiddlewareTests
     private readonly Mock<RequestDelegate> _nextMock;
     private readonly Mock<ILogger<ContextualSentinelMiddleware>> _loggerMock;
     private readonly Mock<IUserContext> _userContextMock;
+    private readonly Mock<IApplicationDbContext> _dbMock;
 
     public ContextualSentinelMiddlewareTests()
     {
         _nextMock = new Mock<RequestDelegate>();
         _loggerMock = new Mock<ILogger<ContextualSentinelMiddleware>>();
         _userContextMock = new Mock<IUserContext>();
+        _dbMock = new Mock<IApplicationDbContext>();
     }
 
     [Fact]
@@ -41,7 +43,7 @@ public class ContextualSentinelMiddlewareTests
         var middleware = new ContextualSentinelMiddleware(_nextMock.Object, _loggerMock.Object);
 
         // Act
-        await middleware.InvokeAsync(context, _userContextMock.Object);
+        await middleware.InvokeAsync(context, _userContextMock.Object, _dbMock.Object);
 
         // Assert
         _nextMock.Verify(x => x(context), Times.Once);
@@ -62,7 +64,7 @@ public class ContextualSentinelMiddlewareTests
         var middleware = new ContextualSentinelMiddleware(_nextMock.Object, _loggerMock.Object);
 
         // Act
-        await middleware.InvokeAsync(context, _userContextMock.Object);
+        await middleware.InvokeAsync(context, _userContextMock.Object, _dbMock.Object);
 
         // Assert
         context.Response.StatusCode.Should().Be((int)HttpStatusCode.Forbidden);
@@ -86,7 +88,7 @@ public class ContextualSentinelMiddlewareTests
         var middleware = new ContextualSentinelMiddleware(_nextMock.Object, _loggerMock.Object);
 
         // Act
-        await middleware.InvokeAsync(context, _userContextMock.Object);
+        await middleware.InvokeAsync(context, _userContextMock.Object, _dbMock.Object);
 
         // Assert
         context.Response.StatusCode.Should().Be((int)HttpStatusCode.Unauthorized);
