@@ -30,7 +30,7 @@ variables:
   devAppName: '1RadAPI'
 
   # Prod
-  prodServiceConnection: '1RadAPIProd'
+  prodServiceConnection: 'onerad-prod'
   prodAppName: '1RadAPIProd'
   prodResourceGroup: 'website-prod-rg'
   prodStagingSlot: 'staging'
