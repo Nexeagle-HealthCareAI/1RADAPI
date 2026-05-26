@@ -79,6 +79,28 @@ public class GetHospitalDetailsQueryHandler : IRequestHandler<GetHospitalDetails
             Appointments: GenerateMetricGroup(basePatients * 2, 0.15)
         );
 
+        // Pick the primary admin — first user whose role contains "Admin"
+        // (covers AdminDoctor, AdminOperator, Admin, etc.). If none found we
+        // fall back to the first user attached to this hospital so the UI
+        // still has someone to render in the admin slot.
+        var adminMapping =
+            userMappings.FirstOrDefault(m => m.Roles.Any(r => r.RoleName != null && r.RoleName.Contains("Admin", StringComparison.OrdinalIgnoreCase)))
+            ?? userMappings.FirstOrDefault();
+
+        HospitalAdminDto? adminDto = null;
+        if (adminMapping != null && adminMapping.User != null)
+        {
+            adminDto = new HospitalAdminDto(
+                UserId:       adminMapping.User.UserId,
+                FullName:     adminMapping.User.FullName ?? "Unknown",
+                Email:        adminMapping.User.Email ?? "N/A",
+                Mobile:       adminMapping.User.Mobile ?? "N/A",
+                Role:         adminMapping.Roles.FirstOrDefault()?.RoleName ?? "Staff",
+                Status:       adminMapping.User.Status.ToString(),
+                RegisteredOn: adminMapping.User.CreatedAt.ToString("yyyy-MM-dd")
+            );
+        }
+
         return new HospitalDetailsDto(
             hospital.HospitalId,
             hospital.HospitalName ?? "Unknown Clinic",
@@ -95,6 +117,15 @@ public class GetHospitalDetailsQueryHandler : IRequestHandler<GetHospitalDetails
             sub?.BillingCycle ?? "None",
             hospital.Status,
             hospital.IsAutoBillingEnabled,
+            // Explicit hospital fields — match entity property names so the
+            // frontend can bind without aliasing
+            hospital.HospitalName ?? "Unknown Clinic",
+            hospital.HospitalAddress ?? "N/A",
+            hospital.GSTIN,
+            hospital.RegistrationNumber,
+            hospital.PAN,
+            hospital.NABHNumber,
+            adminDto,
             usersDto,
             doctorsDto,
             statsDto

@@ -28,6 +28,9 @@ variables:
   # Dev
   devServiceConnection: 'onerad'
   devAppName: '1RadAPI'
+  # Resource group that hosts the Dev App Service. Update if your Dev
+  # resource group is named differently in your subscription.
+  devResourceGroup: '1rad-dev-rg'
 
   # Prod (direct deploy to production slot — no staging slot)
   prodServiceConnection: 'onerad-prod'
@@ -177,6 +180,12 @@ stages:
     displayName: Deploy to Dev (App Service)
     dependsOn: Build_and_Test
     condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+    variables:
+      # Mirror of api-prod-secrets but holding the DEV values. Every secret
+      # variable inside must be marked 🔒 in the DevOps Library UI — the
+      # AzureAppServiceSettings task echoes the data payload in plaintext
+      # otherwise.
+      - group: api-dev-secrets
     jobs:
       - deployment: DeployDev
         displayName: Push to Dev App Service
@@ -189,6 +198,42 @@ stages:
                 - download: current
                   artifact: api-package
 
+                - script: |
+                    echo ===== DEV DEPLOY =====
+                    echo Commit:     $(Build.SourceVersion)
+                    echo Branch:     $(Build.SourceBranchName)
+                    echo Queued by:  $(Build.RequestedFor)
+                    echo App:        $(devAppName)
+                  displayName: 'Dev deploy audit log'
+
+                # 1) Apply Dev app settings + connection strings BEFORE the
+                #    zip deploy. Same shape as the Prod stage's settings
+                #    block — same key names, just dev values.
+                #
+                #    ASPNETCORE_ENVIRONMENT=Development is set here so the
+                #    exception-handler returns verbose error bodies on the
+                #    Dev API (real stack trace) without manual Portal config.
+                - task: AzureAppServiceSettings@1
+                  displayName: 'Apply Dev app settings + connection strings'
+                  inputs:
+                    azureSubscription: '$(devServiceConnection)'
+                    appName: '$(devAppName)'
+                    resourceGroupName: '$(devResourceGroup)'
+                    appSettings: |
+                      [
+                        { "name": "ASPNETCORE_ENVIRONMENT",     "value": "Development",          "slotSetting": false },
+                        { "name": "ASPNETCORE_DETAILEDERRORS", "value": "true",                 "slotSetting": false },
+                        { "name": "Jwt__Secret",               "value": "$(DevJwtSecret)",      "slotSetting": false },
+                        { "name": "Smtp__AppPassword",         "value": "$(DevSmtpAppPassword)","slotSetting": false },
+                        { "name": "WhatsApp__AccessToken",     "value": "$(DevWhatsAppToken)",  "slotSetting": false }
+                      ]
+                    connectionStrings: |
+                      [
+                        { "name": "DefaultConnection",  "value": "$(DevDbConnectionString)",        "type": "SQLAzure", "slotSetting": false },
+                        { "name": "AzureBlobStorage",   "value": "$(DevAzureBlobConnectionString)", "type": "Custom",   "slotSetting": false }
+                      ]
+
+                # 2) Push the zip to the Dev App Service.
                 - task: AzureWebApp@1
                   displayName: 'Deploy to Dev App Service'
                   inputs:

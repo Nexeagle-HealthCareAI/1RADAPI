@@ -62,7 +62,33 @@ public record HospitalDetailsDto(
     string PaymentMode,
     string Status,
     bool IsAutoBillingEnabled,
+    // ── Explicit hospital fields (match Hospital entity property names so
+    //    the frontend's hospitalData state can bind 1:1 with API response). ──
+    string HospitalName,
+    string HospitalAddress,
+    string? GSTIN,
+    string? RegistrationNumber,
+    string? PAN,
+    string? NABHNumber,
+    // ── Primary admin user (first user with an Admin role). Null if the
+    //    hospital has no admin mapping yet. ──
+    HospitalAdminDto? Admin,
     List<HospitalUserDto> Users,
     List<HospitalDoctorDto> Doctors,
     HospitalStatsDto Stats
+);
+
+/// <summary>
+/// Rich admin profile for the hospital edit screen — name, contact details,
+/// role, and account status. Different from HospitalUserDto (which is the
+/// terse users-list row).
+/// </summary>
+public record HospitalAdminDto(
+    Guid UserId,
+    string FullName,
+    string Email,
+    string Mobile,
+    string Role,
+    string Status,
+    string? RegisteredOn
 );
