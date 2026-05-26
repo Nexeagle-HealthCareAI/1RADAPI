@@ -3,6 +3,7 @@ using _1Rad.Application.Features.Personnel.Commands.RemoveStaff;
 using _1Rad.Application.Features.Personnel.Commands.UpdatePreference;
 using _1Rad.Application.Features.Personnel.Commands.UpdateStaff;
 using _1Rad.Application.Features.Personnel.Queries.GetHospitalPersonnel;
+using _1Rad.Application.Features.Users.Commands.UpdateClinicalCredentials;
 using _1Rad.Application.Interfaces;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
@@ -63,6 +64,31 @@ public class PersonnelController : ControllerBase
         var result = await _mediator.Send(command);
         return result ? Ok(new { success = true }) : BadRequest(new { message = "Failed to update preference." });
     }
+
+    /// <summary>
+    /// Update a user's clinical credentials only (specialization, degree,
+    /// license number). Used by the Hospital Management screen to edit the
+    /// primary admin's clinical profile without touching account fields.
+    /// </summary>
+    [HttpPatch("{id}/clinical-credentials")]
+    public async Task<IActionResult> UpdateClinicalCredentials(Guid id, [FromBody] UpdateClinicalCredentialsBody body)
+    {
+        var result = await _mediator.Send(new UpdateClinicalCredentialsCommand(
+            UserId:         id,
+            Specialization: body.Specialization,
+            Degree:         body.Degree,
+            LicenseNo:      body.LicenseNo
+        ));
+        return result.Success
+            ? Ok(new { success = true, message = "Clinical credentials updated." })
+            : BadRequest(new { success = false, error = result.Error, errorCode = result.ErrorCode });
+    }
+
+    public record UpdateClinicalCredentialsBody(
+        string? Specialization,
+        string? Degree,
+        string? LicenseNo
+    );
 
     [HttpDelete("{id}")]
     public async Task<IActionResult> RemoveStaff(Guid id)

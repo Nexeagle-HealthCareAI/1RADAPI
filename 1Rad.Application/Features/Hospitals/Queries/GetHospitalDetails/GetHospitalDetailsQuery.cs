@@ -90,5 +90,10 @@ public record HospitalAdminDto(
     string Mobile,
     string Role,
     string Status,
-    string? RegisteredOn
+    string? RegisteredOn,
+    // Clinical credentials captured during doctor registration. Editable
+    // from the Hospital Management screen via /users/{id}/clinical-credentials.
+    string? Specialization,
+    string? Degree,
+    string? LicenseNo
 );

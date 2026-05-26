@@ -91,13 +91,16 @@ public class GetHospitalDetailsQueryHandler : IRequestHandler<GetHospitalDetails
         if (adminMapping != null && adminMapping.User != null)
         {
             adminDto = new HospitalAdminDto(
-                UserId:       adminMapping.User.UserId,
-                FullName:     adminMapping.User.FullName ?? "Unknown",
-                Email:        adminMapping.User.Email ?? "N/A",
-                Mobile:       adminMapping.User.Mobile ?? "N/A",
-                Role:         adminMapping.Roles.FirstOrDefault()?.RoleName ?? "Staff",
-                Status:       adminMapping.User.Status.ToString(),
-                RegisteredOn: adminMapping.User.CreatedAt.ToString("yyyy-MM-dd")
+                UserId:         adminMapping.User.UserId,
+                FullName:       adminMapping.User.FullName ?? "Unknown",
+                Email:          adminMapping.User.Email ?? "N/A",
+                Mobile:         adminMapping.User.Mobile ?? "N/A",
+                Role:           adminMapping.Roles.FirstOrDefault()?.RoleName ?? "Staff",
+                Status:         adminMapping.User.Status.ToString(),
+                RegisteredOn:   adminMapping.User.CreatedAt.ToString("yyyy-MM-dd"),
+                Specialization: adminMapping.User.Specialization,
+                Degree:         adminMapping.User.Degree,
+                LicenseNo:      adminMapping.User.LicenseNo
             );
         }
 
