@@ -4,7 +4,9 @@ using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Entities;
 using FellowOakDicom;
 using FellowOakDicom.Imaging;
+using FellowOakDicom.Imaging.Codec;
 using FellowOakDicom.Imaging.ImageSharp;
+using FellowOakDicom.Imaging.NativeCodec;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using SixLabors.ImageSharp;
@@ -22,6 +24,14 @@ public class DicomExtractionService : IDicomExtractionService
     private const string Container = "dicom-files";
     private const int ThumbnailMaxDim = 256;
 
+    // Transcode uncompressed DICOM pixel data to JPEG-LS Lossless before
+    // uploading to blob storage. Lossless = identical pixel values after
+    // decode (primary-diagnosis safe), but typically 3-4x smaller bytes.
+    // Frontend Cornerstone wadouri loader transparently decodes the new
+    // transfer syntax — no client change required.
+    // Flip to false in this service to skip transcoding entirely.
+    private const bool TranscodeToJpegLs = true;
+
     private readonly IApplicationDbContext _db;
     private readonly IBlobService _blob;
     private readonly ILogger<DicomExtractionService> _logger;
@@ -35,16 +45,60 @@ public class DicomExtractionService : IDicomExtractionService
         _blob = blob;
         _logger = logger;
 
-        // fo-dicom uses a manager pattern — wire ImageSharp once. Idempotent
-        // because SetupDicom returns the existing manager if already set.
+        // fo-dicom uses a manager pattern — wire ImageSharp + native codecs
+        // (JPEG-LS, JPEG2000, JPEG-baseline transcoders) once. Idempotent
+        // because the second .Build() call no-ops if already configured.
         try
         {
             new DicomSetupBuilder()
                 .RegisterServices(s => s.AddImageManager<ImageSharpImageManager>())
+                .RegisterServices(s => s.AddTranscoderManager<NativeTranscoderManager>())
                 .SkipValidation()
                 .Build();
         }
         catch { /* already configured by another instance — fine */ }
+    }
+
+    /// <summary>
+    /// Returns JPEG-LS-transcoded bytes for the given DICOM if the source is
+    /// uncompressed (Implicit/Explicit VR Little Endian) AND transcoding is
+    /// enabled. Otherwise returns the original bytes unchanged.
+    ///
+    /// Only transcodes from uncompressed sources to avoid:
+    ///  - Lossy-to-lossy recompression (quality degradation).
+    ///  - Failing on exotic codecs we don't have decoders for.
+    /// Falls back to original bytes on any transcode error — the slice
+    /// always uploads successfully even if compression fails.
+    /// </summary>
+    private byte[] TranscodeSliceBytes(DicomFile dicom, byte[] originalBytes, out bool didTranscode)
+    {
+        didTranscode = false;
+        if (!TranscodeToJpegLs) return originalBytes;
+
+        try
+        {
+            var srcSyntax = dicom.Dataset.InternalTransferSyntax;
+            if (srcSyntax == DicomTransferSyntax.JPEGLSLossless)
+                return originalBytes; // already JPEG-LS
+
+            var isUncompressed =
+                srcSyntax == DicomTransferSyntax.ImplicitVRLittleEndian ||
+                srcSyntax == DicomTransferSyntax.ExplicitVRLittleEndian ||
+                srcSyntax == DicomTransferSyntax.ExplicitVRBigEndian;
+            if (!isUncompressed) return originalBytes;
+
+            var transcoder = new DicomTranscoder(srcSyntax, DicomTransferSyntax.JPEGLSLossless);
+            var transcodedFile = transcoder.Transcode(dicom);
+            using var ms = new MemoryStream();
+            transcodedFile.Save(ms);
+            didTranscode = true;
+            return ms.ToArray();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[DICOM_EXTRACT] JPEG-LS transcode failed — uploading original bytes");
+            return originalBytes;
+        }
     }
 
     public async Task<int> ExtractAsync(Guid assetId, CancellationToken cancellationToken)
@@ -164,6 +218,12 @@ public class DicomExtractionService : IDicomExtractionService
             var appointmentIdN = asset.AppointmentId.ToString("N");
             var sliceCount     = 0;
 
+            // Compression-stats accumulators — logged at end of extraction so
+            // we can see the byte savings (and confirm transcoding actually ran).
+            long totalOriginalBytes  = 0;
+            long totalUploadedBytes  = 0;
+            int  transcodedSliceCount = 0;
+
             // 4. Upload each slice + populate slice index. For the first slice
             // of each series, also generate a thumbnail.
             foreach (var series in bySeries)
@@ -174,10 +234,18 @@ public class DicomExtractionService : IDicomExtractionService
                     cancellationToken.ThrowIfCancellationRequested();
                     var p = series.Slices[i];
 
+                    // Transcode uncompressed pixel data to JPEG-LS Lossless to
+                    // shrink the blob payload by ~3-4x. Lossless = primary-
+                    // diagnosis safe; falls back to original bytes on any error.
+                    var uploadBytes = TranscodeSliceBytes(p.DicomFile, p.OriginalBytes, out var didTranscode);
+                    totalOriginalBytes += p.OriginalBytes.Length;
+                    totalUploadedBytes += uploadBytes.Length;
+                    if (didTranscode) transcodedSliceCount++;
+
                     // Slice blob path: deterministic, easy to delete by prefix.
                     var sliceBlobPath = $"{hospitalIdN}/{appointmentIdN}/extracted/{assetIdN}/series/{series.Index:D3}/{i:D4}.dcm";
                     string sliceUrl;
-                    using (var sliceUp = new MemoryStream(p.OriginalBytes, writable: false))
+                    using (var sliceUp = new MemoryStream(uploadBytes, writable: false))
                     {
                         sliceUrl = await _blob.UploadFileAtPathAsync(sliceUp, sliceBlobPath, "application/dicom", Container);
                     }
@@ -233,8 +301,18 @@ public class DicomExtractionService : IDicomExtractionService
             asset.ExtractionError       = null;
             await _db.SaveChangesAsync(cancellationToken);
 
-            _logger.LogInformation("[DICOM_EXTRACT] Asset {AssetId} extracted {Slices} slices across {Series} series.",
-                assetId, sliceCount, bySeries.Count);
+            // Compression summary — only useful when transcoding ran for >0
+            // slices. Helps confirm in prod logs that JPEG-LS is paying off.
+            var compressionRatio = totalOriginalBytes > 0
+                ? (double)totalUploadedBytes / totalOriginalBytes
+                : 1.0;
+            _logger.LogInformation(
+                "[DICOM_EXTRACT] Asset {AssetId} extracted {Slices} slices across {Series} series. " +
+                "Transcoded {Transcoded}/{Slices} slices to JPEG-LS Lossless. " +
+                "Bytes uploaded: {Uploaded:N0} (was {Original:N0}, ratio {Ratio:P1}).",
+                assetId, sliceCount, bySeries.Count,
+                transcodedSliceCount, sliceCount,
+                totalUploadedBytes, totalOriginalBytes, compressionRatio);
             return sliceCount;
         }
         catch (Exception ex)
