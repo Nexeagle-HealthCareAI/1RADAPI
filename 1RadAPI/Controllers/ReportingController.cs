@@ -1,3 +1,4 @@
+using _1Rad.Application.Features.Reporting.Commands.GenerateVoiceReport;
 using _1Rad.Application.Features.Reporting.Commands.DeleteKeyword;
 using _1Rad.Application.Features.Reporting.Commands.DeleteTemplate;
 using _1Rad.Application.Features.Reporting.Commands.SaveReport;
@@ -202,6 +203,26 @@ namespace _1RadAPI.Controllers
             catch (Exception ex)
             {
                 return StatusCode(500, new { success = false, error = $"Failed to save report: {ex.Message}" });
+            }
+        }
+
+        /// <summary>
+        /// Voice Reporting — turn a dictation transcript into a structured
+        /// report draft using Claude Haiku. Returns editor-ready HTML.
+        /// </summary>
+        [HttpPost("voice-generate")]
+        public async Task<IActionResult> GenerateVoiceReport([FromBody] GenerateVoiceReportCommand command)
+        {
+            try
+            {
+                var result = await _mediator.Send(command);
+                if (!result.Success)
+                    return BadRequest(new { success = false, error = result.Error ?? "Generation failed." });
+                return Ok(new { success = true, html = result.Html });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, error = $"Voice report generation failed: {ex.Message}" });
             }
         }
     }

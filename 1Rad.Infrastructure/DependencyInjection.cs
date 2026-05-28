@@ -19,6 +19,7 @@ public static class DependencyInjection
         services.AddScoped<IApplicationDbContext>(provider => provider.GetRequiredService<ApplicationDbContext>());
         
         services.AddHttpClient<ISmsService, WhatsAppSmsService>();
+        services.AddHttpClient<IAnthropicService, AnthropicService>();
         services.AddScoped<IEmailService, EmailService>();
         services.AddScoped<IJwtProvider, JwtProvider>();
         services.AddScoped<IPasswordHasher, PasswordHasher>();
