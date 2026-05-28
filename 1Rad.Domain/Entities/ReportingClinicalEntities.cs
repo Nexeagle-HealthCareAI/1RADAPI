@@ -47,6 +47,10 @@ namespace _1Rad.Domain.Entities
         public bool IsFinalized { get; set; } = false;
         public DateTime? FinalizedAt { get; set; }
         public DateTime? CreatedAt { get; set; } = DateTime.UtcNow;
+        // Updated on every save so the client can reliably tell whether its
+        // local autosaved draft is newer/older than the server copy
+        // (drives the crash-recovery prompt in ReportingPage).
+        public DateTime? UpdatedAt { get; set; }
         public string ReportPdfUrl { get; set; } = string.Empty;
         public string ReportingMode { get; set; } = "Structured"; // Structured or Narrative Editor
         public int? FieldCount { get; set; } = 0;

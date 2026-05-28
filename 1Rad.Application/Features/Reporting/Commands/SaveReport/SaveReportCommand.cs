@@ -81,9 +81,10 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
                 IsFinalized = request.IsFinalized,
                 ReportingMode = request.ReportingMode,
                 FinalizedAt = request.IsFinalized ? DateTime.UtcNow : null,
-                CreatedAt = DateTime.UtcNow
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
             };
-            
+
             _context.DiagnosticReports.Add(report);
         }
         else
@@ -101,6 +102,7 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
             report.IsFinalized = request.IsFinalized;
             report.ReportingMode = request.ReportingMode;
             report.FinalizedAt = request.IsFinalized ? DateTime.UtcNow : report.FinalizedAt;
+            report.UpdatedAt = DateTime.UtcNow;
         }
 
         // --- JSON SHREDDING LOGIC (Relational Evolution) ---
