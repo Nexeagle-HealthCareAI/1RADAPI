@@ -23,19 +23,31 @@ public class AnthropicService : IAnthropicService
     private readonly string _apiKey;
     private readonly string _model;
 
+    private const string Placeholder = "YOUR_LOCAL_DEV_ANTHROPIC_API_KEY";
+
     public AnthropicService(HttpClient http, IConfiguration configuration, ILogger<AnthropicService> logger)
     {
         _http = http;
         _logger = logger;
         var section = configuration.GetSection("Anthropic");
-        _apiKey = section["ApiKey"] ?? string.Empty;
-        _model = section["Model"] ?? "claude-haiku-4-5";
+        // Trim — pipeline/library secrets frequently arrive with a trailing
+        // newline or surrounding quotes, which makes Anthropic reject the key
+        // with 401 even though the value "looks" right.
+        _apiKey = (section["ApiKey"] ?? string.Empty).Trim().Trim('"');
+        _model = (section["Model"] ?? "claude-haiku-4-5").Trim();
     }
 
     public async Task<string> GenerateAsync(string systemPrompt, string userPrompt, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(_apiKey))
-            throw new InvalidOperationException("Anthropic:ApiKey is not configured.");
+            throw new InvalidOperationException("Anthropic API key is not configured (set Anthropic__ApiKey).");
+        if (_apiKey == Placeholder)
+            throw new InvalidOperationException("Anthropic API key is still the placeholder — set the real Anthropic__ApiKey in App Service configuration.");
+
+        // SAFE diagnostic — never logs the key itself, only shape signals so we
+        // can tell from the log stream whether a real key is being read.
+        _logger.LogInformation("[Anthropic] using key: len={Len}, startsWithSkAnt={SkAnt}, model={Model}",
+            _apiKey.Length, _apiKey.StartsWith("sk-ant-"), _model);
 
         var payload = new
         {
