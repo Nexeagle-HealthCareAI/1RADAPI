@@ -42,9 +42,28 @@ public record TrackReportDto(
     Guid? DoctorId
 );
 
+// Patient-safe slice of the doctor's PrescriptionProtocol. This is the same
+// branding the patient already sees on their printed prescription: letterhead
+// image + typography + page margins. We deliberately exclude internal IDs
+// (HospitalId, CreatedAt/UpdatedAt) so a leaked tracking URL can't be used
+// to enumerate or correlate doctors / hospitals beyond what's already
+// printed on paper in the patient's hand.
+public record TrackBrandingDto(
+    string? LetterheadBlobUrl,
+    string? FontFamily,
+    string? FontColor,
+    int FontSize,
+    decimal HeaderMargin,
+    decimal LeftMargin,
+    decimal RightMargin,
+    decimal BottomMargin,
+    string? OverflowBackgroundMode
+);
+
 public record TrackingResponseDto(
     TrackAppointmentDto Appointment,
-    TrackReportDto? Report
+    TrackReportDto? Report,
+    TrackBrandingDto? Branding
 );
 
 public record GetTrackingDataQuery(Guid AppointmentId) : IRequest<TrackingResponseDto?>;
@@ -110,6 +129,30 @@ public class GetTrackingDataQueryHandler : IRequestHandler<GetTrackingDataQuery,
 
         if (report != null && !report.IsFinalized) report = null;
 
-        return new TrackingResponseDto(appt, report);
+        // Branding is only relevant when there's a finalized report to render
+        // — the live tracker view uses a flat dark UI, no letterhead. Pulling
+        // it conditionally also keeps the response small for cases that don't
+        // need it.
+        TrackBrandingDto? branding = null;
+        if (report != null && report.DoctorId.HasValue)
+        {
+            branding = await _context.PrescriptionProtocols
+                .AsNoTracking()
+                .Where(p => p.DoctorId == report.DoctorId.Value)
+                .Select(p => new TrackBrandingDto(
+                    p.LetterheadBlobUrl,
+                    p.FontFamily,
+                    p.FontColor,
+                    p.FontSize,
+                    p.HeaderMargin,
+                    p.LeftMargin,
+                    p.RightMargin,
+                    p.BottomMargin,
+                    p.OverflowBackgroundMode
+                ))
+                .FirstOrDefaultAsync(cancellationToken);
+        }
+
+        return new TrackingResponseDto(appt, report, branding);
     }
 }
