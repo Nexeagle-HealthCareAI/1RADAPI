@@ -1,5 +1,4 @@
 using System.Text;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 using MediatR;
 using _1Rad.Application.Interfaces;
@@ -46,41 +45,61 @@ public class GenerateVoiceReportCommandHandler
             ? $"Patient: {appt.Patient.FullName}; Age: {appt.Patient.Age}; Gender: {appt.Patient.Gender}; Study/Service: {appt.Service}."
             : "Patient context unavailable.";
 
-        // ── Template format (the section scaffold to fill) ───────────────
-        string templateFormat = string.Empty;
+        // ── Template HTML (the EXACT structure to preserve) ──────────────
+        // We pass the template's HTML through to Haiku unchanged so the
+        // response keeps the same tags, classes, inline styles, headings, and
+        // layout. The final HTML is printed and handed to the patient, so
+        // visual fidelity to the prescription template is non-negotiable.
+        string templateHtml = string.Empty;
         if (request.TemplateId.HasValue && request.TemplateId.Value != Guid.Empty)
         {
             var tpl = await _context.ReportTemplates
                 .FirstOrDefaultAsync(t => t.Id == request.TemplateId.Value, cancellationToken);
-            templateFormat = StripHtml(tpl?.Content ?? string.Empty);
+            templateHtml = tpl?.Content ?? string.Empty;
         }
+
+        if (string.IsNullOrWhiteSpace(templateHtml))
+            return new GenerateVoiceReportResult(false, null, "No report template was provided. Please select a template.");
 
         // ── Prompt ───────────────────────────────────────────────────────
         const string system =
             "You are an expert radiology reporting assistant. You convert a radiologist's spoken dictation " +
             "into a complete, professional, structured radiology report.\n" +
-            "You are given a report TEMPLATE describing the required sections (and their normal/default text) " +
-            "and the radiologist's DICTATION.\n" +
-            "Rules:\n" +
-            "1. Follow the template's section structure exactly and in order.\n" +
-            "2. For each section, where the dictation describes that organ/finding, use the dictated findings; " +
-            "where the dictation does not mention a section, keep the template's normal/default text.\n" +
-            "3. Use precise, concise clinical language. Do NOT invent findings not implied by the dictation.\n" +
-            "4. End with an IMPRESSION section summarising the key positive findings, if appropriate.\n" +
-            "Return ONLY valid JSON — no markdown fences, no commentary. The JSON must be an array of objects " +
-            "in report order: [{\"heading\": \"SECTION NAME\", \"text\": \"section content\"}, ...].";
+            "\n" +
+            "You are given:\n" +
+            "  • A report TEMPLATE — raw HTML that defines the exact print layout (headings, sections, " +
+            "    inline styles, tables, etc.) of the prescription handed to the patient.\n" +
+            "  • The radiologist's DICTATION.\n" +
+            "\n" +
+            "Your job — return the SAME HTML, with the section contents filled in or updated to reflect " +
+            "the dictation. Output is rendered directly to the printed report, so structural fidelity is " +
+            "non-negotiable.\n" +
+            "\n" +
+            "STRICT RULES:\n" +
+            "1. PRESERVE the template's HTML structure exactly: every tag, attribute, class, inline style, " +
+            "   table, heading, ordering, and whitespace pattern. Do not add or remove elements.\n" +
+            "2. Modify ONLY the TEXT CONTENT inside the existing elements. Do not introduce new tags, " +
+            "   change tag names, or restructure the document.\n" +
+            "3. For each section where the dictation describes that organ/finding, replace the template's " +
+            "   default text with the dictated findings, written in concise clinical language.\n" +
+            "4. For sections the dictation does NOT mention, keep the template's existing normal text as-is.\n" +
+            "5. NEVER invent findings that are not implied by the dictation. NEVER add commentary, " +
+            "   markdown fences, code blocks, or explanations.\n" +
+            "6. If the template includes patient-info placeholders (e.g. {patientName}), leave them " +
+            "   untouched — the editor substitutes them at render time.\n" +
+            "7. Return ONLY the completed HTML. No prose before or after.";
 
         var user = new StringBuilder();
         user.AppendLine("=== PATIENT CONTEXT ===");
         user.AppendLine(patientCtx);
         user.AppendLine();
-        user.AppendLine("=== REPORT TEMPLATE (sections / normal text to follow) ===");
-        user.AppendLine(string.IsNullOrWhiteSpace(templateFormat)
-            ? "(No template provided — produce a standard structured report appropriate for the service.)"
-            : templateFormat);
+        user.AppendLine("=== REPORT TEMPLATE (HTML — preserve this exact structure) ===");
+        user.AppendLine(templateHtml);
         user.AppendLine();
         user.AppendLine("=== RADIOLOGIST DICTATION ===");
         user.AppendLine(request.Transcript.Trim());
+        user.AppendLine();
+        user.AppendLine("Return the completed HTML, preserving every tag and style from the template.");
 
         // ── Call Claude ───────────────────────────────────────────────────
         string aiText;
@@ -93,55 +112,31 @@ public class GenerateVoiceReportCommandHandler
             return new GenerateVoiceReportResult(false, null, ex.Message);
         }
 
-        var html = SectionsJsonToHtml(aiText);
+        var html = ExtractHtml(aiText);
         if (string.IsNullOrWhiteSpace(html))
-            return new GenerateVoiceReportResult(false, null, "The AI response could not be parsed into a report.");
+            return new GenerateVoiceReportResult(false, null, "The AI response did not contain a valid HTML report.");
 
         return new GenerateVoiceReportResult(true, html, null);
     }
 
-    private static string StripHtml(string s) =>
-        string.IsNullOrEmpty(s) ? string.Empty : Regex.Replace(s, "<[^>]+>", " ").Trim();
-
     /// <summary>
-    /// Parse the model's JSON section array and assemble editor-friendly HTML:
-    /// each section becomes a bold heading paragraph + a body paragraph.
+    /// Strip markdown code fences (```html … ```) and surrounding whitespace
+    /// if Haiku wraps the response despite the prompt. Returns the inner HTML.
     /// </summary>
-    private static string SectionsJsonToHtml(string aiText)
+    private static string ExtractHtml(string aiText)
     {
-        var json = ExtractJsonArray(aiText);
-        if (json == null) return string.Empty;
-        try
-        {
-            using var doc = JsonDocument.Parse(json);
-            if (doc.RootElement.ValueKind != JsonValueKind.Array) return string.Empty;
+        if (string.IsNullOrWhiteSpace(aiText)) return string.Empty;
+        var text = aiText.Trim();
 
-            var sb = new StringBuilder();
-            foreach (var section in doc.RootElement.EnumerateArray())
-            {
-                var heading = section.TryGetProperty("heading", out var h) ? h.GetString() : null;
-                var text = section.TryGetProperty("text", out var t) ? t.GetString() : null;
-                if (!string.IsNullOrWhiteSpace(heading))
-                    sb.Append($"<p><strong>{Esc(heading!.Trim())}</strong></p>");
-                if (!string.IsNullOrWhiteSpace(text))
-                    sb.Append($"<p>{Esc(text!.Trim()).Replace("\n", "<br/>")}</p>");
-            }
-            return sb.ToString();
-        }
-        catch
-        {
-            return string.Empty;
-        }
+        // ```html\n…\n``` or ```\n…\n```
+        var fence = Regex.Match(text, "^```(?:[a-zA-Z]+)?\\s*\\n([\\s\\S]*?)\\n```\\s*$");
+        if (fence.Success) text = fence.Groups[1].Value.Trim();
+
+        // Drop any stray leading prose before the first '<' tag (rare, but
+        // defensive — keeps a stray "Here is the report:" out of the print).
+        var firstTag = text.IndexOf('<');
+        if (firstTag > 0) text = text.Substring(firstTag).Trim();
+
+        return text;
     }
-
-    /// <summary>Pull the first top-level JSON array out of the model text (tolerates stray prose / code fences).</summary>
-    private static string? ExtractJsonArray(string text)
-    {
-        if (string.IsNullOrWhiteSpace(text)) return null;
-        var start = text.IndexOf('[');
-        var end = text.LastIndexOf(']');
-        return (start >= 0 && end > start) ? text.Substring(start, end - start + 1) : null;
-    }
-
-    private static string Esc(string s) => System.Net.WebUtility.HtmlEncode(s ?? string.Empty);
 }

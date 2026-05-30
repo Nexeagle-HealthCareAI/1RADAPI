@@ -52,7 +52,9 @@ public class AnthropicService : IAnthropicService
         var payload = new
         {
             model = _model,
-            max_tokens = 2500,
+            // 4096 covers a full HTML report (template + filled content). 2500
+            // truncated mid-output for medium/long radiology templates.
+            max_tokens = 4096,
             temperature = 0.2,
             system = systemPrompt,
             messages = new[]
