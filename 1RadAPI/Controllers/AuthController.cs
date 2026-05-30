@@ -127,7 +127,20 @@ public class AuthController : ControllerBase
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> Login([FromBody] LoginCommand command)
     {
-        var result = await _mediator.Send(command);
+        // Server-side enrichment of the device context. We trust the client
+        // for DeviceCategory + DeviceName (it knows itself best — touch /
+        // screen size / installed-PWA signals are client-side) but the IP
+        // and User-Agent MUST come from the request frame: anything
+        // client-supplied here can be spoofed.
+        var realIp =
+            Request.Headers.TryGetValue("X-Forwarded-For", out var fwd) && !string.IsNullOrWhiteSpace(fwd)
+                ? fwd.ToString().Split(',')[0].Trim()
+                : HttpContext.Connection.RemoteIpAddress?.ToString();
+        var realUa = Request.Headers.TryGetValue("User-Agent", out var ua) ? ua.ToString() : null;
+
+        var enriched = command with { IpAddress = realIp, UserAgent = realUa };
+
+        var result = await _mediator.Send(enriched);
         return result.Success ? Ok(result) : Unauthorized(result);
     }
 

@@ -198,6 +198,11 @@ app.UseRateLimiter(); // Apply Rate Limiting
 
 app.UseAuthentication(); // Must be before UseAuthorization
 app.UseAuthorization();
+// SessionValidationMiddleware runs AFTER UseAuthorization so the principal
+// is already populated and signature-validated by the time we check the
+// session id. Order matters: this must fire BEFORE any controller that
+// touches user state, so we sit it just after the auth pipeline.
+app.UseMiddleware<SessionValidationMiddleware>();
 app.UseMiddleware<ContextualSentinelMiddleware>();
 app.UseMiddleware<SubscriptionValidationMiddleware>();
 

@@ -51,8 +51,12 @@ public class SwitchContextCommandHandler : IRequestHandler<SwitchContextCommand,
                 .Select(m => m.HospitalId)
                 .ToListAsync(cancellationToken);
 
-            // 3. Generate New Contextual JWT
-            var accessToken = _jwtProvider.GenerateContextualToken(mapping.User, mapping, authorizedHospitalIds);
+            // 3. Generate New Contextual JWT — carrying the SAME session id
+            //    so the user's continuous presence on this device stays one
+            //    session through a hospital switch (and the Active Sessions
+            //    UI doesn't flicker).
+            var accessToken = _jwtProvider.GenerateContextualToken(
+                mapping.User, mapping, authorizedHospitalIds, _userContext.SessionId);
 
             return new SwitchContextResponse
             {

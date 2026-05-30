@@ -10,13 +10,15 @@ public class VerifyOTPCommandHandler : IRequestHandler<VerifyOTPCommand, VerifyO
     private readonly IApplicationDbContext _context;
     private readonly IPasswordHasher _hasher;
     private readonly IJwtProvider _jwtProvider;
+    private readonly IActiveSessionCache _sessionCache;
     private readonly ILogger<VerifyOTPCommandHandler> _logger;
 
-    public VerifyOTPCommandHandler(IApplicationDbContext context, IPasswordHasher hasher, IJwtProvider jwtProvider, ILogger<VerifyOTPCommandHandler> logger)
+    public VerifyOTPCommandHandler(IApplicationDbContext context, IPasswordHasher hasher, IJwtProvider jwtProvider, IActiveSessionCache sessionCache, ILogger<VerifyOTPCommandHandler> logger)
     {
         _context = context;
         _hasher = hasher;
         _jwtProvider = jwtProvider;
+        _sessionCache = sessionCache;
         _logger = logger;
     }
 
@@ -67,18 +69,30 @@ public class VerifyOTPCommandHandler : IRequestHandler<VerifyOTPCommand, VerifyO
                 if (activeMapping != null)
                 {
                     var authorizedHospitalIds = user.HospitalMappings.Select(m => m.HospitalId).ToList();
-                    var accessToken = _jwtProvider.GenerateContextualToken(user, activeMapping, authorizedHospitalIds);
+                    // Allocate a session id — OTP verification IS the user
+                    // logging back in here, so the issued token must carry a
+                    // valid sid the session middleware will accept.
+                    var sessionId = Guid.NewGuid();
+                    var expiresAt = DateTime.UtcNow.AddDays(7);
+                    var accessToken = _jwtProvider.GenerateContextualToken(
+                        user, activeMapping, authorizedHospitalIds, sessionId);
                     var refreshToken = _jwtProvider.GenerateRefreshToken();
 
-                    // Persist Refresh Token
+                    // Persist Refresh Token with the session id so subsequent
+                    // refreshes carry it forward.
                     var refreshTokenEntity = new _1Rad.Domain.Entities.RefreshToken
                     {
                         UserId = user.UserId,
                         Token = refreshToken,
-                        ExpiresAt = DateTime.UtcNow.AddDays(7)
+                        ExpiresAt = expiresAt,
+                        SessionId = sessionId,
+                        DeviceCategory = "UNKNOWN", // OTP flow doesn't capture device info
+                        LastSeenAt = DateTime.UtcNow,
                     };
                     _context.RefreshTokens.Add(refreshTokenEntity);
                     await _context.SaveChangesAsync(cancellationToken);
+
+                    _sessionCache.MarkActive(sessionId, expiresAt);
 
                     return new VerifyOTPResponse(
                         Success: true,

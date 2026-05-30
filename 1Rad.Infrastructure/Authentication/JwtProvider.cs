@@ -34,7 +34,7 @@ public class JwtProvider : IJwtProvider
         return CreateToken(claims, 15); // 15 minutes for registration flow
     }
 
-    public string GenerateContextualToken(User user, UserHospitalMapping activeMapping, IEnumerable<Guid> authorizedHospitalIds)
+    public string GenerateContextualToken(User user, UserHospitalMapping activeMapping, IEnumerable<Guid> authorizedHospitalIds, Guid? sessionId = null)
     {
         var claims = new List<Claim>
         {
@@ -43,13 +43,22 @@ public class JwtProvider : IJwtProvider
             new Claim(JwtRegisteredClaimNames.Email, user.Email),
             new Claim("mobile", user.Mobile),
             new Claim("type", "access"),
-            
+
             // Tactical Context Claims
             new Claim("cid", activeMapping.HospitalId.ToString()), // Current Hospital ID
             new Claim("rid", string.Join(",", activeMapping.Roles.Select(r => r.RoleId.ToString()).Concat(activeMapping.CustomRoles?.Select(cr => cr.CustomRoleId.ToString()) ?? Enumerable.Empty<string>()))), // Comma-separated Role IDs
             new Claim("gid", activeMapping.Hospital?.GroupId?.ToString() ?? string.Empty), // Group / Chain ID
             new Claim("hubs", string.Join(",", authorizedHospitalIds)) // Comma-separated list of authorized Hubs
         };
+
+        // Session id — the session validation middleware uses this to check
+        // against the active-session cache on every authenticated request.
+        // Optional so legacy callers can still mint tokens; those tokens fail
+        // the middleware and the client is forced to re-login.
+        if (sessionId.HasValue)
+        {
+            claims.Add(new Claim(JwtRegisteredClaimNames.Sid, sessionId.Value.ToString()));
+        }
 
         // ASP.NET Identity Compatibility: Add multiple role claims
         foreach (var role in activeMapping.Roles)

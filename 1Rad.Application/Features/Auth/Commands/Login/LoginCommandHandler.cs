@@ -12,17 +12,29 @@ public class LoginCommandHandler : IRequestHandler<LoginCommand, LoginResponse>
     private readonly IApplicationDbContext _context;
     private readonly IPasswordHasher _passwordHasher;
     private readonly IJwtProvider _jwtProvider;
+    private readonly IActiveSessionCache _sessionCache;
+    private readonly ISessionAlertService _sessionAlerts;
     private readonly ILogger<LoginCommandHandler> _logger;
 
+    // Whitelist accepted device categories — anything else falls back to
+    // UNKNOWN. We accept lowercase too so the frontend doesn't have to worry
+    // about casing.
+    private static readonly HashSet<string> ValidCategories =
+        new(StringComparer.OrdinalIgnoreCase) { "DESKTOP", "MOBILE", "TABLET", "UNKNOWN" };
+
     public LoginCommandHandler(
-        IApplicationDbContext context, 
-        IPasswordHasher passwordHasher, 
-        IJwtProvider jwtProvider, 
+        IApplicationDbContext context,
+        IPasswordHasher passwordHasher,
+        IJwtProvider jwtProvider,
+        IActiveSessionCache sessionCache,
+        ISessionAlertService sessionAlerts,
         ILogger<LoginCommandHandler> logger)
     {
         _context = context;
         _passwordHasher = passwordHasher;
         _jwtProvider = jwtProvider;
+        _sessionCache = sessionCache;
+        _sessionAlerts = sessionAlerts;
         _logger = logger;
     }
 
@@ -102,20 +114,90 @@ public class LoginCommandHandler : IRequestHandler<LoginCommand, LoginResponse>
 
             var authorizedHospitalIds = user.HospitalMappings.Select(m => m.HospitalId).ToList();
 
-            // 5. Generate Contextual JWT
-            var accessToken = _jwtProvider.GenerateContextualToken(user, activeMapping, authorizedHospitalIds);
+            // 5. Session policy — one active session per DeviceCategory per
+            //    user. A login from the same category revokes the existing
+            //    session (forced logout); a login from a NEW category adds
+            //    to the active set (still bounded by the 3-category cap).
+            var category = (request.DeviceCategory ?? "UNKNOWN").ToUpperInvariant();
+            if (!ValidCategories.Contains(category)) category = "UNKNOWN";
 
-            // 6. Manage Refresh Token
+            var nowUtc = DateTime.UtcNow;
+            var existingForCategory = await _context.RefreshTokens
+                .Where(rt => rt.UserId == user.UserId
+                          && rt.DeviceCategory == category
+                          && rt.RevokedAt == null
+                          && rt.ExpiresAt > nowUtc)
+                .ToListAsync(cancellationToken);
+
+            foreach (var oldSession in existingForCategory)
+            {
+                oldSession.RevokedAt = nowUtc;
+                oldSession.RevokedByIp = request.IpAddress;
+                oldSession.LoggedOutReason = "FORCED_BY_NEW_DEVICE";
+                if (oldSession.SessionId.HasValue)
+                {
+                    _sessionCache.Revoke(oldSession.SessionId.Value);
+                }
+            }
+
+            var sessionId = Guid.NewGuid();
+            var expiresAt = nowUtc.AddDays(7);
+
+            // 6. Generate Contextual JWT (now carrying the sid claim).
+            var accessToken = _jwtProvider.GenerateContextualToken(
+                user, activeMapping, authorizedHospitalIds, sessionId);
+
+            // 7. Refresh token row records full device context for the
+            //    Active Sessions UI + audit.
             var refreshTokenString = _jwtProvider.GenerateRefreshToken();
             var refreshTokenEntity = new RefreshToken
             {
                 UserId = user.UserId,
                 Token = refreshTokenString,
-                ExpiresAt = DateTime.UtcNow.AddDays(7), // 7 days session
+                ExpiresAt = expiresAt,
+                SessionId = sessionId,
+                DeviceCategory = category,
+                DeviceName = string.IsNullOrWhiteSpace(request.DeviceName) ? null : Trim(request.DeviceName, 100),
+                UserAgent = string.IsNullOrWhiteSpace(request.UserAgent) ? null : Trim(request.UserAgent, 512),
+                IpAddress = string.IsNullOrWhiteSpace(request.IpAddress) ? null : Trim(request.IpAddress, 45),
+                CreatedByIp = request.IpAddress,
+                LastSeenAt = nowUtc,
             };
 
             _context.RefreshTokens.Add(refreshTokenEntity);
             await _context.SaveChangesAsync(cancellationToken);
+
+            // 8. Prime the active-session cache so the very next request
+            //    using this token doesn't have to round-trip the DB.
+            _sessionCache.MarkActive(sessionId, expiresAt);
+
+            // 9. Send patient/staff a heads-up — covers two cases:
+            //    (a) An existing session of this category was forced out
+            //        ("Your other Chrome was signed out because someone signed
+            //        in here").
+            //    (b) This is the first time we've seen this DeviceCategory
+            //        for this user ("New sign-in on Mobile").
+            //    Best-effort; the fire-and-forget call swallows transport
+            //    failures so login latency isn't tied to the SMS gateway.
+            var wasForced = existingForCategory.Count > 0;
+            var isNewCategory = !wasForced && !await _context.RefreshTokens.AnyAsync(
+                rt => rt.UserId == user.UserId
+                   && rt.DeviceCategory == category
+                   && rt.SessionId != sessionId,
+                cancellationToken);
+            if (wasForced || isNewCategory)
+            {
+                _ = _sessionAlerts.NotifyNewSessionAsync(new NewSessionAlert(
+                    user.UserId,
+                    user.Email,
+                    user.Mobile,
+                    user.FullName,
+                    category,
+                    refreshTokenEntity.DeviceName,
+                    request.IpAddress,
+                    nowUtc,
+                    wasForced));
+            }
             
             // 7. Construct Response
             return new LoginResponse
@@ -145,4 +227,7 @@ public class LoginCommandHandler : IRequestHandler<LoginCommand, LoginResponse>
             return new LoginResponse { Success = false, Error = "An internal server error occurred." };
         }
     }
+
+    private static string? Trim(string? s, int max) =>
+        string.IsNullOrEmpty(s) ? s : (s.Length <= max ? s : s.Substring(0, max));
 }

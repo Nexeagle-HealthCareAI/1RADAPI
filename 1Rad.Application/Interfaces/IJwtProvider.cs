@@ -9,8 +9,12 @@ public interface IJwtProvider
     
     /// <summary>
     /// Generates a standard access token for a specific center context.
+    /// When a sessionId is supplied it's embedded as the `sid` claim so the
+    /// session validation middleware can revoke this exact token mid-flight.
+    /// Null sessionId is the legacy path (still works, but the token can't
+    /// be revoked individually).
     /// </summary>
-    string GenerateContextualToken(User user, UserHospitalMapping activeMapping, IEnumerable<Guid> authorizedHospitalIds);
+    string GenerateContextualToken(User user, UserHospitalMapping activeMapping, IEnumerable<Guid> authorizedHospitalIds, Guid? sessionId = null);
     
     /// <summary>
     /// Generates a cryptographically secure refresh token.

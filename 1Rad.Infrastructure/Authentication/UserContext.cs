@@ -59,9 +59,22 @@ public class UserContext : IUserContext
         {
             var hubs = _httpContextAccessor.HttpContext?.User.FindFirstValue("hubs");
             if (string.IsNullOrEmpty(hubs)) return Enumerable.Empty<Guid>();
-            
+
             return hubs.Split(',', StringSplitOptions.RemoveEmptyEntries)
                        .Select(Guid.Parse);
+        }
+    }
+
+    public Guid? SessionId
+    {
+        get
+        {
+            // Two claim aliases — JwtRegisteredClaimNames.Sid is the raw key
+            // ("sid") and ClaimTypes.Sid is the schema mapping the older JWT
+            // handler applies. Either works; we check both.
+            var sid = _httpContextAccessor.HttpContext?.User.FindFirstValue("sid")
+                       ?? _httpContextAccessor.HttpContext?.User.FindFirstValue(ClaimTypes.Sid);
+            return Guid.TryParse(sid, out var s) ? s : null;
         }
     }
 }

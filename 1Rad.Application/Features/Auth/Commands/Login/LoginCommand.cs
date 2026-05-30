@@ -2,7 +2,17 @@ using MediatR;
 
 namespace _1Rad.Application.Features.Auth.Commands.Login;
 
-public record LoginCommand(string Identifier, string Password) : IRequest<LoginResponse>;
+// Device fields are optional — pre-session-management clients omit them and
+// the handler degrades to DeviceCategory=UNKNOWN. The session validation
+// middleware treats UNKNOWN like any other category for the cap.
+public record LoginCommand(
+    string Identifier,
+    string Password,
+    string? DeviceCategory = null,
+    string? DeviceName = null,
+    string? UserAgent = null,
+    string? IpAddress = null
+) : IRequest<LoginResponse>;
 
 public class LoginResponse
 {

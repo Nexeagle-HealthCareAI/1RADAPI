@@ -23,6 +23,14 @@ public static class DependencyInjection
         services.AddScoped<IEmailService, EmailService>();
         services.AddScoped<IJwtProvider, JwtProvider>();
         services.AddSingleton<ITrackingTokenService, TrackingTokenService>();
+
+        // Session management — the active-session cache is process-local;
+        // when we scale to multi-instance, swap the IActiveSessionCache
+        // implementation for a Redis-backed one and the rest of the system
+        // keeps working as-is.
+        services.AddMemoryCache();
+        services.AddSingleton<IActiveSessionCache, ActiveSessionCache>();
+        services.AddScoped<ISessionAlertService, SessionAlertService>();
         services.AddScoped<IPasswordHasher, PasswordHasher>();
         services.AddScoped<IOtpService, OtpService>();
         services.AddScoped<IBlobService, AzureBlobService>();
