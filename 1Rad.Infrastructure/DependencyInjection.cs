@@ -22,6 +22,7 @@ public static class DependencyInjection
         services.AddHttpClient<IAnthropicService, AnthropicService>();
         services.AddScoped<IEmailService, EmailService>();
         services.AddScoped<IJwtProvider, JwtProvider>();
+        services.AddSingleton<ITrackingTokenService, TrackingTokenService>();
         services.AddScoped<IPasswordHasher, PasswordHasher>();
         services.AddScoped<IOtpService, OtpService>();
         services.AddScoped<IBlobService, AzureBlobService>();
