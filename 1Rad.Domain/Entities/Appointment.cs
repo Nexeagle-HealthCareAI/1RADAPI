@@ -40,6 +40,12 @@ public class Appointment : BaseEntity, IHospitalContext
     public DateTime? ScanStartedAt { get; set; }  // Status → IN_PROGRESS
     public DateTime? DeliveredAt { get; set; }    // ReportProgressStatus → DELIVERED
 
+    // SLA-bell acknowledgement — set when any user clicks "Acknowledge" in the
+    // bell dropdown. Silences the bell + desktop notification + row pulse for
+    // this case until it's delivered. Audit trail captures who acked + when.
+    public DateTime? OverdueAcknowledgedAt { get; set; }
+    public Guid? OverdueAcknowledgedBy { get; set; }
+
     public int? DailyTokenNumber { get; set; }  // Persisted token, assigned atomically on creation
     
     public string? DelayReason { get; set; }

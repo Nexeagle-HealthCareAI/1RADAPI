@@ -1,5 +1,6 @@
 using _1Rad.Application.Features.Appointments.Queries.GetAppointments;
 using _1Rad.Application.Features.Appointments.Queries.GetOverdueAppointments;
+using _1Rad.Application.Features.Appointments.Commands.AcknowledgeOverdue;
 using _1Rad.Application.Features.Appointments.Commands.CreateAppointment;
 using _1Rad.Application.Features.Appointments.Commands.UpdateAppointment;
 using _1Rad.Application.Features.Appointments.Commands.UpdateAppointmentStatus;
@@ -89,6 +90,18 @@ public class AppointmentsController : ControllerBase
         var result = await _mediator.Send(new GetOverdueAppointmentsQuery(threshold));
         return Ok(new { thresholdMinutes = threshold, items = result });
     }
+
+    // Silence the SLA bell for a specific appointment. Body: { acknowledged: bool }.
+    // Acknowledged = true marks "I've seen this, stop alerting"; false reverts.
+    // Idempotent: re-acking preserves the original acker + timestamp for audit.
+    [HttpPost("{id:guid}/overdue-ack")]
+    public async Task<IActionResult> AcknowledgeOverdue(Guid id, [FromBody] AcknowledgeOverdueBody body)
+    {
+        var ok = await _mediator.Send(new AcknowledgeOverdueCommand(id, body?.Acknowledged ?? true));
+        return ok ? Ok(new { success = true }) : NotFound();
+    }
+
+    public record AcknowledgeOverdueBody(bool Acknowledged);
 
     [HttpPost("import")]
     public async Task<IActionResult> Import(IFormFile file)

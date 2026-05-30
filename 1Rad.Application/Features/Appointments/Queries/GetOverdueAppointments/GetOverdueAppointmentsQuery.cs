@@ -15,7 +15,10 @@ public record OverdueAppointmentDto(
     string Priority,
     string Status,
     DateTime ArrivedAt,
-    int ElapsedMinutes
+    int ElapsedMinutes,
+    // Bell + row pulse hide unless this is null. Stays in the response so the
+    // dropdown can show an "Acknowledged" section for audit.
+    DateTime? AcknowledgedAt
 );
 
 public record GetOverdueAppointmentsQuery(int ThresholdMinutes) : IRequest<List<OverdueAppointmentDto>>;
@@ -64,6 +67,7 @@ public class GetOverdueAppointmentsQueryHandler
                 a.Priority,
                 a.Status,
                 ArrivedAt = a.ArrivedAt!.Value,
+                a.OverdueAcknowledgedAt,
             })
             .ToListAsync(cancellationToken);
 
@@ -75,7 +79,8 @@ public class GetOverdueAppointmentsQueryHandler
             a.Priority ?? "ROUTINE",
             a.Status ?? "BOOKED",
             a.ArrivedAt,
-            (int)Math.Round((nowUtc - a.ArrivedAt).TotalMinutes)
+            (int)Math.Round((nowUtc - a.ArrivedAt).TotalMinutes),
+            a.OverdueAcknowledgedAt
         )).ToList();
     }
 }
