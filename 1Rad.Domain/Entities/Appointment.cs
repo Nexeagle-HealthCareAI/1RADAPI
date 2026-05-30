@@ -31,6 +31,15 @@ public class Appointment : BaseEntity, IHospitalContext
     public string? TechnicianComments { get; set; }
     public Guid? TechnicianId { get; set; }
     public DateTime? ScannedAt { get; set; }
+
+    // Turnaround-time milestones — all stored UTC, all nullable, all set only
+    // on the FIRST transition into the matching status (idempotent). Drive the
+    // on-premises clock and the scan→delivery interval shown on every board,
+    // plus the >3h overdue notification system.
+    public DateTime? ArrivedAt { get; set; }      // Status → CONFIRMED
+    public DateTime? ScanStartedAt { get; set; }  // Status → IN_PROGRESS
+    public DateTime? DeliveredAt { get; set; }    // ReportProgressStatus → DELIVERED
+
     public int? DailyTokenNumber { get; set; }  // Persisted token, assigned atomically on creation
     
     public string? DelayReason { get; set; }

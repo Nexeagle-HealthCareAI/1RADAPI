@@ -1,4 +1,5 @@
 using _1Rad.Application.Features.Appointments.Queries.GetAppointments;
+using _1Rad.Application.Features.Appointments.Queries.GetOverdueAppointments;
 using _1Rad.Application.Features.Appointments.Commands.CreateAppointment;
 using _1Rad.Application.Features.Appointments.Commands.UpdateAppointment;
 using _1Rad.Application.Features.Appointments.Commands.UpdateAppointmentStatus;
@@ -6,6 +7,7 @@ using _1Rad.Application.Features.Appointments.Commands.ImportAppointments;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Configuration;
 
 using _1Rad.Application.Features.Appointments.Commands.UpdateReportProgress;
 
@@ -17,10 +19,12 @@ namespace _1RadAPI.Controllers;
 public class AppointmentsController : ControllerBase
 {
     private readonly IMediator _mediator;
+    private readonly IConfiguration _configuration;
 
-    public AppointmentsController(IMediator mediator)
+    public AppointmentsController(IMediator mediator, IConfiguration configuration)
     {
         _mediator = mediator;
+        _configuration = configuration;
     }
 
     [HttpGet]
@@ -69,6 +73,21 @@ public class AppointmentsController : ControllerBase
         if (id != command.AppointmentId) return BadRequest("Appointment ID mismatch.");
         var result = await _mediator.Send(command);
         return result ? Ok(new { success = true }) : NotFound();
+    }
+
+    // Lists patients who arrived more than `thresholdMinutes` ago and have not
+    // been delivered. The threshold defaults to Worklist:OverdueThresholdMinutes
+    // in appsettings (180 = 3h) but accepts a query override for ops dashboards
+    // that want a tighter SLA view. Returns longest-waiting first so the
+    // bell-icon dropdown can show the most urgent at the top.
+    [HttpGet("overdue")]
+    public async Task<IActionResult> GetOverdue([FromQuery] int? thresholdMinutes)
+    {
+        var threshold = thresholdMinutes
+            ?? _configuration.GetValue<int?>("Worklist:OverdueThresholdMinutes")
+            ?? 180;
+        var result = await _mediator.Send(new GetOverdueAppointmentsQuery(threshold));
+        return Ok(new { thresholdMinutes = threshold, items = result });
     }
 
     [HttpPost("import")]

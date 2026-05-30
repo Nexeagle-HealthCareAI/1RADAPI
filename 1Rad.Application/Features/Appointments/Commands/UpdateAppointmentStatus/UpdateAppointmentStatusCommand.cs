@@ -128,6 +128,16 @@ public class UpdateAppointmentStatusCommandHandler : IRequestHandler<UpdateAppoi
             }
         }
 
+        // Turnaround-time milestones — set only on the FIRST transition into
+        // each status. The null-guard means a status correction (e.g. tech
+        // bumps back to CONFIRMED) doesn't reset the arrival clock, and a
+        // double-click of "Mark Arrived" doesn't move the timestamp forward.
+        // UtcNow keeps the DB timezone-clean; the frontend renders in
+        // Asia/Kolkata like the rest of the app.
+        var nowUtc = DateTime.UtcNow;
+        if (newStatus == "CONFIRMED"   && appointment.ArrivedAt     == null) appointment.ArrivedAt     = nowUtc;
+        if (newStatus == "IN_PROGRESS" && appointment.ScanStartedAt == null) appointment.ScanStartedAt = nowUtc;
+
         // Normalize to uppercase to match backend-set statuses (REPORTED, SCANNED, IN_PROGRESS, etc.)
         appointment.Status = newStatus;
         await _context.SaveChangesAsync(cancellationToken);

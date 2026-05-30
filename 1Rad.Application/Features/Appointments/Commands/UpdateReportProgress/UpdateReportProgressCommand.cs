@@ -26,6 +26,15 @@ public class UpdateReportProgressCommandHandler : IRequestHandler<UpdateReportPr
 
         if (appointment == null) return false;
 
+        // Capture the delivery timestamp on the FIRST transition into
+        // DELIVERED. Idempotent on purpose — re-marking as delivered (or a
+        // future correction) won't overwrite the original delivery time, so
+        // turnaround analytics stay honest.
+        if (request.ProgressStatus == "DELIVERED" && appointment.DeliveredAt == null)
+        {
+            appointment.DeliveredAt = DateTime.UtcNow;
+        }
+
         appointment.ReportProgressStatus = request.ProgressStatus;
         appointment.DelayReason = request.DelayReason;
 

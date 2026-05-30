@@ -101,7 +101,10 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
                     x.Appointment.DailyTokenNumber,
                     x.Appointment.DelayReason,
                     x.Appointment.ReportProgressStatus ?? "NOT_STARTED",
-                    x.Appointment.Priority ?? "ROUTINE"
+                    x.Appointment.Priority ?? "ROUTINE",
+                    x.Appointment.ArrivedAt,
+                    x.Appointment.ScanStartedAt,
+                    x.Appointment.DeliveredAt
                 ))
                 .ToListAsync(cancellationToken);
 

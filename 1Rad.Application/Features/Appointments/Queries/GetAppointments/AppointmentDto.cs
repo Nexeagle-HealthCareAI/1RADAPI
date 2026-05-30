@@ -29,6 +29,10 @@ public record AppointmentDto(
     string? DelayReason = null,
     string ReportProgressStatus = "NOT_STARTED",
     // STAT / URGENT / ROUTINE — drives the worklist sort + chip colour.
-    string Priority = "ROUTINE"
+    string Priority = "ROUTINE",
+    // Turnaround-time milestones (UTC, all nullable).
+    DateTime? ArrivedAt = null,
+    DateTime? ScanStartedAt = null,
+    DateTime? DeliveredAt = null
 );
 
