@@ -104,7 +104,9 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
                     x.Appointment.Priority ?? "ROUTINE",
                     x.Appointment.ArrivedAt,
                     x.Appointment.ScanStartedAt,
-                    x.Appointment.DeliveredAt
+                    x.Appointment.DeliveredAt,
+                    x.Appointment.LatestCommentAuthorName,
+                    x.Appointment.LatestCommentAt
                 ))
                 .ToListAsync(cancellationToken);
 

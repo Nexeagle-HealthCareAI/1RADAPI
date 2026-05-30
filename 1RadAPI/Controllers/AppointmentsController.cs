@@ -1,6 +1,8 @@
 using _1Rad.Application.Features.Appointments.Queries.GetAppointments;
 using _1Rad.Application.Features.Appointments.Queries.GetOverdueAppointments;
+using _1Rad.Application.Features.Appointments.Queries.GetAppointmentComments;
 using _1Rad.Application.Features.Appointments.Commands.AcknowledgeOverdue;
+using _1Rad.Application.Features.Appointments.Commands.AddAppointmentComment;
 using _1Rad.Application.Features.Appointments.Commands.CreateAppointment;
 using _1Rad.Application.Features.Appointments.Commands.UpdateAppointment;
 using _1Rad.Application.Features.Appointments.Commands.UpdateAppointmentStatus;
@@ -102,6 +104,30 @@ public class AppointmentsController : ControllerBase
     }
 
     public record AcknowledgeOverdueBody(bool Acknowledged);
+
+    // Append-only comment trail. POST adds, GET returns timeline newest-first.
+    // Appointment.DelayReason is auto-updated to the latest comment server-
+    // side so worklist rows can render the "current note" without a join.
+    [HttpPost("{id:guid}/comments")]
+    public async Task<IActionResult> AddComment(Guid id, [FromBody] AddCommentBody body)
+    {
+        if (body == null || string.IsNullOrWhiteSpace(body.Body))
+            return BadRequest("Comment body is required.");
+
+        var result = await _mediator.Send(new AddAppointmentCommentCommand(id, body.Body));
+        return result != null
+            ? Ok(new { success = true, appointmentCommentId = result.AppointmentCommentId, createdAt = result.CreatedAt })
+            : NotFound();
+    }
+
+    public record AddCommentBody(string Body);
+
+    [HttpGet("{id:guid}/comments")]
+    public async Task<IActionResult> GetComments(Guid id)
+    {
+        var items = await _mediator.Send(new GetAppointmentCommentsQuery(id));
+        return Ok(new { success = true, items });
+    }
 
     [HttpPost("import")]
     public async Task<IActionResult> Import(IFormFile file)

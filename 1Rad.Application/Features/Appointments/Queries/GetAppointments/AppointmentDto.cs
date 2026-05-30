@@ -33,6 +33,10 @@ public record AppointmentDto(
     // Turnaround-time milestones (UTC, all nullable).
     DateTime? ArrivedAt = null,
     DateTime? ScanStartedAt = null,
-    DateTime? DeliveredAt = null
+    DateTime? DeliveredAt = null,
+    // Denormalised latest-comment byline so worklist rows can show
+    // "by {name} · {when}" without joining Users.
+    string? LatestCommentAuthorName = null,
+    DateTime? LatestCommentAt = null
 );
 

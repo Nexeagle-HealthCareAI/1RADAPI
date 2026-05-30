@@ -32,6 +32,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<Patient> Patients => Set<Patient>();
     public DbSet<Referrer> Referrers => Set<Referrer>();
     public DbSet<Appointment> Appointments => Set<Appointment>();
+    public DbSet<AppointmentComment> AppointmentComments => Set<AppointmentComment>();
     public DbSet<ServiceCharge> ServiceCharges => Set<ServiceCharge>();
     public DbSet<Invoice> Invoices => Set<Invoice>();
     public DbSet<Payment> Payments => Set<Payment>();
@@ -209,12 +210,12 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.ToTable("Appointments", "dbo");
             entity.HasKey(e => e.AppointmentId);
             entity.Property(e => e.DisplayId).HasMaxLength(50);
-            entity.Property(e => e.PatientName).IsRequired().HasMaxLength(255); 
+            entity.Property(e => e.PatientName).IsRequired().HasMaxLength(255);
             entity.Property(e => e.Service).HasMaxLength(255);
             entity.Property(e => e.Modality).HasMaxLength(50);
             entity.Property(e => e.Type).HasMaxLength(50);
             entity.Property(e => e.Status).HasMaxLength(50);
-            
+
             entity.HasOne(e => e.Patient)
                 .WithMany()
                 .HasForeignKey(e => e.PatientId)
@@ -223,6 +224,24 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.HasOne(e => e.Hospital)
                 .WithMany()
                 .HasForeignKey(e => e.HospitalId);
+        });
+
+        // AppointmentComment Configuration — append-only audit trail for an
+        // appointment. Cascade delete from Appointment so disposed records
+        // don't leave orphan comments behind.
+        modelBuilder.Entity<AppointmentComment>(entity =>
+        {
+            entity.ToTable("AppointmentComments", "dbo");
+            entity.HasKey(e => e.AppointmentCommentId);
+            entity.Property(e => e.Body).IsRequired().HasMaxLength(2000);
+
+            entity.HasOne(e => e.Appointment)
+                .WithMany()
+                .HasForeignKey(e => e.AppointmentId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasIndex(e => new { e.AppointmentId, e.CreatedAt })
+                .HasDatabaseName("IX_AppointmentComments_AppointmentId_CreatedAt");
         });
 
         // ServiceCharge Configuration

@@ -49,6 +49,13 @@ public class Appointment : BaseEntity, IHospitalContext
     public int? DailyTokenNumber { get; set; }  // Persisted token, assigned atomically on creation
     
     public string? DelayReason { get; set; }
+    // Denormalised "latest comment" author + time. Kept in sync by
+    // AddAppointmentCommentCommand so the worklist can render the byline
+    // inline without joining Users or running a per-row subquery against
+    // AppointmentComments. Stale-by-design: if the user later renames, this
+    // snapshot stays — that's the right behaviour for audit.
+    public string? LatestCommentAuthorName { get; set; }
+    public DateTime? LatestCommentAt { get; set; }
     public string ReportProgressStatus { get; set; } = "NOT_STARTED";
     
     public Guid HospitalId { get; set; }
