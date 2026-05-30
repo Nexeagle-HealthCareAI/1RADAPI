@@ -129,6 +129,18 @@ public class AppointmentsController : ControllerBase
         return Ok(new { success = true, items });
     }
 
+    // Bulk fetch for the operations Excel export. POST (not GET) so the
+    // appointmentIds list isn't URL-length-limited at ~2KB. Server caps at 500.
+    [HttpPost("comments/bulk")]
+    public async Task<IActionResult> GetCommentsBulk([FromBody] CommentsBulkBody body)
+    {
+        var ids = body?.AppointmentIds ?? new List<Guid>();
+        var items = await _mediator.Send(new GetCommentsForAppointmentsQuery(ids));
+        return Ok(new { success = true, items });
+    }
+
+    public record CommentsBulkBody(List<Guid> AppointmentIds);
+
     [HttpPost("import")]
     public async Task<IActionResult> Import(IFormFile file)
     {
