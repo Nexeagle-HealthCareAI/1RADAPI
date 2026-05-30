@@ -19,7 +19,10 @@ public record CreateAppointmentCommand(
     string ReferredContact,
     string Notes,
     decimal Amount = 0,
-    decimal? ReferralCutValue = null
+    decimal? ReferralCutValue = null,
+    // Clinical urgency: STAT / URGENT / ROUTINE. Drives worklist sort order.
+    // Front desk picks this when booking; default ROUTINE.
+    string Priority = "ROUTINE"
 ) : IRequest<Guid>;
 
 
@@ -60,6 +63,7 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
             Modality = request.Modality,
             DateTime = request.DateTime,
             Type = request.Type,
+            Priority = NormalizePriority(request.Priority),
             Doctor = request.Doctor,
             Status = "scheduled",
             ReferredBy = request.ReferredBy,
@@ -187,5 +191,19 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
         }
 
         return appointment.AppointmentId;
+    }
+
+    // Whitelist + normalise — guards the DB from arbitrary strings reaching
+    // the Priority column. Unknown / null / blank values fall back to ROUTINE.
+    private static string NormalizePriority(string? raw)
+    {
+        var v = (raw ?? string.Empty).Trim().ToUpperInvariant();
+        return v switch
+        {
+            "STAT"    => "STAT",
+            "URGENT"  => "URGENT",
+            "ROUTINE" => "ROUTINE",
+            _         => "ROUTINE",
+        };
     }
 }

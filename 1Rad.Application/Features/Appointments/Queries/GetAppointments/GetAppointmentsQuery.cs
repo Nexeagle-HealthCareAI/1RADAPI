@@ -60,9 +60,16 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
                 }
             }
 
-            // Project to DTO directly in the query to avoid entity materialization issues
+            // Project to DTO directly in the query to avoid entity materialization issues.
+            // Worklist sort: STAT (0) → URGENT (1) → ROUTINE (2), then DateTime
+            // ASC. Translated to a CASE in SQL via the IX_Appointments_HospitalId_
+            // Priority_DateTime index so STATs float to the top regardless of
+            // their scheduled time.
             var appointments = await query
-                .OrderBy(x => x.Appointment.DateTime)
+                .OrderBy(x =>
+                    x.Appointment.Priority == "STAT"   ? 0 :
+                    x.Appointment.Priority == "URGENT" ? 1 : 2)
+                .ThenBy(x => x.Appointment.DateTime)
                 .Select(x => new AppointmentDto(
                     x.Appointment.AppointmentId,
                     x.Appointment.DisplayId ?? string.Empty,
@@ -93,7 +100,8 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
                         .FirstOrDefault(),
                     x.Appointment.DailyTokenNumber,
                     x.Appointment.DelayReason,
-                    x.Appointment.ReportProgressStatus ?? "NOT_STARTED"
+                    x.Appointment.ReportProgressStatus ?? "NOT_STARTED",
+                    x.Appointment.Priority ?? "ROUTINE"
                 ))
                 .ToListAsync(cancellationToken);
 

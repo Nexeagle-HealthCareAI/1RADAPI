@@ -17,6 +17,11 @@ public class Appointment : BaseEntity, IHospitalContext
     public string? Modality { get; set; } // X-RAY, MRI, etc.
     public DateTime DateTime { get; set; }
     public string? Type { get; set; } // BOOKED, EMERGENCY, ROUTINE
+    // Clinical urgency, independent of Type/Status. STAT > URGENT > ROUTINE
+    // drives the worklist sort order so STATs surface at the top regardless
+    // of their scheduled time. Editable after booking (front desk can bump a
+    // walk-in trauma to STAT). Default ROUTINE.
+    public string Priority { get; set; } = "ROUTINE";
     public string? Doctor { get; set; }
     public string? Status { get; set; } // BOOKED, ARRIVED, IN_PROGRESS, COMPLETED, CANCELLED
     

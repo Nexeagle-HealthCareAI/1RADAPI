@@ -20,7 +20,10 @@ public record UpdateAppointmentCommand(
     string? Mobile = null,
     string? PatientAge = null,
     decimal? Amount = null,
-    decimal? ReferralCutValue = null
+    decimal? ReferralCutValue = null,
+    // Clinical urgency: STAT / URGENT / ROUTINE. Null = leave unchanged.
+    // Front desk / doctor can bump a walk-in trauma to STAT post-booking.
+    string? Priority = null
 ) : IRequest<bool>;
 
 
@@ -60,6 +63,16 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         appointment.Doctor = request.Doctor;
         appointment.Notes = request.Notes;
         appointment.ReferredBy = request.ReferredBy;
+
+        // Update priority only if the client explicitly sent one. Null leaves
+        // the existing value alone so a partial edit can't accidentally
+        // downgrade a STAT case to the default.
+        if (!string.IsNullOrWhiteSpace(request.Priority))
+        {
+            var normalised = (request.Priority ?? string.Empty).Trim().ToUpperInvariant();
+            if (normalised is "STAT" or "URGENT" or "ROUTINE")
+                appointment.Priority = normalised;
+        }
 
         // Update denormalized patient info if provided
         if (!string.IsNullOrEmpty(request.PatientName)) appointment.PatientName = request.PatientName;

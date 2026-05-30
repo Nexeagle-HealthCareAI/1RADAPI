@@ -63,7 +63,8 @@ public class GetAppointmentByIdQueryHandler : IRequestHandler<GetAppointmentById
                     .FirstOrDefault(),
                 x.Appointment.DailyTokenNumber,
                 x.Appointment.DelayReason,
-                x.Appointment.ReportProgressStatus ?? "NOT_STARTED"
+                x.Appointment.ReportProgressStatus ?? "NOT_STARTED",
+                x.Appointment.Priority ?? "ROUTINE"
             ))
 
             .FirstOrDefaultAsync(cancellationToken);
