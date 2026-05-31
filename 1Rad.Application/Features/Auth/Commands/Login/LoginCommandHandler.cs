@@ -109,8 +109,20 @@ public class LoginCommandHandler : IRequestHandler<LoginCommand, LoginResponse>
                 return new LoginResponse { Success = false, Error = "Account misconfiguration: No authorized hospitals found." };
             }
 
-            var activeMapping = user.HospitalMappings.FirstOrDefault(m => m.IsDefault) 
-                                ?? user.HospitalMappings.First();
+            // Tiebreak by AssignedAt so users with multiple mappings land in
+            // the same hospital each login (without this, EF's default order
+            // is non-deterministic and the active hospital can flip between
+            // sessions when no single mapping is marked IsDefault, or when
+            // — as a legacy bug — more than one row is). Migration 56 adds
+            // a unique partial index that prevents the double-default case,
+            // but this ordering also handles old data and the no-default
+            // case cleanly.
+            var orderedMappings = user.HospitalMappings
+                .OrderBy(m => m.AssignedAt)
+                .ThenBy(m => m.MappingId)
+                .ToList();
+            var activeMapping = orderedMappings.FirstOrDefault(m => m.IsDefault)
+                                ?? orderedMappings.First();
 
             var authorizedHospitalIds = user.HospitalMappings.Select(m => m.HospitalId).ToList();
 
