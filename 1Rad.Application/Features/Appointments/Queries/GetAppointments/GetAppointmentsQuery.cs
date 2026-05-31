@@ -4,7 +4,19 @@ using Microsoft.EntityFrameworkCore;
 
 namespace _1Rad.Application.Features.Appointments.Queries.GetAppointments;
 
-public record GetAppointmentsQuery(string? SearchQuery = null, string? Status = null) : IRequest<List<AppointmentDto>>;
+// UpdatedAfter + IncludeDeleted are the sync-engine knobs added in Phase B1.
+//   • UpdatedAfter: returns only rows whose UpdatedAt > value. Lets a client
+//     that pulled at T+0 ask "what's changed since then" at T+30s and get
+//     only the delta — not the full worklist every time.
+//   • IncludeDeleted: by default the soft-deleted rows are hidden so the
+//     existing online UX is unchanged. The sync engine flips this on so it
+//     can apply tombstones to the local cache.
+public record GetAppointmentsQuery(
+    string? SearchQuery = null,
+    string? Status = null,
+    DateTime? UpdatedAfter = null,
+    bool IncludeDeleted = false
+) : IRequest<List<AppointmentDto>>;
 
 public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery, List<AppointmentDto>>
 {
@@ -39,6 +51,24 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
             if (!string.IsNullOrEmpty(request.Status) && request.Status != "ALL")
             {
                 query = query.Where(x => x.Appointment.Status == request.Status);
+            }
+
+            // Tombstone filter: hide soft-deleted rows from the everyday
+            // worklist UI, surface them to the sync engine when it asks.
+            if (!request.IncludeDeleted)
+            {
+                query = query.Where(x => x.Appointment.DeletedAt == null);
+            }
+
+            // Delta-fetch — runs against IX_Appointments_Hospital_UpdatedAt
+            // (migration 47) so this is a small index range scan even at
+            // worklists with years of history. The frontend Sync Engine
+            // sends the value it received as the highest UpdatedAt from
+            // the previous pull, NOT its local clock.
+            if (request.UpdatedAfter.HasValue)
+            {
+                var since = request.UpdatedAfter.Value;
+                query = query.Where(x => x.Appointment.UpdatedAt > since);
             }
 
 
@@ -106,7 +136,9 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
                     x.Appointment.ScanStartedAt,
                     x.Appointment.DeliveredAt,
                     x.Appointment.LatestCommentAuthorName,
-                    x.Appointment.LatestCommentAt
+                    x.Appointment.LatestCommentAt,
+                    x.Appointment.UpdatedAt,
+                    x.Appointment.DeletedAt
                 ))
                 .ToListAsync(cancellationToken);
 

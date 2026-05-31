@@ -17,7 +17,13 @@ public class Patient : BaseEntity, IHospitalContext
     public Guid? ReferrerId { get; set; }
     public Guid HospitalId { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
-    
+
+    // Sync engine fields (Phase B1 Slice 2). UpdatedAt is stamped by the
+    // SaveChanges hook in ApplicationDbContext on every write; DeletedAt is
+    // a soft-delete tombstone so the client can purge its local cache.
+    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime? DeletedAt { get; set; }
+
     // Navigation
     public Hospital Hospital { get; set; } = null!;
     public Referrer? Referrer { get; set; }

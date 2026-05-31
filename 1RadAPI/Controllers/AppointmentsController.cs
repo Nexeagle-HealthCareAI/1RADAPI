@@ -31,9 +31,13 @@ public class AppointmentsController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<IActionResult> Get([FromQuery] string? search, [FromQuery] string? status)
+    public async Task<IActionResult> Get(
+        [FromQuery] string? search,
+        [FromQuery] string? status,
+        [FromQuery] DateTime? updatedAfter,
+        [FromQuery] bool includeDeleted = false)
     {
-        var result = await _mediator.Send(new GetAppointmentsQuery(search, status));
+        var result = await _mediator.Send(new GetAppointmentsQuery(search, status, updatedAfter, includeDeleted));
         return Ok(result);
     }
 

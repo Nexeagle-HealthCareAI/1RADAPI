@@ -826,6 +826,35 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
 
     public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
     {
+        // Sync foundations: keep Appointment.UpdatedAt fresh on every write
+        // automatically. Without this hook each handler would have to set
+        // it manually and one missed handler would silently break the
+        // delta-fetch sync engine (rows would never appear "changed").
+        // Done before base.SaveChangesAsync so the new value persists in
+        // the same transaction.
+        var nowUtc = DateTime.UtcNow;
+        foreach (var entry in ChangeTracker.Entries<Appointment>())
+        {
+            if (entry.State == EntityState.Added || entry.State == EntityState.Modified)
+            {
+                entry.Entity.UpdatedAt = nowUtc;
+            }
+        }
+        foreach (var entry in ChangeTracker.Entries<Patient>())
+        {
+            if (entry.State == EntityState.Added || entry.State == EntityState.Modified)
+            {
+                entry.Entity.UpdatedAt = nowUtc;
+            }
+        }
+        foreach (var entry in ChangeTracker.Entries<DiagnosticReport>())
+        {
+            if (entry.State == EntityState.Added || entry.State == EntityState.Modified)
+            {
+                entry.Entity.UpdatedAt = nowUtc;
+            }
+        }
+
         var result = await base.SaveChangesAsync(cancellationToken);
 
         await DispatchDomainEvents(cancellationToken);

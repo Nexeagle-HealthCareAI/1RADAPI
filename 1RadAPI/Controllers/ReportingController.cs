@@ -6,6 +6,7 @@ using _1Rad.Application.Features.Reporting.Commands.UpsertKeyword;
 using _1Rad.Application.Features.Reporting.Commands.UpsertTemplate;
 using _1Rad.Application.Features.Reporting.Queries.GetKeywords;
 using _1Rad.Application.Features.Reporting.Queries.GetReport;
+using _1Rad.Application.Features.Reporting.Queries.GetReportsDelta;
 using _1Rad.Application.Features.Reporting.Queries.GetTemplates;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
@@ -175,6 +176,20 @@ namespace _1RadAPI.Controllers
             {
                 return StatusCode(500, new { success = false, error = $"Failed to retrieve report: {ex.Message}" });
             }
+        }
+
+        /// <summary>
+        /// Bulk delta-pull of diagnostic reports for the Phase B1 offline cache.
+        /// Returns a flat list (no nested fields) filtered by UpdatedAt > updatedAfter.
+        /// Pass includeDeleted=true to receive tombstones.
+        /// </summary>
+        [HttpGet("reports")]
+        public async Task<IActionResult> GetReportsDelta(
+            [FromQuery] DateTime? updatedAfter,
+            [FromQuery] bool includeDeleted = false)
+        {
+            var result = await _mediator.Send(new GetReportsDeltaQuery(updatedAfter, includeDeleted));
+            return Ok(result);
         }
 
         /// <summary>

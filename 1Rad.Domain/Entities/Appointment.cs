@@ -46,6 +46,17 @@ public class Appointment : BaseEntity, IHospitalContext
     public DateTime? OverdueAcknowledgedAt { get; set; }
     public Guid? OverdueAcknowledgedBy { get; set; }
 
+    // ── Sync foundations (migration 47) ──────────────────────────────────────
+    // Wall-clock UTC of the last save touching this row. The local-first
+    // sync engine reads this to do delta pulls (?updatedAfter=...). EF
+    // SaveChanges interceptor maintains it so individual handlers don't
+    // have to remember.
+    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+
+    // Soft-delete tombstone. NULL = live. When non-null the row exists for
+    // sync delta purposes only and is hidden from normal GETs.
+    public DateTime? DeletedAt { get; set; }
+
     public int? DailyTokenNumber { get; set; }  // Persisted token, assigned atomically on creation
     
     public string? DelayReason { get; set; }

@@ -37,6 +37,12 @@ public record AppointmentDto(
     // Denormalised latest-comment byline so worklist rows can show
     // "by {name} · {when}" without joining Users.
     string? LatestCommentAuthorName = null,
-    DateTime? LatestCommentAt = null
+    DateTime? LatestCommentAt = null,
+    // Sync engine fields. UpdatedAt drives "what's the high-water mark
+    // I should send as ?updatedAfter= on the next pull?". DeletedAt
+    // makes a tombstone visible to the client so it can purge its
+    // local cache.
+    DateTime? UpdatedAt = null,
+    DateTime? DeletedAt = null
 );
 

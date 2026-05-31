@@ -51,6 +51,11 @@ namespace _1Rad.Domain.Entities
         // local autosaved draft is newer/older than the server copy
         // (drives the crash-recovery prompt in ReportingPage).
         public DateTime? UpdatedAt { get; set; }
+        // Tombstone for the Phase B1 sync engine. Soft-deleted reports are
+        // hidden from regular handlers (filter is applied in the sync delta
+        // query, not here) but exposed to the client as a tombstone so the
+        // local cache can purge them.
+        public DateTime? DeletedAt { get; set; }
         public string ReportPdfUrl { get; set; } = string.Empty;
         public string ReportingMode { get; set; } = "Structured"; // Structured or Narrative Editor
         public int? FieldCount { get; set; } = 0;

@@ -69,7 +69,9 @@ public class GetAppointmentByIdQueryHandler : IRequestHandler<GetAppointmentById
                 x.Appointment.ScanStartedAt,
                 x.Appointment.DeliveredAt,
                 x.Appointment.LatestCommentAuthorName,
-                x.Appointment.LatestCommentAt
+                x.Appointment.LatestCommentAt,
+                x.Appointment.UpdatedAt,
+                x.Appointment.DeletedAt
             ))
 
             .FirstOrDefaultAsync(cancellationToken);

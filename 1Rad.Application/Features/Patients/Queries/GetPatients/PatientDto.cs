@@ -11,5 +11,10 @@ public record PatientDto(
     string Address,
     string PatientIdentifier,
     string SourceOfInfo,
-    DateTime RegisteredAt
+    DateTime RegisteredAt,
+    // Sync engine fields (Phase B1 Slice 2). UpdatedAt drives the client's
+    // ?updatedAfter= high-water mark; DeletedAt is the tombstone marker so
+    // the local cache can purge cancelled / merged records.
+    DateTime? UpdatedAt = null,
+    DateTime? DeletedAt = null
 );
