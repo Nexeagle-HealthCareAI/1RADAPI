@@ -71,12 +71,37 @@ public class GetAppointmentByIdQueryHandler : IRequestHandler<GetAppointmentById
                 x.Appointment.LatestCommentAuthorName,
                 x.Appointment.LatestCommentAt,
                 x.Appointment.UpdatedAt,
-                x.Appointment.DeletedAt
+                x.Appointment.DeletedAt,
+                // Services is materialised by the second query below;
+                // typed null here keeps EF's expression tree happy.
+                (IReadOnlyList<AppointmentServiceDto>?)null
             ))
 
             .FirstOrDefaultAsync(cancellationToken);
 
+        if (appointment == null) return null;
 
-        return appointment;
+        // Attach service lines so the response shape matches GetAppointments.
+        var lines = await _context.AppointmentServices
+            .AsNoTracking()
+            .Where(s => s.AppointmentId == appointment.AppointmentId && s.DeletedAt == null)
+            .OrderBy(s => s.UpdatedAt)
+            .Select(s => new AppointmentServiceDto(
+                s.Id,
+                s.ServiceName,
+                s.Modality,
+                s.Amount,
+                s.ReferralCutValue,
+                s.Status,
+                s.ScanStartedAt,
+                s.ScanCompletedAt,
+                s.DeliveredAt,
+                s.TechnicianId,
+                s.ServiceChargeId,
+                s.UpdatedAt
+            ))
+            .ToListAsync(cancellationToken);
+
+        return appointment with { Services = lines };
     }
 }

@@ -162,14 +162,17 @@ namespace _1RadAPI.Controllers
         // --- REPORT PERSISTENCE ---
         
         /// <summary>
-        /// Get diagnostic report by appointment ID
+        /// Get diagnostic report by appointment ID. Pass ?serviceId= to
+        /// scope the lookup to a specific AppointmentService line — the
+        /// multi-service rollout path. When omitted the endpoint
+        /// behaves as it always has (single-report-per-appointment).
         /// </summary>
         [HttpGet("report/{appointmentId}")]
-        public async Task<IActionResult> GetReport(string appointmentId)
+        public async Task<IActionResult> GetReport(string appointmentId, [FromQuery] Guid? serviceId = null)
         {
             try
             {
-                var query = new GetReportQuery { AppointmentId = appointmentId };
+                var query = new GetReportQuery { AppointmentId = appointmentId, AppointmentServiceId = serviceId };
                 var report = await _mediator.Send(query);
                 return Ok(new { success = true, data = report });
             }

@@ -9,6 +9,14 @@ namespace _1Rad.Application.Features.Reporting.Commands.SaveReport;
 public record SaveReportCommand : IRequest<DiagnosticReport>
 {
     public string AppointmentId { get; init; } = string.Empty;
+    // Multi-service rollout (step 6). When provided, the upsert is keyed
+    // to this specific AppointmentService row so different services on
+    // the same visit (X-ray + CT + USG) each get their own report with
+    // their own RowVersion — two doctors writing CT and USG reports for
+    // the same visit no longer OCC-conflict on the single appointment-
+    // level report row. NULL = legacy single-report-per-appointment
+    // behaviour (the upsert ignores the column, mirroring v1 clients).
+    public Guid? AppointmentServiceId { get; init; }
     public Guid? TemplateId { get; init; }
     public string Findings { get; init; } = string.Empty;
     public string Impression { get; init; } = string.Empty;
@@ -66,9 +74,34 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
             throw new UnauthorizedAccessException("You do not have permission to create a report for this appointment.");
         }
 
-        var report = await _context.DiagnosticReports
-            .Include(r => r.Fields)
-            .FirstOrDefaultAsync(r => r.AppointmentId == appointment.AppointmentId, cancellationToken);
+        // Upsert keyed by (AppointmentId, AppointmentServiceId). The
+        // service-scoped lookup is the multi-service path; the fallback
+        // (no AppointmentServiceId in the request OR no per-service
+        // report yet) keeps v1 behaviour — find the first existing
+        // report on the visit, ignoring service Id. This means an old
+        // PWA build that doesn't know about services can still write
+        // to the same row it always did.
+        DiagnosticReport? report;
+        if (request.AppointmentServiceId.HasValue)
+        {
+            report = await _context.DiagnosticReports
+                .Include(r => r.Fields)
+                .FirstOrDefaultAsync(r =>
+                    r.AppointmentId == appointment.AppointmentId &&
+                    r.AppointmentServiceId == request.AppointmentServiceId,
+                    cancellationToken);
+        }
+        else
+        {
+            // v1 path: first report on the visit (whichever service it
+            // happens to belong to). Preserves single-service behaviour
+            // for legacy clients.
+            report = await _context.DiagnosticReports
+                .Include(r => r.Fields)
+                .Where(r => r.AppointmentId == appointment.AppointmentId)
+                .OrderBy(r => r.CreatedAt)
+                .FirstOrDefaultAsync(cancellationToken);
+        }
 
         if (report == null)
         {
@@ -77,6 +110,7 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
             {
                 Id = Guid.NewGuid(),
                 AppointmentId = appointment.AppointmentId,
+                AppointmentServiceId = request.AppointmentServiceId,
                 DoctorId = doctorId,
                 HospitalId = appointment.HospitalId,
                 TemplateId = request.TemplateId,
@@ -159,10 +193,58 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
             }
         }
 
-        // If finalized, update the appointment status
+        // If finalized, update the appointment status and the per-service
+        // status. When the report is scoped to a specific
+        // AppointmentService row (multi-service rollout), bump that row
+        // to "REPORTED" too so the workflow + progress badge reflects
+        // it. We only set the parent status to "REPORTED" when every
+        // live service on the visit has a finalised report — otherwise
+        // the worklist would prematurely flip a 1-of-3-reported visit
+        // into the green-finalised state.
         if (request.IsFinalized)
         {
-            appointment.Status = "REPORTED";
+            if (request.AppointmentServiceId.HasValue)
+            {
+                var thisService = await _context.AppointmentServices
+                    .FirstOrDefaultAsync(s =>
+                        s.Id == request.AppointmentServiceId.Value &&
+                        s.AppointmentId == appointment.AppointmentId,
+                        cancellationToken);
+                if (thisService != null && thisService.Status != "DELIVERED")
+                {
+                    thisService.Status = "REPORTED";
+                }
+
+                var liveSiblings = await _context.AppointmentServices
+                    .Where(s => s.AppointmentId == appointment.AppointmentId
+                             && s.DeletedAt == null
+                             && s.Id != request.AppointmentServiceId.Value)
+                    .Select(s => s.Id)
+                    .ToListAsync(cancellationToken);
+
+                if (liveSiblings.Count == 0)
+                {
+                    appointment.Status = "REPORTED";
+                }
+                else
+                {
+                    var siblingFinalisedCount = await _context.DiagnosticReports
+                        .Where(r => r.AppointmentId == appointment.AppointmentId
+                                 && r.AppointmentServiceId.HasValue
+                                 && liveSiblings.Contains(r.AppointmentServiceId.Value)
+                                 && r.IsFinalized)
+                        .CountAsync(cancellationToken);
+                    if (siblingFinalisedCount == liveSiblings.Count)
+                    {
+                        appointment.Status = "REPORTED";
+                    }
+                }
+            }
+            else
+            {
+                // v1 path / single-service visit — same behaviour as before.
+                appointment.Status = "REPORTED";
+            }
         }
 
         try
@@ -181,9 +263,29 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
             //      edits win deliberately.
             // (Reload as no-tracking on a fresh query so we don't see the
             //  in-flight tracked entity state.)
-            var canonical = await _context.DiagnosticReports
-                .AsNoTracking()
-                .FirstOrDefaultAsync(r => r.AppointmentId == appointment.AppointmentId, cancellationToken);
+            // Reload the canonical state for the conflict reply. Match
+            // the lookup the upsert used so the OCC body carries the
+            // server's view of THIS specific service's report (or the
+            // visit-level report when the client didn't scope by
+            // service).
+            DiagnosticReport? canonical;
+            if (request.AppointmentServiceId.HasValue)
+            {
+                canonical = await _context.DiagnosticReports
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(r =>
+                        r.AppointmentId == appointment.AppointmentId &&
+                        r.AppointmentServiceId == request.AppointmentServiceId,
+                        cancellationToken);
+            }
+            else
+            {
+                canonical = await _context.DiagnosticReports
+                    .AsNoTracking()
+                    .Where(r => r.AppointmentId == appointment.AppointmentId)
+                    .OrderBy(r => r.CreatedAt)
+                    .FirstOrDefaultAsync(cancellationToken);
+            }
             throw new OccConflictException(canonical!,
                 "This report was updated by another user since you opened it.");
         }

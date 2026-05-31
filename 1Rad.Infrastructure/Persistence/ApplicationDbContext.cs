@@ -32,6 +32,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<Patient> Patients => Set<Patient>();
     public DbSet<Referrer> Referrers => Set<Referrer>();
     public DbSet<Appointment> Appointments => Set<Appointment>();
+    public DbSet<AppointmentService> AppointmentServices => Set<AppointmentService>();
     public DbSet<AppointmentComment> AppointmentComments => Set<AppointmentComment>();
     public DbSet<ServiceCharge> ServiceCharges => Set<ServiceCharge>();
     public DbSet<Invoice> Invoices => Set<Invoice>();
@@ -245,6 +246,52 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.RowVersion).IsRowVersion();
         });
 
+        // AppointmentService Configuration — per-line-item child of an
+        // Appointment. A single visit may carry many services (X-ray + CT
+        // + USG); each gets one row here with its own status, TAT
+        // milestones, amount, and downstream report/study/commission
+        // attachments. Cascade-delete from the parent Appointment so
+        // disposing a booking doesn't leave orphan service lines behind.
+        modelBuilder.Entity<AppointmentService>(entity =>
+        {
+            entity.ToTable("AppointmentServices", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.ServiceName).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.Modality).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.Status).IsRequired().HasMaxLength(30);
+            entity.Property(e => e.Amount).HasPrecision(18, 2);
+            entity.Property(e => e.ReferralCutValue).HasPrecision(18, 2);
+            entity.Property(e => e.TechnicianComments).HasMaxLength(1000);
+
+            entity.HasOne(e => e.Appointment)
+                .WithMany()
+                .HasForeignKey(e => e.AppointmentId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Hospital)
+                .WithMany()
+                .HasForeignKey(e => e.HospitalId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(e => e.ServiceCharge)
+                .WithMany()
+                .HasForeignKey(e => e.ServiceChargeId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            // Sync delta probe — same shape as Appointments / Invoices /
+            // ReferralCommissions so the SyncEngine's per-domain
+            // ?updatedAfter= queries land on a covering index.
+            entity.HasIndex(e => new { e.HospitalId, e.UpdatedAt })
+                .HasDatabaseName("IX_AppointmentServices_Hospital_UpdatedAt");
+
+            entity.HasIndex(e => e.AppointmentId)
+                .HasDatabaseName("IX_AppointmentServices_AppointmentId");
+
+            // OCC token — one report per service can be written
+            // independently from the others on the same visit.
+            entity.Property(e => e.RowVersion).IsRowVersion();
+        });
+
         // AppointmentComment Configuration — append-only audit trail for an
         // appointment. Cascade delete from Appointment so disposed records
         // don't leave orphan comments behind.
@@ -317,6 +364,15 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
                 .WithMany(i => i.Items)
                 .HasForeignKey(e => e.InvoiceId)
                 .OnDelete(DeleteBehavior.Cascade);
+
+            // Multi-service link (migration 57). Optional — legacy single-
+            // service invoice items have NULL; new multi-service items
+            // point at their AppointmentService. SetNull on delete keeps
+            // billing history intact even if the service line is removed.
+            entity.HasOne<AppointmentService>()
+                .WithMany()
+                .HasForeignKey(e => e.AppointmentServiceId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         // Payment Configuration
@@ -360,6 +416,16 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
                 .WithMany()
                 .HasForeignKey(e => e.AppointmentId)
                 .OnDelete(DeleteBehavior.Restrict);
+
+            // Multi-service link (migration 57). One DiagnosticReport per
+            // AppointmentService — different modalities of the same visit
+            // get independent reports with independent RowVersions so
+            // doctors can write them concurrently. Backfilled from the
+            // 1:1 single-service assumption on existing rows.
+            entity.HasOne<AppointmentService>()
+                .WithMany()
+                .HasForeignKey(e => e.AppointmentServiceId)
+                .OnDelete(DeleteBehavior.SetNull);
 
             entity.HasOne(e => e.Doctor)
                 .WithMany()
@@ -438,6 +504,15 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
                 .WithMany(a => a.StudyAssets)
                 .HasForeignKey(e => e.AppointmentId)
                 .OnDelete(DeleteBehavior.Cascade);
+
+            // Multi-service link (migration 57). For a multi-modality visit
+            // (X-ray + CT) each acquisition's assets route to the right
+            // service line so the right report opens against the right
+            // images. NULL on legacy single-service rows.
+            entity.HasOne<AppointmentService>()
+                .WithMany()
+                .HasForeignKey(e => e.AppointmentServiceId)
+                .OnDelete(DeleteBehavior.SetNull);
 
             // Filtered index — fast lookup for the extraction worker.
             entity.HasIndex(e => e.ExtractionStatus).HasFilter("[ExtractionStatus] IS NOT NULL");
@@ -543,6 +618,16 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.HasOne(e => e.Hospital)
                 .WithMany()
                 .HasForeignKey(e => e.HospitalId);
+
+            // Multi-service link (migration 57). One commission row per
+            // AppointmentService line so per-modality referral cuts work
+            // (USG and CT may have different ReferralCutValues). NULL on
+            // legacy single-service appointments — those still resolve
+            // their commission via AppointmentId.
+            entity.HasOne<AppointmentService>()
+                .WithMany()
+                .HasForeignKey(e => e.AppointmentServiceId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         // SubscriptionPlan Configuration
@@ -856,6 +941,13 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
         // the same transaction.
         var nowUtc = DateTime.UtcNow;
         foreach (var entry in ChangeTracker.Entries<Appointment>())
+        {
+            if (entry.State == EntityState.Added || entry.State == EntityState.Modified)
+            {
+                entry.Entity.UpdatedAt = nowUtc;
+            }
+        }
+        foreach (var entry in ChangeTracker.Entries<AppointmentService>())
         {
             if (entry.State == EntityState.Added || entry.State == EntityState.Modified)
             {

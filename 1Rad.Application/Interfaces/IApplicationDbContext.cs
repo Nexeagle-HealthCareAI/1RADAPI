@@ -17,6 +17,7 @@ public interface IApplicationDbContext
     DbSet<Patient> Patients { get; }
     DbSet<Referrer> Referrers { get; }
     DbSet<Appointment> Appointments { get; }
+    DbSet<AppointmentService> AppointmentServices { get; }
     DbSet<AppointmentComment> AppointmentComments { get; }
     DbSet<ServiceCharge> ServiceCharges { get; }
     DbSet<Invoice> Invoices { get; }

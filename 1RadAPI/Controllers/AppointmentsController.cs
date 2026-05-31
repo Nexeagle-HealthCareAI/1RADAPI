@@ -6,6 +6,7 @@ using _1Rad.Application.Features.Appointments.Commands.AddAppointmentComment;
 using _1Rad.Application.Features.Appointments.Commands.CreateAppointment;
 using _1Rad.Application.Features.Appointments.Commands.UpdateAppointment;
 using _1Rad.Application.Features.Appointments.Commands.UpdateAppointmentStatus;
+using _1Rad.Application.Features.Appointments.Commands.UpdateAppointmentServiceStatus;
 using _1Rad.Application.Features.Appointments.Commands.ImportAppointments;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
@@ -62,6 +63,30 @@ public class AppointmentsController : ControllerBase
         if (!result.Success && result.Message == "Appointment not found.")
         {
             return NotFound();
+        }
+        return Ok(result);
+    }
+
+    // Per-service status transition (multi-service rollout step 5).
+    // Body: { "status": "SCANNED" }. Updates the AppointmentService row's
+    // status + per-service TAT timestamps and recomputes the parent
+    // Appointment's rollup so the worklist's status pill, on-premises
+    // clock and the scan→delivery TAT stay correct.
+    public sealed record UpdateServiceStatusBody(string Status);
+
+    [HttpPatch("{id}/services/{serviceId}/status")]
+    public async Task<IActionResult> UpdateServiceStatus(
+        Guid id, Guid serviceId, [FromBody] UpdateServiceStatusBody body)
+    {
+        var result = await _mediator.Send(
+            new UpdateAppointmentServiceStatusCommand(id, serviceId, body?.Status ?? string.Empty));
+        if (!result.Success && result.Message == "Service not found on this appointment.")
+        {
+            return NotFound(result);
+        }
+        if (!result.Success && result.NotAllowed)
+        {
+            return BadRequest(result);
         }
         return Ok(result);
     }

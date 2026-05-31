@@ -43,6 +43,34 @@ public record AppointmentDto(
     // makes a tombstone visible to the client so it can purge its
     // local cache.
     DateTime? UpdatedAt = null,
-    DateTime? DeletedAt = null
+    DateTime? DeletedAt = null,
+    // Multi-service visit line items (step 2). Null on responses from
+    // servers that haven't been upgraded yet; empty list once the
+    // server is on the multi-service code path but the visit happens
+    // to only carry one service. Frontends that haven't migrated yet
+    // can still read the scalar Service / Modality / Amount fields
+    // above — they reflect the primary (first) service line.
+    IReadOnlyList<AppointmentServiceDto>? Services = null
 );
 
+/// <summary>
+/// One service line on an appointment. Mirrors the AppointmentService
+/// entity but exposes only what the worklist / booking UI need to
+/// render and edit. The Id matches the DB row so the frontend can
+/// send it back in the Services array on PUT to keep that row in
+/// place rather than recreating it.
+/// </summary>
+public record AppointmentServiceDto(
+    Guid Id,
+    string ServiceName,
+    string Modality,
+    decimal Amount,
+    decimal ReferralCutValue,
+    string Status,
+    DateTime? ScanStartedAt,
+    DateTime? ScanCompletedAt,
+    DateTime? DeliveredAt,
+    Guid? TechnicianId,
+    Guid? ServiceChargeId,
+    DateTime UpdatedAt
+);

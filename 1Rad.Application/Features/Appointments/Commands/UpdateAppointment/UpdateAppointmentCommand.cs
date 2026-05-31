@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
+using _1Rad.Application.Features.Appointments;
 using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Entities;
 using MediatR;
@@ -8,6 +10,21 @@ using Microsoft.EntityFrameworkCore;
 
 namespace _1Rad.Application.Features.Appointments.Commands.UpdateAppointment;
 
+/// <summary>
+/// Edit an appointment.
+///
+/// Two payload shapes, mirroring CreateAppointmentCommand:
+///   v1 (legacy) — scalar Service / Modality / Amount / ReferralCutValue.
+///                 Handler rewrites the primary AppointmentService row in
+///                 place from those scalars; any non-primary services on
+///                 the visit are left alone.
+///   v2 (multi)  — Services list with optional Id per line. Reconciler
+///                 keeps existing rows where Id matches (preserving their
+///                 status, TAT timestamps, and the FKs report / study /
+///                 commission rows already point at), inserts new lines
+///                 with null Id, and soft-deletes existing rows that
+///                 aren't present in the incoming list.
+/// </summary>
 public record UpdateAppointmentCommand(
     Guid AppointmentId,
     string Service,
@@ -23,7 +40,12 @@ public record UpdateAppointmentCommand(
     decimal? ReferralCutValue = null,
     // Clinical urgency: STAT / URGENT / ROUTINE. Null = leave unchanged.
     // Front desk / doctor can bump a walk-in trauma to STAT post-booking.
-    string? Priority = null
+    string? Priority = null,
+    // Multi-service edit (step 2). When supplied this becomes the source
+    // of truth for reconciling AppointmentService rows. v1 callers who
+    // leave it null get the scalar-only legacy path: only the visit's
+    // "primary" service row is touched.
+    IReadOnlyList<AppointmentServiceLine>? Services = null
 ) : IRequest<bool>;
 
 
@@ -52,13 +74,13 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             var appointmentDate = request.DateTime.Date;
             var newDailyTokenNumber = await _context.Appointments
                 .CountAsync(a => a.HospitalId == appointment.HospitalId && a.DateTime.Date == appointmentDate, cancellationToken) + 1;
-            
+
             appointment.DailyTokenNumber = newDailyTokenNumber;
         }
 
-        // Update Appointment fields
-        appointment.Service = request.Service;
-        appointment.Modality = request.Modality;
+        // Update Appointment scalar fields. Service/Modality are rewritten
+        // below from the resolved "primary" service line so they stay in
+        // sync with the child rows.
         appointment.DateTime = request.DateTime;
         appointment.Doctor = request.Doctor;
         appointment.Notes = request.Notes;
@@ -86,7 +108,27 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             if (!string.IsNullOrEmpty(request.PatientAge)) appointment.Patient.Age = request.PatientAge;
         }
 
-        // Handle Invoice updates if amount or cuts changed
+        // Load every live AppointmentService row on this visit. We reconcile
+        // against this list whether the client sent v1 scalars or v2 Services.
+        var existingServices = await _context.AppointmentServices
+            .Where(s => s.AppointmentId == appointment.AppointmentId && s.DeletedAt == null)
+            .OrderBy(s => s.UpdatedAt)
+            .ToListAsync(cancellationToken);
+
+        var liveServices = await ReconcileServicesAsync(appointment, request, existingServices, cancellationToken);
+
+        // Re-stamp the parent Appointment's denormalised scalars from the
+        // first live service so legacy v1 readers (offline PWA) keep
+        // working through the rollout.
+        var primary = liveServices.FirstOrDefault();
+        if (primary != null)
+        {
+            appointment.Service = primary.ServiceName;
+            appointment.Modality = primary.Modality;
+        }
+
+        // ── Invoice reconciliation ────────────────────────────────────────
+        // One Invoice per visit; one InvoiceItem per live service line.
         var invoice = await _context.Invoices
             .Include(i => i.Items)
             .FirstOrDefaultAsync(i => i.AppointmentId == request.AppointmentId, cancellationToken);
@@ -97,95 +139,352 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             {
                 invoice.CreatedAt = request.DateTime;
             }
-            if (request.Amount.HasValue && invoice.Items.Any())
-            {
-                var item = invoice.Items.First();
-                item.Amount = request.Amount.Value;
-                invoice.TotalAmount = request.Amount.Value;
-                invoice.GrossAmount = request.Amount.Value; // Sync gross if updating from appointment
-            }
 
+            await ReconcileInvoiceItemsAsync(invoice, liveServices, request, cancellationToken);
 
-            if (request.ReferralCutValue.HasValue) invoice.ReferralCutValue = request.ReferralCutValue.Value;
-
+            // Total gets recomputed from the line items so the invoice stays
+            // consistent with the per-service amounts.
+            invoice.GrossAmount = invoice.Items.Sum(i => i.Amount * i.Quantity);
+            invoice.TotalAmount = invoice.GrossAmount - invoice.DiscountAmount;
+            invoice.ReferralCutValue = liveServices.Sum(s => s.ReferralCutValue);
         }
 
-        // --- REFERRAL COMMISSION SYNC ---
-        var commission = await _context.ReferralCommissions
-            .FirstOrDefaultAsync(c => c.AppointmentId == request.AppointmentId, cancellationToken);
-
-        decimal finalCut = request.ReferralCutValue ?? (invoice?.ReferralCutValue ?? 0);
-
-        if (commission != null)
-        {
-            if (dateChanged)
-            {
-                commission.TransactionDate = request.DateTime;
-            }
-            if (finalCut <= 0 || string.IsNullOrEmpty(request.ReferredBy))
-            {
-                // If cut removed or referrer removed, set commission to 0 to preserve audit trail
-                commission.CommissionAmount = 0;
-            }
-            else
-            {
-                commission.CommissionAmount = finalCut;
-                commission.Modality = request.Modality;
-                
-                var searchName = request.ReferredBy.Trim();
-                var referrer = await _context.Referrers
-                    .FirstOrDefaultAsync(r => r.Name.ToLower() == searchName.ToLower() && r.HospitalId == appointment.HospitalId, cancellationToken);
-                
-                if (referrer == null)
-                {
-                    referrer = new Referrer
-                    {
-                        Name = searchName,
-                        Contact = string.Empty,
-                        Address = string.Empty,
-                        HospitalId = appointment.HospitalId
-                    };
-                    _context.Referrers.Add(referrer);
-                }
-
-                commission.ReferrerId = referrer.ReferrerId;
-                commission.ReferrerName = referrer.Name ?? request.ReferredBy;
-            }
-        }
-        else if (finalCut > 0 && !string.IsNullOrEmpty(request.ReferredBy))
-        {
-            var searchName = request.ReferredBy.Trim();
-            var referrer = await _context.Referrers
-                .FirstOrDefaultAsync(r => r.Name.ToLower() == searchName.ToLower() && r.HospitalId == appointment.HospitalId, cancellationToken);
-
-            if (referrer == null)
-            {
-                referrer = new Referrer
-                {
-                    Name = searchName,
-                    Contact = string.Empty,
-                    Address = string.Empty,
-                    HospitalId = appointment.HospitalId
-                };
-                _context.Referrers.Add(referrer);
-            }
-
-            var newCommission = new ReferralCommission
-            {
-                ReferrerId = referrer.ReferrerId,
-                ReferrerName = referrer.Name ?? request.ReferredBy,
-                Modality = request.Modality,
-                CommissionAmount = finalCut,
-                Status = "UNPAID",
-                TransactionDate = DateTime.UtcNow,
-                HospitalId = appointment.HospitalId,
-                AppointmentId = appointment.AppointmentId
-            };
-            _context.ReferralCommissions.Add(newCommission);
-        }
-
+        // ── Referral commission reconciliation ────────────────────────────
+        // The legacy path (single commission per appointment) is the v1
+        // shape. v2 fans out one commission per service line. We keep both
+        // working by reconciling against the live service list.
+        await ReconcileReferralCommissionsAsync(appointment, liveServices, request, invoice?.InvoiceId, cancellationToken);
 
         await _context.SaveChangesAsync(cancellationToken);
         return true;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Reconcile the AppointmentServices rows against the incoming command.
+    // Returns the list of live (non-soft-deleted) rows in insertion order
+    // so the caller can derive the "primary" service from index 0.
+    // ─────────────────────────────────────────────────────────────────────
+    private async Task<List<AppointmentService>> ReconcileServicesAsync(
+        Appointment appointment,
+        UpdateAppointmentCommand request,
+        List<AppointmentService> existing,
+        CancellationToken cancellationToken)
+    {
+        // Build the canonical incoming-line list. v2 callers send Services
+        // directly. v1 callers send only scalars — we synthesise a single
+        // line and pin it to the existing "primary" service row (the
+        // earliest-created one) so we update in place instead of creating
+        // a fresh row + soft-deleting all the others.
+        List<AppointmentServiceLine> incoming;
+        if (request.Services is { Count: > 0 })
+        {
+            incoming = request.Services
+                .Where(l => !string.IsNullOrWhiteSpace(l.ServiceName) || !string.IsNullOrWhiteSpace(l.Modality))
+                .Select(l => new AppointmentServiceLine(
+                    ServiceName:      (l.ServiceName ?? string.Empty).Trim(),
+                    Modality:         (l.Modality ?? string.Empty).Trim().ToUpperInvariant(),
+                    Amount:           l.Amount,
+                    ReferralCutValue: l.ReferralCutValue,
+                    Id:               l.Id,
+                    ServiceChargeId:  l.ServiceChargeId))
+                .ToList();
+        }
+        else
+        {
+            // v1 path: keep every existing line, but re-stamp the primary
+            // one from the scalar fields the v1 client sent.
+            var primaryId = existing.FirstOrDefault()?.Id;
+            incoming = existing
+                .Select(e => new AppointmentServiceLine(
+                    ServiceName:      e.Id == primaryId ? (request.Service ?? e.ServiceName) : e.ServiceName,
+                    Modality:         e.Id == primaryId ? (request.Modality ?? e.Modality)  : e.Modality,
+                    Amount:           e.Id == primaryId ? (request.Amount ?? e.Amount)      : e.Amount,
+                    ReferralCutValue: e.Id == primaryId ? (request.ReferralCutValue ?? e.ReferralCutValue) : e.ReferralCutValue,
+                    Id:               e.Id,
+                    ServiceChargeId:  e.ServiceChargeId))
+                .ToList();
+
+            // Edge case: legacy appointment that pre-dates migration 57 and
+            // somehow still has no service row. Synthesise one from scalars
+            // so the rest of the system has something to attach to.
+            if (incoming.Count == 0)
+            {
+                incoming.Add(new AppointmentServiceLine(
+                    ServiceName:      (request.Service ?? string.Empty).Trim(),
+                    Modality:         (request.Modality ?? string.Empty).Trim().ToUpperInvariant(),
+                    Amount:           request.Amount ?? 0,
+                    ReferralCutValue: request.ReferralCutValue ?? 0));
+            }
+        }
+
+        var existingById = existing.ToDictionary(e => e.Id);
+        var kept = new HashSet<Guid>();
+        var live = new List<AppointmentService>(incoming.Count);
+
+        foreach (var line in incoming)
+        {
+            if (line.Id is { } id && existingById.TryGetValue(id, out var match))
+            {
+                // Update existing row in place — preserves its Status, TAT
+                // timestamps, and the FK pointers reports / studies /
+                // commissions already hold against this Id.
+                match.ServiceName      = line.ServiceName;
+                match.Modality         = line.Modality;
+                match.Amount           = line.Amount;
+                match.ReferralCutValue = line.ReferralCutValue;
+                match.ServiceChargeId  = line.ServiceChargeId ?? match.ServiceChargeId;
+                kept.Add(id);
+                live.Add(match);
+            }
+            else
+            {
+                var svc = new AppointmentService
+                {
+                    AppointmentId    = appointment.AppointmentId,
+                    ServiceChargeId  = line.ServiceChargeId,
+                    ServiceName      = line.ServiceName,
+                    Modality         = line.Modality,
+                    Amount           = line.Amount,
+                    ReferralCutValue = line.ReferralCutValue,
+                    Status           = "NOT_STARTED",
+                    HospitalId       = appointment.HospitalId
+                };
+                _context.AppointmentServices.Add(svc);
+                live.Add(svc);
+            }
+        }
+
+        // Soft-delete any existing rows the client dropped. We mark rather
+        // than hard-delete so any DiagnosticReport / StudyAsset already
+        // attached keeps its FK and its history (the FK has ON DELETE SET
+        // NULL as a safety net, but soft-delete is the principled path).
+        await Task.CompletedTask;
+        foreach (var stale in existing)
+        {
+            if (!kept.Contains(stale.Id))
+            {
+                stale.DeletedAt = DateTime.UtcNow;
+            }
+        }
+
+        return live;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Reconcile InvoiceItems against the live service list. We keep
+    // existing items where possible (matching by AppointmentServiceId)
+    // and add/remove the rest. The Invoice headline totals are recomputed
+    // by the caller from the resulting Items collection.
+    // ─────────────────────────────────────────────────────────────────────
+    private async Task ReconcileInvoiceItemsAsync(
+        Invoice invoice,
+        List<AppointmentService> liveServices,
+        UpdateAppointmentCommand request,
+        CancellationToken cancellationToken)
+    {
+        await Task.CompletedTask;
+
+        var itemsByServiceId = invoice.Items
+            .Where(i => i.AppointmentServiceId.HasValue)
+            .ToDictionary(i => i.AppointmentServiceId!.Value);
+
+        var orphanLegacyItem = invoice.Items.FirstOrDefault(i => i.AppointmentServiceId == null);
+
+        var keep = new HashSet<Guid>();
+        foreach (var svc in liveServices)
+        {
+            if (itemsByServiceId.TryGetValue(svc.Id, out var existingItem))
+            {
+                existingItem.Description = svc.ServiceName;
+                existingItem.Amount      = svc.Amount;
+                existingItem.Quantity    = 1;
+                keep.Add(existingItem.Id);
+                continue;
+            }
+
+            // Pre-migration invoice that still has its unattached "single
+            // service" item — adopt it for the primary service so we don't
+            // accidentally double-bill.
+            if (orphanLegacyItem != null)
+            {
+                orphanLegacyItem.Description           = svc.ServiceName;
+                orphanLegacyItem.Amount                = svc.Amount;
+                orphanLegacyItem.Quantity              = 1;
+                orphanLegacyItem.AppointmentServiceId  = svc.Id;
+                keep.Add(orphanLegacyItem.Id);
+                orphanLegacyItem = null;
+                continue;
+            }
+
+            var newItem = new InvoiceItem
+            {
+                InvoiceId             = invoice.Id,
+                Description           = svc.ServiceName,
+                Amount                = svc.Amount,
+                Quantity              = 1,
+                AppointmentServiceId  = svc.Id
+            };
+            invoice.Items.Add(newItem);
+            keep.Add(newItem.Id);
+        }
+
+        // Drop anything we didn't keep. These are items for services the
+        // client removed from the visit during this edit.
+        var stale = invoice.Items.Where(i => !keep.Contains(i.Id)).ToList();
+        foreach (var s in stale)
+        {
+            invoice.Items.Remove(s);
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Reconcile ReferralCommission rows against the live service list. One
+    // commission per service line with a positive cut. v1-only payloads
+    // (no Services list) still take the legacy single-commission path so
+    // we don't accidentally fan out a single-service edit.
+    // ─────────────────────────────────────────────────────────────────────
+    private async Task ReconcileReferralCommissionsAsync(
+        Appointment appointment,
+        List<AppointmentService> liveServices,
+        UpdateAppointmentCommand request,
+        string? invoiceDisplayId,
+        CancellationToken cancellationToken)
+    {
+        var commissions = await _context.ReferralCommissions
+            .Where(c => c.AppointmentId == request.AppointmentId)
+            .ToListAsync(cancellationToken);
+
+        // No referrer ⇒ wipe down any existing commissions to zero
+        // (preserves audit trail) and we're done.
+        if (string.IsNullOrEmpty(request.ReferredBy))
+        {
+            foreach (var c in commissions) c.CommissionAmount = 0;
+            return;
+        }
+
+        // Resolve referrer (create on first use).
+        var searchName = request.ReferredBy.Trim();
+        var referrer = await _context.Referrers
+            .FirstOrDefaultAsync(r => r.Name.ToLower() == searchName.ToLower() && r.HospitalId == appointment.HospitalId, cancellationToken);
+        if (referrer == null)
+        {
+            referrer = new Referrer
+            {
+                Name = searchName,
+                Contact = string.Empty,
+                Address = string.Empty,
+                HospitalId = appointment.HospitalId
+            };
+            _context.Referrers.Add(referrer);
+        }
+
+        bool isMultiServiceEdit = request.Services is { Count: > 0 };
+
+        if (!isMultiServiceEdit)
+        {
+            // v1 path: one commission per appointment. Preserve the legacy
+            // single-row shape so existing UI/reports don't see a sudden
+            // explosion of commission rows for what's still semantically
+            // a single-service edit.
+            decimal finalCut = request.ReferralCutValue ?? 0;
+            var existing = commissions.FirstOrDefault();
+            if (existing != null)
+            {
+                existing.CommissionAmount = finalCut;
+                existing.Modality         = request.Modality;
+                existing.ReferrerId       = referrer.ReferrerId;
+                existing.ReferrerName     = referrer.Name ?? request.ReferredBy;
+                if (appointment.DateTime != existing.TransactionDate)
+                {
+                    existing.TransactionDate = request.DateTime;
+                }
+                // Pin to the primary service so the dashboard breaks down
+                // legacy edits by modality correctly.
+                existing.AppointmentServiceId = liveServices.FirstOrDefault()?.Id;
+            }
+            else if (finalCut > 0)
+            {
+                _context.ReferralCommissions.Add(new ReferralCommission
+                {
+                    ReferrerId           = referrer.ReferrerId,
+                    ReferrerName         = referrer.Name ?? request.ReferredBy,
+                    Modality             = request.Modality,
+                    CommissionAmount     = finalCut,
+                    Status               = "UNPAID",
+                    TransactionDate      = DateTime.UtcNow,
+                    HospitalId           = appointment.HospitalId,
+                    AppointmentId        = appointment.AppointmentId,
+                    AppointmentServiceId = liveServices.FirstOrDefault()?.Id
+                });
+            }
+            return;
+        }
+
+        // v2 path: reconcile one commission per service. Match by
+        // AppointmentServiceId where possible; fall back to adopting an
+        // existing orphan commission row for the primary service.
+        var commissionsByServiceId = commissions
+            .Where(c => c.AppointmentServiceId.HasValue)
+            .ToDictionary(c => c.AppointmentServiceId!.Value);
+
+        var orphan = commissions.FirstOrDefault(c => c.AppointmentServiceId == null);
+        var keep   = new HashSet<Guid>();
+
+        foreach (var svc in liveServices)
+        {
+            if (commissionsByServiceId.TryGetValue(svc.Id, out var existing))
+            {
+                existing.CommissionAmount = svc.ReferralCutValue;
+                existing.Modality         = svc.Modality;
+                existing.ReferrerId       = referrer.ReferrerId;
+                existing.ReferrerName     = referrer.Name ?? request.ReferredBy;
+                if (!string.IsNullOrEmpty(invoiceDisplayId)) existing.ReferenceNumber = invoiceDisplayId;
+                keep.Add(existing.Id);
+                continue;
+            }
+
+            // Adopt a legacy single-row commission for the primary service
+            // so we don't double-up.
+            if (orphan != null)
+            {
+                orphan.AppointmentServiceId = svc.Id;
+                orphan.CommissionAmount     = svc.ReferralCutValue;
+                orphan.Modality             = svc.Modality;
+                orphan.ReferrerId           = referrer.ReferrerId;
+                orphan.ReferrerName         = referrer.Name ?? request.ReferredBy;
+                if (!string.IsNullOrEmpty(invoiceDisplayId)) orphan.ReferenceNumber = invoiceDisplayId;
+                keep.Add(orphan.Id);
+                orphan = null;
+                continue;
+            }
+
+            if (svc.ReferralCutValue <= 0) continue; // nothing to track
+
+            var newCommission = new ReferralCommission
+            {
+                ReferrerId           = referrer.ReferrerId,
+                ReferrerName         = referrer.Name ?? request.ReferredBy,
+                Modality             = svc.Modality,
+                CommissionAmount     = svc.ReferralCutValue,
+                Status               = "UNPAID",
+                TransactionDate      = DateTime.UtcNow,
+                HospitalId           = appointment.HospitalId,
+                AppointmentId        = appointment.AppointmentId,
+                AppointmentServiceId = svc.Id,
+                ReferenceNumber      = invoiceDisplayId
+            };
+            _context.ReferralCommissions.Add(newCommission);
+            // Note: newCommission.Id is generated by Guid.NewGuid() in the
+            // entity ctor, so we can keep-by-Id like the others.
+            keep.Add(newCommission.Id);
+        }
+
+        // Any commission rows that no longer correspond to a live service
+        // get their amount zeroed (preserves audit trail, matches v1
+        // "drop referrer" behaviour).
+        foreach (var c in commissions)
+        {
+            if (!keep.Contains(c.Id)) c.CommissionAmount = 0;
+        }
     }
 }

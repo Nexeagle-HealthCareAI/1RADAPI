@@ -19,8 +19,12 @@ public class ReferralCommission : BaseEntity, IHospitalContext
     
     public Guid? AppointmentId { get; set; }
 
+    // Multi-service support (migration 57). With multi-service visits the
+    // referrer earns one commission per service line, so this column
+    // points at the specific AppointmentService row. NULL on legacy
+    // single-service appointments — those still resolve via AppointmentId.
+    public Guid? AppointmentServiceId { get; set; }
 
-    
     // Financial Quantum
     public decimal CommissionAmount { get; set; }
     public decimal AccumulatedTotal { get; set; }

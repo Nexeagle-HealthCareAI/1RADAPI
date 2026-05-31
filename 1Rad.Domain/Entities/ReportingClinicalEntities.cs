@@ -37,6 +37,13 @@ namespace _1Rad.Domain.Entities
     {
         public Guid Id { get; set; } = Guid.NewGuid();
         public Guid AppointmentId { get; set; }
+
+        // Multi-service support (migration 57). Each AppointmentService
+        // (line item of work) has its own report. NULL on legacy rows
+        // that pre-date the migration; backfill stamps these from the
+        // 1:1 single-service-per-appointment relationship.
+        public Guid? AppointmentServiceId { get; set; }
+
         public Guid? DoctorId { get; set; }
         public Guid? TemplateId { get; set; }
         

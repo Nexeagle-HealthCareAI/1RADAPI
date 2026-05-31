@@ -342,6 +342,11 @@ namespace _1RadAPI.Controllers
                     existingAsset.BlobUrl = blobUrl;
                     existingAsset.FileType = extension.Replace(".", "");
                     existingAsset.UploadedAt = DateTime.UtcNow;
+                    // Multi-service rollout — adopt a freshly-supplied service id
+                    // even on the upsert path so re-uploading after a booking
+                    // gained services correctly attaches to the right line.
+                    if (request.AppointmentServiceId.HasValue)
+                        existingAsset.AppointmentServiceId = request.AppointmentServiceId;
                     asset = existingAsset;
                 }
                 else
@@ -350,6 +355,7 @@ namespace _1RadAPI.Controllers
                     {
                         Id = Guid.NewGuid(),
                         AppointmentId = request.AppointmentId,
+                        AppointmentServiceId = request.AppointmentServiceId,
                         BlobUrl = blobUrl,
                         FileName = fileName,
                         FileType = extension.Replace(".", ""),
@@ -525,6 +531,7 @@ namespace _1RadAPI.Controllers
                     {
                         Id = request.AssetId,
                         AppointmentId = request.AppointmentId,
+                        AppointmentServiceId = request.AppointmentServiceId,
                         BlobUrl = request.PublicReadUrl,
                         FileName = fileName,
                         FileType = string.IsNullOrEmpty(extension) ? "bin" : extension,
@@ -537,6 +544,8 @@ namespace _1RadAPI.Controllers
                 {
                     asset.BlobUrl = request.PublicReadUrl;
                     asset.UploadedAt = DateTime.UtcNow;
+                    if (request.AppointmentServiceId.HasValue)
+                        asset.AppointmentServiceId = request.AppointmentServiceId;
                 }
 
                 if (appointment.Status != "SCANNED" && appointment.Status != "REPORTED")
@@ -604,6 +613,13 @@ namespace _1RadAPI.Controllers
     public class StudyUploadRequest
     {
         public Guid AppointmentId { get; set; }
+        // Multi-service rollout (step 7). Optional — when supplied, the
+        // resulting StudyAsset is stamped against this specific service
+        // line so a multi-modality visit's CT images attach to the CT
+        // service (and so the right report opens against the right
+        // images). NULL = legacy behaviour, asset only tracks the parent
+        // appointment.
+        public Guid? AppointmentServiceId { get; set; }
         public IFormFile File { get; set; }
     }
 
@@ -625,6 +641,8 @@ namespace _1RadAPI.Controllers
     {
         public Guid AssetId { get; set; }
         public Guid AppointmentId { get; set; }
+        // Multi-service rollout (step 7) — see StudyUploadRequest.AppointmentServiceId.
+        public Guid? AppointmentServiceId { get; set; }
         public string BlobPath { get; set; } = string.Empty;
         public string ContainerName { get; set; } = string.Empty;
         public string PublicReadUrl { get; set; } = string.Empty;

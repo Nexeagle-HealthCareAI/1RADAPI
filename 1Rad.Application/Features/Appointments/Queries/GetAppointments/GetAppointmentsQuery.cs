@@ -95,6 +95,14 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
             // ASC. Translated to a CASE in SQL via the IX_Appointments_HospitalId_
             // Priority_DateTime index so STATs float to the top regardless of
             // their scheduled time.
+            // Capture the (filtered, sorted) appointment IDs so we can run
+            // a single batched second query for services that scopes the
+            // sync delta / search / hospital constraints the same way the
+            // main projection does. Keeping it as a subquery instead of a
+            // separate .Select() means EF emits one round trip for the
+            // service fetch regardless of page size.
+            var appointmentIds = query.Select(x => x.Appointment.AppointmentId);
+
             var appointments = await query
                 .OrderBy(x =>
                     x.Appointment.Priority == "STAT"   ? 0 :
@@ -138,9 +146,73 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
                     x.Appointment.LatestCommentAuthorName,
                     x.Appointment.LatestCommentAt,
                     x.Appointment.UpdatedAt,
-                    x.Appointment.DeletedAt
+                    x.Appointment.DeletedAt,
+                    // Services is materialised separately below (a single
+                    // batched second query) — projecting a typed null
+                    // here keeps EF happy (it can't translate optional
+                    // ctor args otherwise) and reserves the slot.
+                    (IReadOnlyList<AppointmentServiceDto>?)null
                 ))
                 .ToListAsync(cancellationToken);
+
+            // ── Batched service fetch ─────────────────────────────────
+            // Second round trip: pull every AppointmentService row whose
+            // parent is in the result set. Soft-deleted rows are excluded
+            // unless the caller asked for tombstones too. Group by
+            // AppointmentId so we can rewrite each DTO with its lines.
+            var serviceQuery = _context.AppointmentServices
+                .AsNoTracking()
+                .Where(s => appointmentIds.Contains(s.AppointmentId));
+
+            if (!request.IncludeDeleted)
+            {
+                serviceQuery = serviceQuery.Where(s => s.DeletedAt == null);
+            }
+
+            var services = await serviceQuery
+                .OrderBy(s => s.UpdatedAt)
+                .Select(s => new
+                {
+                    s.AppointmentId,
+                    Dto = new AppointmentServiceDto(
+                        s.Id,
+                        s.ServiceName,
+                        s.Modality,
+                        s.Amount,
+                        s.ReferralCutValue,
+                        s.Status,
+                        s.ScanStartedAt,
+                        s.ScanCompletedAt,
+                        s.DeliveredAt,
+                        s.TechnicianId,
+                        s.ServiceChargeId,
+                        s.UpdatedAt
+                    )
+                })
+                .ToListAsync(cancellationToken);
+
+            var servicesByAppointment = services
+                .GroupBy(s => s.AppointmentId)
+                .ToDictionary(g => g.Key, g => (IReadOnlyList<AppointmentServiceDto>)g.Select(x => x.Dto).ToList());
+
+            // Reattach to each DTO. Records are immutable so we `with`-clone
+            // — cheap because the underlying string/scalar fields are
+            // pass-through references.
+            for (int i = 0; i < appointments.Count; i++)
+            {
+                if (servicesByAppointment.TryGetValue(appointments[i].AppointmentId, out var lines))
+                {
+                    appointments[i] = appointments[i] with { Services = lines };
+                }
+                else
+                {
+                    // Visit has no service rows (shouldn't happen after
+                    // migration 57's backfill, but defensive). Surface an
+                    // empty list so frontends can rely on `services` being
+                    // non-null on responses from this server build.
+                    appointments[i] = appointments[i] with { Services = System.Array.Empty<AppointmentServiceDto>() };
+                }
+            }
 
             return appointments;
         }

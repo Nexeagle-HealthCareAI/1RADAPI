@@ -7,6 +7,13 @@ namespace _1Rad.Domain.Entities
     {
         public Guid Id { get; set; } = Guid.NewGuid();
         public Guid AppointmentId { get; set; }
+
+        // Multi-service support (migration 57). A multi-modality visit
+        // (X-ray + CT) routes each acquisition's assets to the correct
+        // service line so the right report opens against the right
+        // images. NULL on legacy rows that pre-date the migration.
+        public Guid? AppointmentServiceId { get; set; }
+
         public string BlobUrl { get; set; } = string.Empty;
         public string FileName { get; set; } = string.Empty;
         public string FileType { get; set; } = string.Empty; // zip, dcm, jpg, png
