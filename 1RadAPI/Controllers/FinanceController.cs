@@ -62,9 +62,23 @@ public class FinanceController : ControllerBase
     }
 
     [HttpGet("invoices")]
-    public async Task<IActionResult> GetInvoices([FromQuery] string? search, [FromQuery] string? status, [FromQuery] DateTime? startDate, [FromQuery] DateTime? endDate)
+    public async Task<IActionResult> GetInvoices(
+        [FromQuery] string? search,
+        [FromQuery] string? status,
+        [FromQuery] DateTime? startDate,
+        [FromQuery] DateTime? endDate,
+        [FromQuery] DateTime? updatedAfter,
+        [FromQuery] bool includeDeleted = false)
     {
-        var result = await _mediator.Send(new GetInvoicesQuery { Search = search, Status = status, StartDate = startDate, EndDate = endDate });
+        var result = await _mediator.Send(new GetInvoicesQuery
+        {
+            Search = search,
+            Status = status,
+            StartDate = startDate,
+            EndDate = endDate,
+            UpdatedAfter = updatedAfter,
+            IncludeDeleted = includeDeleted,
+        });
         return Ok(result);
     }
 
@@ -119,9 +133,23 @@ public class FinanceController : ControllerBase
     }
 
     [HttpGet("expenses")]
-    public async Task<IActionResult> GetExpenses([FromQuery] string? search, [FromQuery] string? category, [FromQuery] DateTime? startDate, [FromQuery] DateTime? endDate)
+    public async Task<IActionResult> GetExpenses(
+        [FromQuery] string? search,
+        [FromQuery] string? category,
+        [FromQuery] DateTime? startDate,
+        [FromQuery] DateTime? endDate,
+        [FromQuery] DateTime? updatedAfter,
+        [FromQuery] bool includeDeleted = false)
     {
-        var result = await _mediator.Send(new GetExpensesQuery { Search = search, Category = category, StartDate = startDate, EndDate = endDate });
+        var result = await _mediator.Send(new GetExpensesQuery
+        {
+            Search = search,
+            Category = category,
+            StartDate = startDate,
+            EndDate = endDate,
+            UpdatedAfter = updatedAfter,
+            IncludeDeleted = includeDeleted,
+        });
         return Ok(result);
     }
 

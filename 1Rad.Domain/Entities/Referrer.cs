@@ -10,8 +10,10 @@ public class Referrer : BaseEntity, IHospitalContext
     public string? Address { get; set; } = string.Empty;
     public Guid HospitalId { get; set; }
 
+    // Sync engine fields (Phase B3 Slice 4).
+    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime? DeletedAt { get; set; }
 
-    
     // Navigation
     public Hospital Hospital { get; set; } = null!;
     public ICollection<Patient> Patients { get; set; } = new List<Patient>();

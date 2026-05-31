@@ -24,6 +24,12 @@ public class Invoice : BaseEntity, IHospitalContext
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime ServiceDate { get; set; } = DateTime.UtcNow;
     public DateTime? PaidAt { get; set; }
+
+    // Sync engine fields (Phase B3 Slice 1). UpdatedAt is stamped by the
+    // SaveChanges hook in ApplicationDbContext on every write; DeletedAt
+    // is the soft-delete tombstone for client cache purges.
+    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime? DeletedAt { get; set; }
     
     public decimal ReferralCutValue { get; set; } = 0;
     

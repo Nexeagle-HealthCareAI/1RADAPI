@@ -10,6 +10,12 @@ public record GetInvoicesQuery : IRequest<List<InvoiceDto>>
     public string? Search { get; init; }
     public DateTime? StartDate { get; init; }
     public DateTime? EndDate { get; init; }
+    // Sync engine knobs (Phase B3 Slice 1). UpdatedAfter restricts the
+    // result to rows that changed since the client's last pull;
+    // IncludeDeleted opts the sync engine into seeing tombstones so it
+    // can apply DELETE semantics to its cache.
+    public DateTime? UpdatedAfter { get; init; }
+    public bool IncludeDeleted { get; init; }
 }
 
 public class InvoiceDto
@@ -33,6 +39,9 @@ public class InvoiceDto
     public string? AppointmentStatus { get; set; }
     public Guid? AppointmentId { get; set; }
     public List<InvoiceItemDto> Items { get; set; } = new();
+    // Sync fields. Populated for every row the sync engine pulls.
+    public DateTime? UpdatedAt { get; set; }
+    public DateTime? DeletedAt { get; set; }
 }
 
 public class InvoiceItemDto
@@ -68,6 +77,23 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
                     .ThenInclude(p => p.Referrer)
                 .Include(i => i.Appointment)
                 .AsQueryable();
+
+            // Tombstone filter — the regular billing UI hides deleted rows;
+            // the sync engine flips IncludeDeleted on so it can apply
+            // DELETE semantics to its local cache.
+            if (!request.IncludeDeleted)
+            {
+                query = query.Where(i => i.DeletedAt == null);
+            }
+
+            // Delta-fetch (B3 Slice 1). Runs against IX_Invoices_Hospital_
+            // UpdatedAt so each sync poll is a small index range scan even
+            // on a centre with years of invoices.
+            if (request.UpdatedAfter.HasValue)
+            {
+                var since = request.UpdatedAfter.Value;
+                query = query.Where(i => i.UpdatedAt > since);
+            }
 
             // Status Filtering
             if (!string.IsNullOrEmpty(request.Status) && request.Status != "ALL")
@@ -124,9 +150,17 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
                         Description = it.Description,
                         Amount = it.Amount,
                         Quantity = it.Quantity
-                    }).ToList()
+                    }).ToList(),
+                    UpdatedAt = i.UpdatedAt,
+                    DeletedAt = i.DeletedAt
                 })
-                .Take(200) 
+                // Cap at 200 for the legacy paginated UI path. The sync
+                // engine path uses ?updatedAfter= which is already bounded
+                // by the time window, so the cap doesn't apply there in
+                // practice — a centre with >200 invoices changed in 30s
+                // is implausible. If it ever happens the next pull picks
+                // up the rest.
+                .Take(200)
                 .ToListAsync(cancellationToken);
         }
         catch (Exception ex)

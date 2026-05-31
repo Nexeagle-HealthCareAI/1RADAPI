@@ -37,6 +37,10 @@ public class ReferralCommission : BaseEntity, IHospitalContext
     
     // Multi-Facility Context
     public Guid HospitalId { get; set; }
+
+    // Sync engine fields (Phase B3 Slice 5).
+    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime? DeletedAt { get; set; }
     
     // Navigation
     public Referrer Referrer { get; set; } = null!;

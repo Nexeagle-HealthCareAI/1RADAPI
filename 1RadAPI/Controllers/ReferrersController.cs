@@ -27,9 +27,12 @@ public class ReferrersController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<IActionResult> Get([FromQuery] string? search)
+    public async Task<IActionResult> Get(
+        [FromQuery] string? search,
+        [FromQuery] DateTime? updatedAfter,
+        [FromQuery] bool includeDeleted = false)
     {
-        var result = await _mediator.Send(new GetReferrersQuery(search));
+        var result = await _mediator.Send(new GetReferrersQuery(search, updatedAfter, includeDeleted));
         return Ok(result);
     }
 
@@ -74,9 +77,14 @@ public class ReferrersController : ControllerBase
     }
 
     [HttpGet("commissions")]
-    public async Task<IActionResult> GetCommissions([FromQuery] DateTime? startDate, [FromQuery] DateTime? endDate, [FromQuery] Guid? referrerId)
+    public async Task<IActionResult> GetCommissions(
+        [FromQuery] DateTime? startDate,
+        [FromQuery] DateTime? endDate,
+        [FromQuery] Guid? referrerId,
+        [FromQuery] DateTime? updatedAfter,
+        [FromQuery] bool includeDeleted = false)
     {
-        var result = await _mediator.Send(new GetReferralCommissionsQuery(startDate, endDate, referrerId));
+        var result = await _mediator.Send(new GetReferralCommissionsQuery(startDate, endDate, referrerId, updatedAfter, includeDeleted));
         return Ok(result);
     }
 

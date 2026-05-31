@@ -7,7 +7,9 @@ namespace _1Rad.Application.Features.Referrers.Queries.GetReferralCommissions;
 public record GetReferralCommissionsQuery(
     DateTime? StartDate = null,
     DateTime? EndDate = null,
-    Guid? ReferrerId = null
+    Guid? ReferrerId = null,
+    DateTime? UpdatedAfter = null,
+    bool IncludeDeleted = false
 ) : IRequest<List<ReferralCommissionDto>>;
 
 public record ReferralCommissionDto(
@@ -21,7 +23,9 @@ public record ReferralCommissionDto(
     string Status,
     string? ReferenceNumber,
     string? Remarks,
-    string? PatientName
+    string? PatientName,
+    DateTime? UpdatedAt = null,
+    DateTime? DeletedAt = null
 );
 
 
@@ -44,6 +48,10 @@ public class GetReferralCommissionsQueryHandler : IRequestHandler<GetReferralCom
             .AsQueryable();
 
         // 2. Apply Filters
+        if (!request.IncludeDeleted)
+            commissionsQuery = commissionsQuery.Where(c => c.DeletedAt == null);
+        if (request.UpdatedAfter.HasValue)
+            commissionsQuery = commissionsQuery.Where(c => c.UpdatedAt > request.UpdatedAfter.Value);
         if (request.ReferrerId.HasValue)
             commissionsQuery = commissionsQuery.Where(c => c.ReferrerId == request.ReferrerId.Value);
 
@@ -76,7 +84,9 @@ public class GetReferralCommissionsQueryHandler : IRequestHandler<GetReferralCom
                 x.Commission.Status ?? "UNPAID",
                 x.Commission.ReferenceNumber,
                 x.Commission.Remarks,
-                x.PatientName ?? "Unknown Patient"
+                x.PatientName ?? "Unknown Patient",
+                x.Commission.UpdatedAt,
+                x.Commission.DeletedAt
             ))
             .ToListAsync(cancellationToken);
     }

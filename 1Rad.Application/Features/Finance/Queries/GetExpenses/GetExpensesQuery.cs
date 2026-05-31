@@ -10,6 +10,8 @@ public record GetExpensesQuery : IRequest<List<ExpenseDto>>
     public string? Search { get; init; }
     public DateTime? StartDate { get; init; }
     public DateTime? EndDate { get; init; }
+    public DateTime? UpdatedAfter { get; init; }
+    public bool IncludeDeleted { get; init; }
 }
 
 public class ExpenseDto
@@ -26,6 +28,8 @@ public class ExpenseDto
     public string Status { get; set; } = string.Empty;
     public DateTime TransactionDate { get; set; }
     public DateTime CreatedAt { get; set; }
+    public DateTime? UpdatedAt { get; set; }
+    public DateTime? DeletedAt { get; set; }
 }
 
 public class GetExpensesQueryHandler : IRequestHandler<GetExpensesQuery, List<ExpenseDto>>
@@ -50,6 +54,16 @@ public class GetExpensesQueryHandler : IRequestHandler<GetExpensesQuery, List<Ex
                 .AsNoTracking()
                 .Where(e => e.HospitalId == _context.UserContext.HospitalId)
                 .AsQueryable();
+
+            if (!request.IncludeDeleted)
+            {
+                query = query.Where(e => e.DeletedAt == null);
+            }
+            if (request.UpdatedAfter.HasValue)
+            {
+                var since = request.UpdatedAfter.Value;
+                query = query.Where(e => e.UpdatedAt > since);
+            }
 
             // Category Filtering
             if (!string.IsNullOrEmpty(request.Category) && request.Category != "ALL")
@@ -91,9 +105,11 @@ public class GetExpensesQueryHandler : IRequestHandler<GetExpensesQuery, List<Ex
                     CostCenter = e.CostCenter,
                     Status = e.Status,
                     TransactionDate = e.TransactionDate,
-                    CreatedAt = e.CreatedAt
+                    CreatedAt = e.CreatedAt,
+                    UpdatedAt = e.UpdatedAt,
+                    DeletedAt = e.DeletedAt
                 })
-                .Take(200)
+                .Take(500)
                 .ToListAsync(cancellationToken);
         }
         catch (Exception ex)

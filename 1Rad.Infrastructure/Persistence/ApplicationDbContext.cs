@@ -876,6 +876,34 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
                 entry.Entity.UpdatedAt = nowUtc;
             }
         }
+        foreach (var entry in ChangeTracker.Entries<Invoice>())
+        {
+            if (entry.State == EntityState.Added || entry.State == EntityState.Modified)
+            {
+                entry.Entity.UpdatedAt = nowUtc;
+            }
+        }
+        foreach (var entry in ChangeTracker.Entries<Expense>())
+        {
+            if (entry.State == EntityState.Added || entry.State == EntityState.Modified)
+            {
+                entry.Entity.UpdatedAt = nowUtc;
+            }
+        }
+        foreach (var entry in ChangeTracker.Entries<Referrer>())
+        {
+            if (entry.State == EntityState.Added || entry.State == EntityState.Modified)
+            {
+                entry.Entity.UpdatedAt = nowUtc;
+            }
+        }
+        foreach (var entry in ChangeTracker.Entries<ReferralCommission>())
+        {
+            if (entry.State == EntityState.Added || entry.State == EntityState.Modified)
+            {
+                entry.Entity.UpdatedAt = nowUtc;
+            }
+        }
 
         var result = await base.SaveChangesAsync(cancellationToken);
 

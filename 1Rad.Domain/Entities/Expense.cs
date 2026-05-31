@@ -17,6 +17,11 @@ public class Expense : BaseEntity, IHospitalContext
     public DateTime TransactionDate { get; set; } = DateTime.UtcNow;
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
+    // Sync engine fields (Phase B3 Slice 3). UpdatedAt is stamped by the
+    // SaveChanges hook in ApplicationDbContext on every write.
+    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime? DeletedAt { get; set; }
+
     public Guid HospitalId { get; set; }
 
     /// <summary>When this expense was auto-generated from a salary disbursement, FK to it. Null for manual expenses.</summary>
