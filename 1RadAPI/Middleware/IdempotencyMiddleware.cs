@@ -186,12 +186,15 @@ public class IdempotencyMiddleware
         }
     }
 
-    private static Guid? ExtractUserId(HttpContext context)
+    private static Guid ExtractUserId(HttpContext context)
     {
+        // Returns IdempotencyRecord.AnonymousUserId (Guid.Empty) when no
+        // authenticated principal — the table stores the sentinel rather
+        // than NULL because SQL Server forbids NULL columns in the PK.
         var user = context.User;
-        if (user?.Identity?.IsAuthenticated != true) return null;
+        if (user?.Identity?.IsAuthenticated != true) return IdempotencyRecord.AnonymousUserId;
         var raw = user.FindFirst(ClaimTypes.NameIdentifier)?.Value
                ?? user.FindFirst("sub")?.Value;
-        return Guid.TryParse(raw, out var id) ? id : null;
+        return Guid.TryParse(raw, out var id) ? id : IdempotencyRecord.AnonymousUserId;
     }
 }

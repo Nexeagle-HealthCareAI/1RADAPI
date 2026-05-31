@@ -6,10 +6,15 @@ namespace _1Rad.Domain.Entities;
 // twice. See IdempotencyMiddleware for the full flow.
 public class IdempotencyRecord
 {
+    // Sentinel UserId used when a request is AllowAnonymous (no
+    // authenticated principal). SQL Server forbids NULL columns in a
+    // primary key, so we store this fixed Guid instead of NULL. The
+    // namespace 00000000-... is universal "absence" semantics.
+    public static readonly Guid AnonymousUserId = Guid.Empty;
+
     public string Key { get; set; } = string.Empty;
-    // Nullable for AllowAnonymous endpoints — the key alone has to
-    // disambiguate in that case.
-    public Guid? UserId { get; set; }
+    // Non-nullable — anonymous callers get AnonymousUserId (Guid.Empty).
+    public Guid UserId { get; set; }
     public string Method { get; set; } = string.Empty;
     public string Path { get; set; } = string.Empty;
     public int ResponseStatus { get; set; }
