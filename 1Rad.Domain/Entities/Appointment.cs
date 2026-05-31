@@ -57,6 +57,10 @@ public class Appointment : BaseEntity, IHospitalContext
     // sync delta purposes only and is hidden from normal GETs.
     public DateTime? DeletedAt { get; set; }
 
+    // Optimistic-concurrency token (B2 Track 3). SQL Server maintains this
+    // as ROWVERSION; EF Core treats it as a concurrency check on UPDATE.
+    public byte[]? RowVersion { get; set; }
+
     public int? DailyTokenNumber { get; set; }  // Persisted token, assigned atomically on creation
     
     public string? DelayReason { get; set; }

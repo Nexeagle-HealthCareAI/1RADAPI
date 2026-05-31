@@ -7,6 +7,7 @@ using _1Rad.Application.Features.Reporting.Commands.UpsertTemplate;
 using _1Rad.Application.Features.Reporting.Queries.GetKeywords;
 using _1Rad.Application.Features.Reporting.Queries.GetReport;
 using _1Rad.Application.Features.Reporting.Queries.GetReportsDelta;
+using _1Rad.Application.Common.Exceptions;
 using _1Rad.Application.Features.Reporting.Queries.GetTemplates;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
@@ -214,6 +215,20 @@ namespace _1RadAPI.Controllers
             catch (UnauthorizedAccessException ex)
             {
                 return StatusCode(403, new { success = false, error = ex.Message });
+            }
+            catch (OccConflictException ex)
+            {
+                // B2 Track 3 — auto-merge + Undo. Body carries the server's
+                // current state so the frontend can overwrite the editor
+                // and offer the radiologist a 30s window to re-apply
+                // their version if they want to win the race deliberately.
+                return Conflict(new
+                {
+                    success = false,
+                    code = "OCC_CONFLICT",
+                    error = ex.Message,
+                    data = ex.Server,
+                });
             }
             catch (Exception ex)
             {

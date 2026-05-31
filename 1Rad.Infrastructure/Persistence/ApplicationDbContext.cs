@@ -56,6 +56,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<HospitalLeavePolicy> HospitalLeavePolicies => Set<HospitalLeavePolicy>();
     public DbSet<StaffAttendance> StaffAttendances => Set<StaffAttendance>();
     public DbSet<StaffLeaveRequest> StaffLeaveRequests => Set<StaffLeaveRequest>();
+    public DbSet<IdempotencyRecord> IdempotencyKeys => Set<IdempotencyRecord>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -171,6 +172,19 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
                 .HasForeignKey(e => e.UserId);
         });
 
+        // Idempotency dedupe table — Phase B2 Track 2.
+        modelBuilder.Entity<IdempotencyRecord>(entity =>
+        {
+            entity.ToTable("IdempotencyKeys", "dbo");
+            // (Key, UserId) compound key — see migration 50.
+            entity.HasKey(e => new { e.Key, e.UserId });
+            entity.Property(e => e.Key).HasMaxLength(80).IsRequired();
+            entity.Property(e => e.Method).HasMaxLength(10).IsRequired();
+            entity.Property(e => e.Path).HasMaxLength(500).IsRequired();
+            entity.Property(e => e.ResponseContentType).HasMaxLength(120);
+            entity.HasIndex(e => e.ExpiresAt);
+        });
+
         // Patient Configuration
         modelBuilder.Entity<Patient>(entity =>
         {
@@ -224,6 +238,11 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.HasOne(e => e.Hospital)
                 .WithMany()
                 .HasForeignKey(e => e.HospitalId);
+
+            // B2 Track 3 — OCC token. ROWVERSION is server-maintained; EF
+            // ships the original value with every UPDATE's WHERE clause so
+            // a concurrent change triggers DbUpdateConcurrencyException.
+            entity.Property(e => e.RowVersion).IsRowVersion();
         });
 
         // AppointmentComment Configuration — append-only audit trail for an
@@ -333,6 +352,9 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
                 .WithOne(f => f.Report)
                 .HasForeignKey(f => f.ReportId)
                 .OnDelete(DeleteBehavior.Cascade);
+
+            // B2 Track 3 — OCC token (see Appointment for rationale).
+            entity.Property(e => e.RowVersion).IsRowVersion();
 
             entity.HasOne(e => e.Appointment)
                 .WithMany()

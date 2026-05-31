@@ -205,6 +205,12 @@ app.UseAuthorization();
 app.UseMiddleware<SessionValidationMiddleware>();
 app.UseMiddleware<ContextualSentinelMiddleware>();
 app.UseMiddleware<SubscriptionValidationMiddleware>();
+// Phase B2 Track 2 — server-side dedupe for mutations carrying an
+// Idempotency-Key header (the offline outbox sends one on every queued
+// push). Runs AFTER session + subscription gates so a replay can't be
+// used to slip past those checks; runs BEFORE MapControllers so a hit
+// short-circuits the action handler entirely.
+app.UseMiddleware<IdempotencyMiddleware>();
 
 app.MapControllers();
 

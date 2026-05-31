@@ -44,4 +44,11 @@ public interface IApplicationDbContext
     IUserContext UserContext { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken);
+
+    // EF Core ChangeTracker access — needed by OCC-aware command handlers
+    // (Phase B2 Track 3) so they can set OriginalValues["RowVersion"] on
+    // an existing tracked entity. Exposing the EntityEntry shape keeps
+    // the interface narrower than full DbContext while still letting
+    // handlers do this one operation.
+    Microsoft.EntityFrameworkCore.ChangeTracking.EntityEntry<TEntity> Entry<TEntity>(TEntity entity) where TEntity : class;
 }

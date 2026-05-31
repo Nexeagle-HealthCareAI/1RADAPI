@@ -30,7 +30,11 @@ public record ReportDeltaDto(
     DateTime? CreatedAt,
     DateTime? UpdatedAt,
     DateTime? DeletedAt,
-    string ReportingMode
+    string ReportingMode,
+    // Phase B2 Track 3 — OCC concurrency token. Frontend stores it
+    // alongside the cached report and echoes it back on save so the
+    // server can detect a stale write.
+    byte[]? RowVersion = null
 );
 
 public class GetReportsDeltaQueryHandler : IRequestHandler<GetReportsDeltaQuery, List<ReportDeltaDto>>
@@ -81,7 +85,8 @@ public class GetReportsDeltaQueryHandler : IRequestHandler<GetReportsDeltaQuery,
                 r.CreatedAt,
                 r.UpdatedAt,
                 r.DeletedAt,
-                r.ReportingMode
+                r.ReportingMode,
+                r.RowVersion
             ))
             .ToListAsync(cancellationToken);
     }

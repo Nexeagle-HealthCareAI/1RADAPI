@@ -56,6 +56,13 @@ namespace _1Rad.Domain.Entities
         // query, not here) but exposed to the client as a tombstone so the
         // local cache can purge them.
         public DateTime? DeletedAt { get; set; }
+        // Optimistic-concurrency token (Phase B2 Track 3). SQL Server
+        // maintains it automatically via ROWVERSION; EF treats it as a
+        // concurrency check on UPDATE. The frontend reads it from the
+        // DTO, stores it locally, and sends it back on save so two users
+        // editing in parallel detect the conflict instead of silently
+        // overwriting each other.
+        public byte[]? RowVersion { get; set; }
         public string ReportPdfUrl { get; set; } = string.Empty;
         public string ReportingMode { get; set; } = "Structured"; // Structured or Narrative Editor
         public int? FieldCount { get; set; } = 0;
