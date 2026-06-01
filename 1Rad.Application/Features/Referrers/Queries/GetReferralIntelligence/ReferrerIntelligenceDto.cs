@@ -36,5 +36,24 @@ public record ReferredPatientDto(
     string CommissionStatus = "Unpaid",
     decimal TotalAmount = 0,
     string? ReferrerName = null,
-    decimal DiscountAmount = 0
+    decimal DiscountAmount = 0,
+    // Multi-service rollout (batch-5 fix). The Modality + Service fields
+    // above still carry the parent's primary scalar for backward
+    // compatibility, so existing list / row renderers don't break.
+    // ServiceLines is the per-line breakdown — used by ReferralsPage's
+    // chart aggregators so a multi-service visit contributes to the
+    // CT bucket AND the USG bucket, not just the X-Ray primary.
+    IReadOnlyList<ReferredServiceLineDto>? ServiceLines = null
+);
+
+/// <summary>
+/// One line of work on a referred appointment, surfaced through the
+/// referrer dashboard so per-modality breakdowns stay accurate when a
+/// visit carries many services.
+/// </summary>
+public record ReferredServiceLineDto(
+    Guid AppointmentServiceId,
+    string ServiceName,
+    string Modality,
+    decimal CommissionAmount
 );

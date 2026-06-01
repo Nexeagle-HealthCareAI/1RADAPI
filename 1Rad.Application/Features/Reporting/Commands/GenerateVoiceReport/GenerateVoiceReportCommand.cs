@@ -9,6 +9,13 @@ namespace _1Rad.Application.Features.Reporting.Commands.GenerateVoiceReport;
 public record GenerateVoiceReportCommand : IRequest<GenerateVoiceReportResult>
 {
     public string AppointmentId { get; init; } = string.Empty;
+    // Multi-service rollout (batch-3 fix). When supplied, the dictation
+    // context handed to Claude Haiku names this specific service line
+    // — so a CT report dictation isn't seeded with the X-ray service
+    // name from the visit's primary. NULL = legacy / single-service
+    // path: handler falls back to the parent appointment's scalar
+    // Service + Modality (same as today).
+    public Guid? AppointmentServiceId { get; init; }
     public Guid? TemplateId { get; init; }
     public string Transcript { get; init; } = string.Empty;
 }
@@ -41,8 +48,32 @@ public class GenerateVoiceReportCommandHandler
                 a.DisplayId == request.AppointmentId,
                 cancellationToken);
 
+        // Service-scoped context. When the caller passed an
+        // AppointmentServiceId, name THAT service in the dictation
+        // context — so a CT report dictation reads
+        // "Study/Service: CT Head Plain (CT)" rather than the visit's
+        // primary X-ray scalar. Falls back to the parent's scalar
+        // fields when no service id is supplied (single-service /
+        // legacy / v1 client).
+        string studyLabel = appt?.Service ?? string.Empty;
+        string modalityLabel = appt?.Modality ?? string.Empty;
+        if (appt != null && request.AppointmentServiceId.HasValue)
+        {
+            var svc = await _context.AppointmentServices
+                .AsNoTracking()
+                .FirstOrDefaultAsync(s =>
+                    s.Id == request.AppointmentServiceId.Value &&
+                    s.AppointmentId == appt.AppointmentId,
+                    cancellationToken);
+            if (svc != null)
+            {
+                studyLabel    = svc.ServiceName ?? studyLabel;
+                modalityLabel = svc.Modality    ?? modalityLabel;
+            }
+        }
+
         var patientCtx = appt?.Patient != null
-            ? $"Patient: {appt.Patient.FullName}; Age: {appt.Patient.Age}; Gender: {appt.Patient.Gender}; Study/Service: {appt.Service}."
+            ? $"Patient: {appt.Patient.FullName}; Age: {appt.Patient.Age}; Gender: {appt.Patient.Gender}; Study/Service: {studyLabel} ({modalityLabel})."
             : "Patient context unavailable.";
 
         // ── Template HTML (the EXACT structure to preserve) ──────────────

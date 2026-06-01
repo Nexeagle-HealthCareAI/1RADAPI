@@ -59,7 +59,7 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
         var missionData = await appointmentsQuery
             .Select(a => new
             {
-                ReferrerId = a.Patient.ReferrerId ?? 
+                ReferrerId = a.Patient.ReferrerId ??
                              (_context.Referrers.Where(r => r.Name == a.ReferredBy && r.HospitalId == a.HospitalId).Select(r => (Guid?)r.ReferrerId).FirstOrDefault() ?? Guid.Empty),
                 ReferrerName = a.Patient.Referrer.Name ?? a.ReferredBy ?? "Anonymous Source",
                 ReferrerContact = a.Patient.Referrer.Contact ?? "N/A",
@@ -68,7 +68,7 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
                 Patient = a.Patient,
                 Commissions = _context.ReferralCommissions
                     .Where(c => c.AppointmentId == a.AppointmentId && c.Status != "Cancelled")
-                    .Select(c => new { c.CommissionAmount, c.Status })
+                    .Select(c => new { c.CommissionAmount, c.Status, c.AppointmentServiceId, c.Modality })
                     .ToList(),
                 Financials = _context.Invoices
                     .Where(i => i.AppointmentId == a.AppointmentId)
@@ -77,30 +77,77 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
             })
             .ToListAsync(cancellationToken);
 
+        // 4b. Multi-service rollout (batch-5 fix). Batched second query
+        // pulls every live service line on these referred appointments
+        // so the per-modality chart aggregators on ReferralsPage see
+        // the full breakdown, not just the primary line.
+        var referredAppointmentIds = missionData.Select(m => m.Appointment.AppointmentId).ToList();
+        var rawServiceLines = referredAppointmentIds.Count == 0
+            ? new List<RawServiceLine>()
+            : await _context.AppointmentServices
+                .AsNoTracking()
+                .Where(s => referredAppointmentIds.Contains(s.AppointmentId) && s.DeletedAt == null)
+                .OrderBy(s => s.UpdatedAt)
+                .Select(s => new RawServiceLine(
+                    s.AppointmentId,
+                    s.Id,
+                    s.ServiceName ?? string.Empty,
+                    s.Modality ?? "UNKNOWN"))
+                .ToListAsync(cancellationToken);
+        var serviceLinesByAppointment = rawServiceLines
+            .GroupBy(s => s.AppointmentId)
+            .ToDictionary(g => g.Key, g => g.ToList());
+
         // 5. Aggregate Intelligence by Referrer Node
         var result = missionData
             .GroupBy(m => m.ReferrerId)
             .Select(g => {
-                var missionsList = g.Select(m => new ReferredPatientDto(
-                    m.Patient.PatientId,
-                    m.Patient.PatientIdentifier,
-                    m.Patient.FullName,
-                    m.Patient.Mobile,
-                    m.Patient.Address,
-                    m.Patient.Age,
-                    m.Patient.Gender,
-                    m.Appointment.Modality,
-                    m.Appointment.Service,
-                    m.Patient.SourceOfInfo ?? "DIRECT",
-                    m.Appointment.DateTime.ToString("yyyy-MM-dd"),
-                    m.Appointment.Status,
-                    m.Appointment.AppointmentId,
-                    m.Commissions.Sum(c => c.CommissionAmount),
-                    m.Commissions.Any(c => c.Status.Equals("UNPAID", StringComparison.OrdinalIgnoreCase)) ? "Unpaid" : "Paid",
-                    m.Financials.TotalAmount,
-                    m.ReferrerName,
-                    m.Financials.DiscountAmount
-                )).ToList();
+                var missionsList = g.Select(m =>
+                {
+                    // Per-service breakdown for this appointment. Commission
+                    // amount attribution: prefer a row that matches by
+                    // AppointmentServiceId (the post-step-2 shape — one
+                    // commission per service); fall back to per-modality
+                    // attribution from the commission row's own Modality
+                    // field (legacy shape where one commission was
+                    // recorded against the parent appointment).
+                    var lines = serviceLinesByAppointment.TryGetValue(m.Appointment.AppointmentId, out var raw)
+                        ? raw.Select(s =>
+                        {
+                            var matchedById = m.Commissions
+                                .Where(c => c.AppointmentServiceId == s.Id)
+                                .Sum(c => c.CommissionAmount);
+                            var attributed = matchedById > 0
+                                ? matchedById
+                                : m.Commissions
+                                    .Where(c => c.AppointmentServiceId == null && string.Equals(c.Modality, s.Modality, StringComparison.OrdinalIgnoreCase))
+                                    .Sum(c => c.CommissionAmount);
+                            return new ReferredServiceLineDto(s.Id, s.ServiceName ?? string.Empty, s.Modality, attributed);
+                        }).ToList()
+                        : new List<ReferredServiceLineDto>();
+
+                    return new ReferredPatientDto(
+                        m.Patient.PatientId,
+                        m.Patient.PatientIdentifier,
+                        m.Patient.FullName,
+                        m.Patient.Mobile,
+                        m.Patient.Address,
+                        m.Patient.Age,
+                        m.Patient.Gender,
+                        m.Appointment.Modality,
+                        m.Appointment.Service,
+                        m.Patient.SourceOfInfo ?? "DIRECT",
+                        m.Appointment.DateTime.ToString("yyyy-MM-dd"),
+                        m.Appointment.Status,
+                        m.Appointment.AppointmentId,
+                        m.Commissions.Sum(c => c.CommissionAmount),
+                        m.Commissions.Any(c => c.Status.Equals("UNPAID", StringComparison.OrdinalIgnoreCase)) ? "Unpaid" : "Paid",
+                        m.Financials.TotalAmount,
+                        m.ReferrerName,
+                        m.Financials.DiscountAmount,
+                        lines
+                    );
+                }).ToList();
 
                 var totalComm = missionsList.Sum(p => p.CommissionAmount);
                 var paidComm = missionsList.Where(p => p.CommissionStatus.Equals("Paid", StringComparison.OrdinalIgnoreCase)).Sum(p => p.CommissionAmount);
@@ -127,4 +174,14 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
 
         return result;
     }
+
+    // Lightweight projection for the batched service-line lookup.
+    // Carries the four fields the per-mission attribution loop reads —
+    // nothing more — so the EF query stays narrow and the handler
+    // closure type stays simple.
+    private sealed record RawServiceLine(
+        Guid AppointmentId,
+        Guid Id,
+        string ServiceName,
+        string Modality);
 }

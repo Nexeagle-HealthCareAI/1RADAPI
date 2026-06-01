@@ -17,7 +17,17 @@ public record GenerateInvoiceCommand : IRequest<Guid>
     public List<InvoiceItemDto> Items { get; init; } = new();
 }
 
-public record InvoiceItemDto(string Description, decimal Amount, int Quantity);
+// Multi-service rollout (batch-2 fix). AppointmentServiceId is optional —
+// supplied when the frontend chose a pending billable that came from the
+// fan-out in GetPendingBillablesQuery, omitted on freeform "add registry
+// service" lines. Server stamps it on the resulting InvoiceItem so the
+// line attaches to the right AppointmentService row.
+public record InvoiceItemDto(
+    string Description,
+    decimal Amount,
+    int Quantity,
+    Guid? AppointmentServiceId = null
+);
 
 public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceCommand, Guid>
 {
@@ -125,7 +135,8 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
                 {
                     Description = item.Description,
                     Amount = item.Amount,
-                    Quantity = item.Quantity
+                    Quantity = item.Quantity,
+                    AppointmentServiceId = item.AppointmentServiceId,
                 });
             }
 

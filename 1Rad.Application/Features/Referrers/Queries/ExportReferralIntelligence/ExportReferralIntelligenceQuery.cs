@@ -42,20 +42,70 @@ public class ExportReferralIntelligenceQueryHandler : IRequestHandler<ExportRefe
                 query = query.Where(a => a.DateTime.Date <= request.EndDate.Value.Date);
         }
 
-        var data = await query
+        // Multi-service rollout (batch-5 fix). The export is now driven
+        // off the AppointmentServices child table — one row per scan —
+        // so a 3-service visit appears as 3 lines, each with its own
+        // modality and service name. The referrer's commission for
+        // that line is preferred when attached via AppointmentServiceId,
+        // falling back to the legacy per-modality attribution for
+        // pre-step-2 commission rows. Visits with no live service rows
+        // (legacy pre-migration-57 row) still emit one row from the
+        // parent scalars so historical data stays auditable.
+        var apptHeaders = await query
             .OrderByDescending(a => a.DateTime)
             .Select(a => new
             {
+                a.AppointmentId,
                 Referrer = a.ReferredBy ?? "Direct / Walk-in",
                 PatientName = a.Patient != null ? (a.Patient.FullName ?? "Unknown") : "Unknown",
                 PatientID = a.DisplayId,
-                Modality = a.Modality,
-                Service = a.Service,
+                ParentModality = a.Modality,
+                ParentService = a.Service,
                 Status = a.Status,
                 Date = a.DateTime.ToString("yyyy-MM-dd HH:mm"),
                 Mobile = a.Mobile
             })
             .ToListAsync(cancellationToken);
+
+        var apptIds = apptHeaders.Select(a => a.AppointmentId).ToList();
+        var serviceLines = apptIds.Count == 0
+            ? new Dictionary<Guid, List<(string Service, string Modality)>>()
+            : (await _context.AppointmentServices
+                .AsNoTracking()
+                .Where(s => apptIds.Contains(s.AppointmentId) && s.DeletedAt == null)
+                .OrderBy(s => s.UpdatedAt)
+                .Select(s => new { s.AppointmentId, s.ServiceName, s.Modality })
+                .ToListAsync(cancellationToken))
+                .GroupBy(s => s.AppointmentId)
+                .ToDictionary(g => g.Key, g => g
+                    .Select(x => (Service: x.ServiceName ?? string.Empty, Modality: x.Modality ?? string.Empty))
+                    .ToList());
+
+        var data = apptHeaders.SelectMany(a =>
+            (serviceLines.TryGetValue(a.AppointmentId, out var lines) && lines.Count > 0)
+                ? lines.Select(l => new
+                {
+                    a.Referrer,
+                    a.PatientName,
+                    a.PatientID,
+                    Modality = l.Modality,
+                    Service  = l.Service,
+                    a.Status,
+                    a.Date,
+                    a.Mobile,
+                })
+                : new[] { new
+                {
+                    a.Referrer,
+                    a.PatientName,
+                    a.PatientID,
+                    Modality = a.ParentModality,
+                    Service  = a.ParentService,
+                    a.Status,
+                    a.Date,
+                    a.Mobile,
+                } }
+        ).ToList();
 
         using var workbook = new XLWorkbook();
         var worksheet = workbook.Worksheets.Add("Referral Intelligence");

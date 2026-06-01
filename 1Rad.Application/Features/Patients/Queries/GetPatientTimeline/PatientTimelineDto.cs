@@ -13,7 +13,26 @@ public record PatientTimelineDto(
     string ReferredBy,
     string ReferredContact,
     TimelineReportDto? Report,
-    List<TimelineAssetDto> Assets
+    List<TimelineAssetDto> Assets,
+    // Multi-service rollout (batch-1 fix). Service lines on this visit
+    // so the frontend chip stack + per-line render works on the patient
+    // timeline. Null = response from a server build that pre-dates this
+    // field — the page's `getServiceLines` helper still falls back to
+    // the scalar Service/Modality fields above.
+    IReadOnlyList<TimelineServiceDto>? Services = null
+);
+
+/// <summary>
+/// One line item on a visit, surfaced through the patient timeline so
+/// the chip stack + per-service status dot render correctly. Mirrors
+/// the worklist's AppointmentServiceDto but trimmed to the fields the
+/// timeline actually uses.
+/// </summary>
+public record TimelineServiceDto(
+    Guid Id,
+    string ServiceName,
+    string Modality,
+    string Status
 );
 
 public record TimelineReportDto(

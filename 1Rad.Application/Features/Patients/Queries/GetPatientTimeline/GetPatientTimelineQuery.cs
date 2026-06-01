@@ -52,6 +52,31 @@ public class GetPatientTimelineQueryHandler : IRequestHandler<GetPatientTimeline
             })
             .ToListAsync(cancellationToken);
 
+        // Batched second query to pull every live service line for the
+        // visits we just fetched. Single round-trip regardless of how
+        // many visits this patient has — same pattern as
+        // GetAppointmentsQuery's services materialisation.
+        var appointmentIds = appointments.Select(x => x.Appointment.AppointmentId).ToList();
+        var serviceRows = await _context.AppointmentServices
+            .AsNoTracking()
+            .Where(s => appointmentIds.Contains(s.AppointmentId) && s.DeletedAt == null)
+            .OrderBy(s => s.UpdatedAt)
+            .Select(s => new
+            {
+                s.AppointmentId,
+                Dto = new TimelineServiceDto(
+                    s.Id,
+                    s.ServiceName ?? string.Empty,
+                    s.Modality ?? string.Empty,
+                    s.Status ?? "NOT_STARTED"
+                )
+            })
+            .ToListAsync(cancellationToken);
+
+        var servicesByAppointment = serviceRows
+            .GroupBy(s => s.AppointmentId)
+            .ToDictionary(g => g.Key, g => (IReadOnlyList<TimelineServiceDto>)g.Select(x => x.Dto).ToList());
+
         return appointments.Select(x => new PatientTimelineDto(
             x.Appointment.AppointmentId,
             x.Appointment.DisplayId ?? string.Empty,
@@ -62,7 +87,10 @@ public class GetPatientTimelineQueryHandler : IRequestHandler<GetPatientTimeline
             x.Appointment.ReferredBy ?? string.Empty,
             x.Appointment.ReferredContact ?? string.Empty,
             x.Report,
-            x.Assets
+            x.Assets,
+            servicesByAppointment.TryGetValue(x.Appointment.AppointmentId, out var lines)
+                ? lines
+                : (IReadOnlyList<TimelineServiceDto>)System.Array.Empty<TimelineServiceDto>()
         )).ToList();
     }
 }

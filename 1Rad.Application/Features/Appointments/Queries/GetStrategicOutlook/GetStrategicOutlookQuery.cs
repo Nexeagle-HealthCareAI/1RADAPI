@@ -65,12 +65,31 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
             var last30Days = rangeStart == DateTime.MinValue ? DateTime.Today.AddDays(-30) : rangeStart.AddDays(-30);
 
             // --- 1. CORE MISSION DATA ---
-            var todayMissions = await _context.Appointments
+            //
+            // dailyMissions stays a count of APPOINTMENTS (one row per
+            // patient visit on the worklist). Modality breakdowns below
+            // run off the SERVICE-LINE list (one row per scan) so a
+            // single visit with X-Ray + CT + USG contributes 3 to the
+            // pie chart while still being 1 "mission".
+            var todayAppointmentRows = await _context.Appointments
                 .Where(a => a.HospitalId == hospitalId && a.DateTime >= rangeStart && a.DateTime < rangeEnd)
-                .Select(a => new { a.Modality, a.PatientId })
+                .Select(a => new { a.AppointmentId, a.PatientId })
                 .ToListAsync(cancellationToken);
+            var dailyMissions = todayAppointmentRows.Count;
+            var todayAppointmentIds = todayAppointmentRows.Select(r => r.AppointmentId).ToList();
 
-            var dailyMissions = todayMissions.Count;
+            // Per-service breakdown. Soft-deleted lines + cancelled lines
+            // are excluded so a partially-cancelled visit doesn't double-
+            // count its cancelled scans on the dashboard pie.
+            var todayServiceLines = todayAppointmentIds.Count == 0
+                ? new List<ServiceLineRow>()
+                : await _context.AppointmentServices
+                    .Where(s => s.HospitalId == hospitalId
+                             && s.DeletedAt == null
+                             && s.Status != "CANCELLED"
+                             && todayAppointmentIds.Contains(s.AppointmentId))
+                    .Select(s => new ServiceLineRow(s.Id, s.AppointmentId, s.Modality ?? "UNKNOWN"))
+                    .ToListAsync(cancellationToken);
             var universalRegistryCount = await _context.Patients
                 .Where(p => p.HospitalId == hospitalId && p.CreatedAt >= rangeStart && p.CreatedAt < rangeEnd)
                 .CountAsync(cancellationToken);
@@ -87,8 +106,13 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
             }
             catch
             {
-                // If invoices table doesn't exist or query fails, calculate from modality weights
-                financialYield = todayMissions.Sum(m => _modalityWeights.ContainsKey(m.Modality) ? _modalityWeights[m.Modality] : 80m);
+                // If invoices table doesn't exist or query fails, calculate from modality weights.
+                // Multi-service rollout — driven off service lines now,
+                // so the synthetic-revenue fallback weights each scan
+                // by its own modality (CT line gets the CT weight,
+                // X-Ray line gets the X-Ray weight) instead of weighting
+                // the whole visit by its primary modality only.
+                financialYield = todayServiceLines.Sum(s => _modalityWeights.ContainsKey(s.Modality) ? _modalityWeights[s.Modality] : 80m);
             }
 
             // --- 2.1 OPERATIONAL EXPENSES ---
@@ -173,8 +197,14 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
             );
 
             // --- 3. MODALITY & REVENUE BREAKDOWN ---
-            var modalityStats = todayMissions
-                .GroupBy(a => a.Modality)
+            //
+            // Multi-service rollout (batch-5 fix). modalityStats counts
+            // one entry per LIVE service line in the range — so a
+            // visit with X-Ray + CT shows up under both modality
+            // segments on the dashboard pie chart instead of being
+            // attributed only to the primary line.
+            var modalityStats = todayServiceLines
+                .GroupBy(s => s.Modality)
                 .Select(g => new { Label = g.Key, Count = g.Count() })
                 .ToList();
 
@@ -191,17 +221,31 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
             var revenueBreakdown = new List<ModalityRevenue>();
             try
             {
-                var todayInvoices = await _context.Invoices
-                    .Where(i => i.HospitalId == hospitalId && i.CreatedAt >= rangeStart && i.CreatedAt < rangeEnd && i.AppointmentId != null)
-                    .Join(_context.Appointments,
-                          i => i.AppointmentId,
-                          a => a.AppointmentId,
-                          (i, a) => new { a.Modality, i.TotalAmount })
+                // Multi-service rollout (batch-5 fix). Revenue per modality
+                // is now summed across INVOICE ITEMS routed through their
+                // AppointmentServiceId — so a multi-service invoice's
+                // X-Ray ₹500 + CT ₹2000 lines land in the right
+                // modality buckets instead of attributing the whole
+                // ₹2500 to the primary line. Items lacking the FK
+                // (rows pre-migration-57 or freeform manual invoice
+                // lines) get a separate UNATTACHED bucket via the join
+                // fallback below — we don't try to back-fill them.
+                // InvoiceItems isn't exposed on IApplicationDbContext, so
+                // we traverse them via the navigation property and join
+                // to AppointmentServices to read the per-line modality.
+                var todayInvoiceLineRevenue = await _context.Invoices
+                    .Where(i => i.HospitalId == hospitalId && i.CreatedAt >= rangeStart && i.CreatedAt < rangeEnd)
+                    .SelectMany(i => i.Items.Where(ii => ii.AppointmentServiceId.HasValue),
+                                (i, ii) => new { AppointmentServiceId = ii.AppointmentServiceId!.Value, LineTotal = ii.Amount * ii.Quantity })
+                    .Join(_context.AppointmentServices,
+                          x => x.AppointmentServiceId,
+                          s => s.Id,
+                          (x, s) => new { Modality = s.Modality ?? "UNKNOWN", x.LineTotal })
                     .ToListAsync(cancellationToken);
 
                 foreach (var m in modalityStats)
                 {
-                    var actualRevenue = todayInvoices.Where(x => x.Modality == m.Label).Sum(x => x.TotalAmount);
+                    var actualRevenue = todayInvoiceLineRevenue.Where(x => x.Modality == m.Label).Sum(x => x.LineTotal);
                     if (actualRevenue == 0)
                     {
                         actualRevenue = m.Count * (_modalityWeights.ContainsKey(m.Label) ? _modalityWeights[m.Label] : 80m);
@@ -296,7 +340,7 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
                 .OrderByDescending(s => s.Count).Take(5).ToList();
 
             // --- 7. INSTITUTIONAL LOYALTY ---
-            var todayPatientIds = todayMissions.Select(m => m.PatientId).Distinct().ToList();
+            var todayPatientIds = todayAppointmentRows.Select(r => r.PatientId).Distinct().ToList();
             var returningCount = await _context.Appointments
                 .Where(a => a.HospitalId == hospitalId && a.DateTime < rangeStart && todayPatientIds.Contains(a.PatientId))
                 .Select(a => a.PatientId).Distinct().CountAsync(cancellationToken);
@@ -322,16 +366,37 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
             );
 
             // --- 9. BOTTLENECK ANALYZER (PENDING QUEUES) ---
+            // Multi-service rollout (batch-5 fix). "Pending" is now a
+            // per-SERVICE concept: a multi-service visit with the X-Ray
+            // reported but the CT still outstanding counts as 1 CT
+            // pending — not 0 or 1 modality-of-the-primary. We also
+            // honour the new AppointmentServiceId on DiagnosticReport
+            // so finalisation of one service doesn't suppress its
+            // siblings from the pending queue.
+            var finalizedReportServiceIds = await _context.DiagnosticReports
+                .Where(r => r.HospitalId == hospitalId && r.IsFinalized && r.AppointmentServiceId.HasValue)
+                .Select(r => r.AppointmentServiceId!.Value)
+                .ToListAsync(cancellationToken);
+
+            // Legacy single-report-per-appointment rows (pre-step-6 or
+            // v1-client saves) still finalise at the appointment level.
+            // Keep the old set too so an appointment that's fully
+            // reported via a single report (no service id) drops out.
             var finalizedReportAppointmentIds = await _context.DiagnosticReports
-                .Where(r => r.HospitalId == hospitalId && r.IsFinalized)
+                .Where(r => r.HospitalId == hospitalId && r.IsFinalized && r.AppointmentServiceId == null)
                 .Select(r => r.AppointmentId)
                 .ToListAsync(cancellationToken);
 
-            var pendingQueues = await _context.Appointments
-                .Where(a => a.HospitalId == hospitalId && a.DateTime >= rangeStart && a.DateTime < rangeEnd 
-                            && a.Status != "CANCELLED"
-                            && !finalizedReportAppointmentIds.Contains(a.AppointmentId))
-                .GroupBy(a => a.Modality)
+            var pendingQueues = await _context.AppointmentServices
+                .Where(s => s.HospitalId == hospitalId
+                         && s.DeletedAt == null
+                         && s.Status != "CANCELLED"
+                         && !finalizedReportServiceIds.Contains(s.Id)
+                         && _context.Appointments.Any(a => a.AppointmentId == s.AppointmentId
+                             && a.DateTime >= rangeStart && a.DateTime < rangeEnd
+                             && a.Status != "CANCELLED"
+                             && !finalizedReportAppointmentIds.Contains(a.AppointmentId)))
+                .GroupBy(s => s.Modality)
                 .Select(g => new QueueMetric(g.Key ?? "UNKNOWN", g.Count()))
                 .ToListAsync(cancellationToken);
 
@@ -354,4 +419,8 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
         }
     }
 
+    // Lightweight projection shape for the multi-service modality
+    // breakdowns. Carries enough to count and group without dragging the
+    // full AppointmentService entity through the handler.
+    private sealed record ServiceLineRow(Guid Id, Guid AppointmentId, string Modality);
 }
