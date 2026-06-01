@@ -74,5 +74,6 @@ public record AppointmentServiceDto(
     DateTime? CancelledAt,
     Guid? TechnicianId,
     Guid? ServiceChargeId,
-    DateTime UpdatedAt
+    DateTime UpdatedAt,
+    string? TechnicianComments = null
 );

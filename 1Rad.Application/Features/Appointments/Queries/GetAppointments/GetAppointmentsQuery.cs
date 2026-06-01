@@ -188,7 +188,8 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
                         s.CancelledAt,
                         s.TechnicianId,
                         s.ServiceChargeId,
-                        s.UpdatedAt
+                        s.UpdatedAt,
+                        s.TechnicianComments
                     )
                 })
                 .ToListAsync(cancellationToken);

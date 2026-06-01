@@ -7,6 +7,7 @@ using _1Rad.Application.Features.Appointments.Commands.CreateAppointment;
 using _1Rad.Application.Features.Appointments.Commands.UpdateAppointment;
 using _1Rad.Application.Features.Appointments.Commands.UpdateAppointmentStatus;
 using _1Rad.Application.Features.Appointments.Commands.UpdateAppointmentServiceStatus;
+using _1Rad.Application.Features.Appointments.Commands.UpdateAppointmentServiceNotes;
 using _1Rad.Application.Features.Appointments.Commands.ImportAppointments;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
@@ -87,6 +88,26 @@ public class AppointmentsController : ControllerBase
         if (!result.Success && result.NotAllowed)
         {
             return BadRequest(result);
+        }
+        return Ok(result);
+    }
+
+    // Per-service notes. Body: { "notes": "..." }. Null/empty clears
+    // the field. Stored on AppointmentService.TechnicianComments —
+    // separate from the visit-level Appointment.DelayReason so a CT
+    // can carry "patient asked to come back tomorrow" while the
+    // X-ray on the same visit stays clean.
+    public sealed record UpdateServiceNotesBody(string? Notes);
+
+    [HttpPatch("{id}/services/{serviceId}/notes")]
+    public async Task<IActionResult> UpdateServiceNotes(
+        Guid id, Guid serviceId, [FromBody] UpdateServiceNotesBody body)
+    {
+        var result = await _mediator.Send(
+            new UpdateAppointmentServiceNotesCommand(id, serviceId, body?.Notes));
+        if (!result.Success && result.Message == "Service not found on this appointment.")
+        {
+            return NotFound(result);
         }
         return Ok(result);
     }
