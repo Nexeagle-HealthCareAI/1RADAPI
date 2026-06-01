@@ -113,6 +113,7 @@ namespace _1RadAPI.Controllers
                     return new
                     {
                         assetId = a.Id,
+                        appointmentServiceId = a.AppointmentServiceId,
                         fileName = a.FileName,
                         fileType = a.FileType,
                         blobUrl = a.BlobUrl,
@@ -128,6 +129,7 @@ namespace _1RadAPI.Controllers
                     return new
                     {
                         assetId = a.Id,
+                        appointmentServiceId = a.AppointmentServiceId,
                         fileName = a.FileName,
                         fileType = a.FileType,
                         blobUrl = a.BlobUrl,
@@ -164,6 +166,13 @@ namespace _1RadAPI.Controllers
                 return new
                 {
                     assetId = a.Id,
+                    // Multi-service rollout — every series produced
+                    // from an asset inherits the asset's owning
+                    // AppointmentService so the viewer can strict-
+                    // match per service rather than guessing from the
+                    // DICOM-tag modality (which is ambiguous when a
+                    // visit has two CT services or similar).
+                    appointmentServiceId = a.AppointmentServiceId,
                     fileName = a.FileName,
                     fileType = a.FileType,
                     blobUrl = a.BlobUrl, // kept for fallback compat
