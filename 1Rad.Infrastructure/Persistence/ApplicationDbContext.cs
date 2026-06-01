@@ -372,7 +372,12 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.HasOne<AppointmentService>()
                 .WithMany()
                 .HasForeignKey(e => e.AppointmentServiceId)
-                .OnDelete(DeleteBehavior.SetNull);
+                // NO ACTION (not SET NULL) — SQL Server's multi-cascade-
+                // path detector blocks SET NULL because of the parallel
+                // Appointment → child + Appointment → AppointmentService
+                // → child paths. We soft-delete service rows via
+                // DeletedAt, so the difference never matters in practice.
+                .OnDelete(DeleteBehavior.NoAction);
         });
 
         // Payment Configuration
@@ -425,7 +430,12 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.HasOne<AppointmentService>()
                 .WithMany()
                 .HasForeignKey(e => e.AppointmentServiceId)
-                .OnDelete(DeleteBehavior.SetNull);
+                // NO ACTION (not SET NULL) — SQL Server's multi-cascade-
+                // path detector blocks SET NULL because of the parallel
+                // Appointment → child + Appointment → AppointmentService
+                // → child paths. We soft-delete service rows via
+                // DeletedAt, so the difference never matters in practice.
+                .OnDelete(DeleteBehavior.NoAction);
 
             entity.HasOne(e => e.Doctor)
                 .WithMany()
@@ -512,7 +522,12 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.HasOne<AppointmentService>()
                 .WithMany()
                 .HasForeignKey(e => e.AppointmentServiceId)
-                .OnDelete(DeleteBehavior.SetNull);
+                // NO ACTION (not SET NULL) — SQL Server's multi-cascade-
+                // path detector blocks SET NULL because of the parallel
+                // Appointment → child + Appointment → AppointmentService
+                // → child paths. We soft-delete service rows via
+                // DeletedAt, so the difference never matters in practice.
+                .OnDelete(DeleteBehavior.NoAction);
 
             // Filtered index — fast lookup for the extraction worker.
             entity.HasIndex(e => e.ExtractionStatus).HasFilter("[ExtractionStatus] IS NOT NULL");
@@ -627,7 +642,12 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.HasOne<AppointmentService>()
                 .WithMany()
                 .HasForeignKey(e => e.AppointmentServiceId)
-                .OnDelete(DeleteBehavior.SetNull);
+                // NO ACTION (not SET NULL) — SQL Server's multi-cascade-
+                // path detector blocks SET NULL because of the parallel
+                // Appointment → child + Appointment → AppointmentService
+                // → child paths. We soft-delete service rows via
+                // DeletedAt, so the difference never matters in practice.
+                .OnDelete(DeleteBehavior.NoAction);
         });
 
         // SubscriptionPlan Configuration
