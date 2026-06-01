@@ -632,6 +632,13 @@ namespace _1RadAPI.Controllers
     public class SasUploadTokenRequest
     {
         public Guid AppointmentId { get; set; }
+        // Multi-service rollout — when the technician's workspace is
+        // scoped to a specific AppointmentService line, the client
+        // forwards the FK here so the eventual /upload-complete call
+        // can stamp it on StudyAsset. We don't persist anything at
+        // token time (no DB row created yet) but accepting the field
+        // keeps model binding clean and avoids "unknown field" warnings.
+        public Guid? AppointmentServiceId { get; set; }
         public string FileName { get; set; } = string.Empty;
         public long FileSize { get; set; }
         public string? ContentType { get; set; }
