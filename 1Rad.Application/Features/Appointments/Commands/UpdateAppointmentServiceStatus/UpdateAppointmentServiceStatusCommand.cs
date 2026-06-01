@@ -60,9 +60,14 @@ public class UpdateAppointmentServiceStatusCommandHandler
     private readonly IApplicationDbContext _context;
 
     // Status whitelist — keeps the table's Status column to known values.
+    // IN_PROGRESS marks "scan has started" (technician opened the room);
+    // IN_MID marks "scan is half-way done" (contrast injected, second
+    // pass running). Both stamp ScanStartedAt without ScanCompletedAt,
+    // so the visit-level "everyone scanned?" rollup still treats the
+    // line as outstanding work.
     private static readonly HashSet<string> ValidStatuses = new(StringComparer.OrdinalIgnoreCase)
     {
-        "NOT_STARTED", "SCANNED", "REPORTED", "DELIVERED", "CANCELLED"
+        "NOT_STARTED", "IN_PROGRESS", "IN_MID", "SCANNED", "REPORTED", "DELIVERED", "CANCELLED"
     };
 
     public UpdateAppointmentServiceStatusCommandHandler(IApplicationDbContext context)
@@ -120,6 +125,15 @@ public class UpdateAppointmentServiceStatusCommandHandler
         // visit-level milestones.
         switch (newStatus)
         {
+            case "IN_PROGRESS":
+            case "IN_MID":
+                // Intermediate stages — scan has started, not yet
+                // complete. Both stamp ScanStartedAt only;
+                // ScanCompletedAt stays null so the SCANNED → REPORTED
+                // rollup still treats this line as outstanding work.
+                // IN_PROGRESS = scan begun. IN_MID = halfway done.
+                if (service.ScanStartedAt   == null) service.ScanStartedAt   = nowUtc;
+                break;
             case "SCANNED":
                 // First-time arrival into SCANNED stamps both the start
                 // and the completion if neither is set. If only the
