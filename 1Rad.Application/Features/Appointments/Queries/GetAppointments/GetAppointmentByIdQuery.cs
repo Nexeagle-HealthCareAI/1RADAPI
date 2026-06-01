@@ -95,7 +95,9 @@ public class GetAppointmentByIdQueryHandler : IRequestHandler<GetAppointmentById
                 s.Status,
                 s.ScanStartedAt,
                 s.ScanCompletedAt,
+                s.ReportedAt,
                 s.DeliveredAt,
+                s.CancelledAt,
                 s.TechnicianId,
                 s.ServiceChargeId,
                 s.UpdatedAt

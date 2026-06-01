@@ -213,6 +213,12 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
                 if (thisService != null && thisService.Status != "DELIVERED")
                 {
                     thisService.Status = "REPORTED";
+                    // ReportedAt anchors the "Awaiting delivery for X" TAT
+                    // pill. Stamped on first finalisation; later edits to
+                    // the report don't bump it (the patient was already
+                    // waiting from the original sign-off).
+                    if (thisService.ReportedAt == null) thisService.ReportedAt = DateTime.UtcNow;
+                    if (thisService.ScanCompletedAt == null) thisService.ScanCompletedAt = thisService.ReportedAt;
                 }
 
                 var liveSiblings = await _context.AppointmentServices

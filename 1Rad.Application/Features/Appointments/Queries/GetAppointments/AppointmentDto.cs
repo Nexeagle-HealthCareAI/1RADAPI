@@ -69,7 +69,9 @@ public record AppointmentServiceDto(
     string Status,
     DateTime? ScanStartedAt,
     DateTime? ScanCompletedAt,
+    DateTime? ReportedAt,
     DateTime? DeliveredAt,
+    DateTime? CancelledAt,
     Guid? TechnicianId,
     Guid? ServiceChargeId,
     DateTime UpdatedAt

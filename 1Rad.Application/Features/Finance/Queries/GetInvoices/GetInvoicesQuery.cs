@@ -49,6 +49,11 @@ public class InvoiceItemDto
     public string Description { get; set; } = string.Empty;
     public decimal Amount { get; set; }
     public int Quantity { get; set; }
+    // Multi-service rollout. Filled from the linked AppointmentService
+    // when the line is service-attached; null on freeform registry
+    // lines or legacy rows pre-dating the AppointmentServiceId FK.
+    public Guid? AppointmentServiceId { get; set; }
+    public string? Modality { get; set; }
 }
 
 public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<InvoiceDto>>
@@ -149,7 +154,18 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
                     {
                         Description = it.Description,
                         Amount = it.Amount,
-                        Quantity = it.Quantity
+                        Quantity = it.Quantity,
+                        AppointmentServiceId = it.AppointmentServiceId,
+                        // Pull modality straight from the attached
+                        // AppointmentService when present. Falls back
+                        // to the visit's scalar Modality for legacy
+                        // single-service rows that don't have an FK.
+                        Modality = it.AppointmentServiceId.HasValue
+                            ? _context.AppointmentServices
+                                .Where(s => s.Id == it.AppointmentServiceId.Value)
+                                .Select(s => s.Modality)
+                                .FirstOrDefault()
+                            : (i.Appointment != null ? i.Appointment.Modality : null)
                     }).ToList(),
                     UpdatedAt = i.UpdatedAt,
                     DeletedAt = i.DeletedAt

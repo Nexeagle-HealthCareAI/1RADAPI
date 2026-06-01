@@ -15,7 +15,9 @@ public class UpdateAppointmentServiceStatusResult
     public string? ServiceStatus { get; set; }
     public DateTime? ServiceScanStartedAt { get; set; }
     public DateTime? ServiceScanCompletedAt { get; set; }
+    public DateTime? ServiceReportedAt { get; set; }
     public DateTime? ServiceDeliveredAt { get; set; }
+    public DateTime? ServiceCancelledAt { get; set; }
     public string? AppointmentStatus { get; set; }
     public DateTime? AppointmentScanStartedAt { get; set; }
     public DateTime? AppointmentScannedAt { get; set; }
@@ -130,12 +132,22 @@ public class UpdateAppointmentServiceStatusCommandHandler
                 break;
             case "REPORTED":
                 if (service.ScanCompletedAt == null) service.ScanCompletedAt = nowUtc;
+                // ReportedAt anchors the "Awaiting delivery for X" pill.
+                // Backfilled to UpdatedAt by migration 58 for legacy rows.
+                if (service.ReportedAt      == null) service.ReportedAt      = nowUtc;
                 break;
             case "DELIVERED":
                 if (service.ScanCompletedAt == null) service.ScanCompletedAt = nowUtc;
+                // If we somehow skipped REPORTED (manual override) we
+                // still want a sensible ReportedAt so the timeline
+                // looks consistent — stamp it one tick before delivery.
+                if (service.ReportedAt      == null) service.ReportedAt      = nowUtc.AddSeconds(-1);
                 if (service.DeliveredAt     == null) service.DeliveredAt     = nowUtc;
                 break;
-            // NOT_STARTED / CANCELLED — no timestamp side effects.
+            case "CANCELLED":
+                if (service.CancelledAt     == null) service.CancelledAt     = nowUtc;
+                break;
+            // NOT_STARTED — no timestamp side effects.
         }
 
         service.Status = newStatus;
@@ -243,7 +255,9 @@ public class UpdateAppointmentServiceStatusCommandHandler
             ServiceStatus              = service.Status,
             ServiceScanStartedAt       = service.ScanStartedAt,
             ServiceScanCompletedAt     = service.ScanCompletedAt,
+            ServiceReportedAt          = service.ReportedAt,
             ServiceDeliveredAt         = service.DeliveredAt,
+            ServiceCancelledAt         = service.CancelledAt,
             AppointmentStatus          = appointment.Status,
             AppointmentScanStartedAt   = appointment.ScanStartedAt,
             AppointmentScannedAt       = appointment.ScannedAt,

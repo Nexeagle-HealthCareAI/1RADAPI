@@ -59,7 +59,9 @@ public class AppointmentService : BaseEntity, IHospitalContext
     // are the source of truth and drive per-line clocks.
     public DateTime? ScanStartedAt { get; set; }
     public DateTime? ScanCompletedAt { get; set; }
+    public DateTime? ReportedAt { get; set; }
     public DateTime? DeliveredAt { get; set; }
+    public DateTime? CancelledAt { get; set; }
 
     /// <summary>Per-service technician (different scans in a visit may be done by different techs).</summary>
     public Guid? TechnicianId { get; set; }
