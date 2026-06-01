@@ -1,0 +1,144 @@
+using _1Rad.Application.Interfaces;
+using _1Rad.Domain.Entities;
+using MediatR;
+using Microsoft.EntityFrameworkCore;
+
+namespace _1Rad.Application.Features.Referrers.Commands.RecordReferralCommissions;
+
+/// <summary>
+/// Records a referral payout as one commission row PER SERVICE LINE so a
+/// multi-service visit (e.g. MRI + CT + USG) pays the referrer per modality
+/// instead of collapsing everything into a single line. The set of lines is
+/// authoritative for the given <see cref="ReferenceNumber"/>: matched lines are
+/// updated, new ones inserted, and previously-recorded lines that are no longer
+/// present are soft-deleted.
+/// </summary>
+public record CommissionLine(
+    string Modality,
+    decimal Amount,
+    string? Status = "UNPAID",
+    Guid? AppointmentServiceId = null
+);
+
+public record RecordReferralCommissionsCommand(
+    Guid ReferrerId,
+    string? ReferenceNumber,
+    string? Remarks,
+    string? PatientName,
+    Guid? AppointmentId,
+    List<CommissionLine> Lines
+) : IRequest<List<Guid>>;
+
+public class RecordReferralCommissionsCommandHandler : IRequestHandler<RecordReferralCommissionsCommand, List<Guid>>
+{
+    private readonly IApplicationDbContext _context;
+
+    public RecordReferralCommissionsCommandHandler(IApplicationDbContext context)
+    {
+        _context = context;
+    }
+
+    public async Task<List<Guid>> Handle(RecordReferralCommissionsCommand request, CancellationToken cancellationToken)
+    {
+        var hospitalId = _context.UserContext.HospitalId;
+        if (hospitalId == Guid.Empty)
+            throw new Exception("FISCAL ERROR: Security context failure. Hospital identity is required for commission logging.");
+
+        var referrer = await _context.Referrers
+            .FirstOrDefaultAsync(r => r.ReferrerId == request.ReferrerId && r.HospitalId == hospitalId, cancellationToken);
+        if (referrer == null)
+            throw new Exception($"TACTICAL FAILURE: Referrer identity [{request.ReferrerId}] not recognized in global registry for current facility.");
+
+        var lines = (request.Lines ?? new List<CommissionLine>())
+            .Where(l => l != null && !string.IsNullOrWhiteSpace(l.Modality))
+            .ToList();
+        if (lines.Count == 0)
+            throw new Exception("PROTOCOL FAILURE: At least one service line is required to record a payout.");
+
+        // Existing (non-deleted) commissions tied to this invoice reference.
+        var existing = new List<ReferralCommission>();
+        if (!string.IsNullOrEmpty(request.ReferenceNumber))
+        {
+            existing = await _context.ReferralCommissions
+                .Where(c => c.ReferenceNumber == request.ReferenceNumber
+                            && c.HospitalId == hospitalId
+                            && c.DeletedAt == null)
+                .ToListAsync(cancellationToken);
+        }
+
+        var now = DateTime.UtcNow;
+        var resultIds = new List<Guid>();
+        var matched = new HashSet<Guid>();
+
+        foreach (var line in lines)
+        {
+            var modality = line.Modality.Trim();
+            // Match an existing line by modality (case-insensitive) so re-saving
+            // the same payout updates in place rather than duplicating.
+            var commission = existing.FirstOrDefault(c =>
+                !matched.Contains(c.Id) &&
+                string.Equals(c.Modality, modality, StringComparison.OrdinalIgnoreCase));
+
+            if (commission != null)
+            {
+                matched.Add(commission.Id);
+                commission.CommissionAmount = line.Amount;
+                commission.Status = line.Status ?? commission.Status;
+                commission.AppointmentServiceId = line.AppointmentServiceId ?? commission.AppointmentServiceId;
+                commission.AppointmentId = request.AppointmentId ?? commission.AppointmentId;
+                commission.PatientName = request.PatientName ?? commission.PatientName;
+                commission.Remarks = request.Remarks ?? commission.Remarks;
+                commission.UpdatedAt = now;
+            }
+            else
+            {
+                commission = new ReferralCommission
+                {
+                    ReferrerId = request.ReferrerId,
+                    ReferrerName = referrer.Name ?? "Unknown",
+                    Modality = modality,
+                    PatientName = request.PatientName ?? "N/A",
+                    AppointmentId = request.AppointmentId,
+                    AppointmentServiceId = line.AppointmentServiceId,
+                    CommissionAmount = line.Amount,
+                    AccumulatedTotal = 0,
+                    TransactionDate = now,
+                    Status = line.Status ?? "UNPAID",
+                    ReferenceNumber = request.ReferenceNumber,
+                    Remarks = request.Remarks,
+                    HospitalId = hospitalId,
+                    UpdatedAt = now
+                };
+                _context.ReferralCommissions.Add(commission);
+            }
+
+            resultIds.Add(commission.Id);
+        }
+
+        // Lines removed from the payout — soft-delete so reporting/sync stay consistent.
+        foreach (var stale in existing.Where(c => !matched.Contains(c.Id)))
+        {
+            stale.DeletedAt = now;
+            stale.UpdatedAt = now;
+        }
+
+        await _context.SaveChangesAsync(cancellationToken);
+
+        // Recalculate accumulated totals chronologically for this referrer.
+        var allCommissions = await _context.ReferralCommissions
+            .Where(c => c.ReferrerId == request.ReferrerId && c.HospitalId == hospitalId && c.DeletedAt == null)
+            .OrderBy(c => c.TransactionDate)
+            .ToListAsync(cancellationToken);
+
+        decimal runningTotal = 0;
+        foreach (var c in allCommissions)
+        {
+            runningTotal += c.CommissionAmount;
+            c.AccumulatedTotal = runningTotal;
+        }
+
+        await _context.SaveChangesAsync(cancellationToken);
+
+        return resultIds;
+    }
+}

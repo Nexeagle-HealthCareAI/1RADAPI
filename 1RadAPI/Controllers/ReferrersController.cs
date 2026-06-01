@@ -5,7 +5,9 @@ using _1Rad.Application.Features.Referrers.Queries.GetReferralCommissions;
 using _1Rad.Application.Features.Referrers.Queries.GetDetailedReferralLedger;
 using _1Rad.Application.Features.Referrers.Commands.CreateReferrer;
 using _1Rad.Application.Features.Referrers.Commands.UpdateReferrer;
+using _1Rad.Application.Features.Referrers.Commands.DeleteReferrer;
 using _1Rad.Application.Features.Referrers.Commands.RecordReferralCommission;
+using _1Rad.Application.Features.Referrers.Commands.RecordReferralCommissions;
 using _1Rad.Application.Features.Referrers.Commands.UpdateReferralCommission;
 using _1Rad.Application.Features.Referrers.Commands.UpdateReferralCommissionStatus;
 using MediatR;
@@ -51,6 +53,14 @@ public class ReferrersController : ControllerBase
         return Ok(result);
     }
 
+    [HttpDelete("{id}")]
+    public async Task<IActionResult> DeleteReferrer(Guid id)
+    {
+        var result = await _mediator.Send(new DeleteReferrerCommand(id));
+        if (!result) return NotFound(new { success = false, error = "Partner not found or already removed." });
+        return Ok(new { success = true });
+    }
+
     [HttpGet("intelligence")]
     public async Task<IActionResult> GetIntelligence([FromQuery] DateTime? startDate, [FromQuery] DateTime? endDate, [FromQuery] Guid? referrerId)
     {
@@ -74,6 +84,13 @@ public class ReferrersController : ControllerBase
     {
         var result = await _mediator.Send(command);
         return Ok(new { commissionId = result });
+    }
+
+    [HttpPost("commissions/batch")]
+    public async Task<IActionResult> RecordCommissions([FromBody] RecordReferralCommissionsCommand command)
+    {
+        var result = await _mediator.Send(command);
+        return Ok(new { commissionIds = result });
     }
 
     [HttpGet("commissions")]

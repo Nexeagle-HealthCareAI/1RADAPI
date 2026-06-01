@@ -30,7 +30,7 @@ namespace _1Rad.Infrastructure.Services
         {
             var targetContainer = containerName ?? _containerName;
             var containerClient = _blobServiceClient.GetBlobContainerClient(targetContainer);
-            await containerClient.CreateIfNotExistsAsync(PublicAccessType.Blob);
+            await EnsureContainerAsync(containerClient);
 
             var sanitizedFileName = SanitiseFileName(fileName);
             var blobClient = containerClient.GetBlobClient($"{Guid.NewGuid()}_{sanitizedFileName}");
@@ -49,7 +49,7 @@ namespace _1Rad.Infrastructure.Services
                 throw new ArgumentException("containerName is required", nameof(containerName));
 
             var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
-            await containerClient.CreateIfNotExistsAsync(PublicAccessType.Blob);
+            await EnsureContainerAsync(containerClient);
 
             // Sanitise each path segment but preserve the / separators (Azure treats / as virtual folders).
             var sanitisedPath = string.Join('/',
@@ -91,6 +91,32 @@ namespace _1Rad.Infrastructure.Services
             await blobClient.DeleteIfExistsAsync();
         }
 
+        /// <summary>
+        /// Creates the container if missing. Many Azure storage accounts now ship
+        /// with "Allow Blob public access" DISABLED at the account level — in that
+        /// configuration requesting <see cref="PublicAccessType.Blob"/> throws
+        /// (PublicAccessNotPermitted), which surfaced as a hard 500 on every
+        /// upload to a not-yet-created container. We try public-read first (so
+        /// existing public-read viewers keep working where allowed) and fall back
+        /// to a private container otherwise. Assets are also reachable via SAS, so
+        /// a private container does not break the DICOM viewer flow.
+        /// </summary>
+        private static async Task EnsureContainerAsync(BlobContainerClient containerClient)
+        {
+            try
+            {
+                await containerClient.CreateIfNotExistsAsync(PublicAccessType.Blob);
+            }
+            catch (Azure.RequestFailedException ex) when (
+                ex.ErrorCode == "PublicAccessNotPermitted" ||
+                ex.Status == 409 /* container exists with different access */ ||
+                (ex.Message?.Contains("public access", StringComparison.OrdinalIgnoreCase) ?? false))
+            {
+                // Account forbids public containers — create/keep it private.
+                await containerClient.CreateIfNotExistsAsync(PublicAccessType.None);
+            }
+        }
+
         private static string SanitiseFileName(string fileName)
         {
             // Strip Windows path components, replace whitespace, and remove characters that Azure dislikes.
@@ -110,7 +136,7 @@ namespace _1Rad.Infrastructure.Services
                 throw new ArgumentException("containerName is required", nameof(containerName));
 
             var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
-            await containerClient.CreateIfNotExistsAsync(PublicAccessType.Blob);
+            await EnsureContainerAsync(containerClient);
 
             // Sanitise each path segment but preserve / separators (Azure treats / as virtual folders).
             var sanitisedPath = string.Join('/',

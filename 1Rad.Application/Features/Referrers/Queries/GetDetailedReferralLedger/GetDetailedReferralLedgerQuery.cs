@@ -62,13 +62,18 @@ public class GetDetailedReferralLedgerQueryHandler : IRequestHandler<GetDetailed
                 CommissionStatus = c.Status ?? "UNPAID",
                 ReferenceNumber = c.ReferenceNumber,
                 
-                // Tactical lookup for associated Invoice details
+                // Tactical lookup for associated Invoice details. Match on
+                // AppointmentId first (most reliable link), then fall back to
+                // the display InvoiceId stored in the commission's reference.
                 InvoiceDetails = _context.Invoices
-                    .Where(i => i.InvoiceId == c.ReferenceNumber || (c.AppointmentId != null && i.AppointmentId == c.AppointmentId))
+                    .Where(i => (c.AppointmentId != null && i.AppointmentId == c.AppointmentId)
+                                || (c.ReferenceNumber != null && i.InvoiceId == c.ReferenceNumber))
+                    .OrderByDescending(i => i.PaidAmount)
                     .Select(i => new {
                         i.InvoiceId,
                         i.PatientName,
                         i.PaidAmount,
+                        i.TotalAmount,
                         i.Status,
                         ItemDescriptions = i.Items.Select(it => it.Description)
                     })
@@ -101,9 +106,35 @@ public class GetDetailedReferralLedgerQueryHandler : IRequestHandler<GetDetailed
             x.PayoutAmount,
             x.InvoiceDetails?.PaidAmount ?? 0,
             x.CommissionStatus,
-            x.InvoiceDetails?.Status ?? "PENDING"
+            // Derive patient payment status from the actual amounts rather than
+            // trusting the stored Status string (which can be stale/casing-variant).
+            // This is what unblocks paying the referrer once the patient has paid.
+            ResolvePatientPaymentStatus(x.InvoiceDetails?.PaidAmount, x.InvoiceDetails?.TotalAmount, x.InvoiceDetails?.Status)
         )).ToList();
 
         return result;
+    }
+
+    /// <summary>
+    /// Normalises an invoice's collection state into PAID / PARTIAL / PENDING.
+    /// Amounts are the source of truth; the stored status is only a tie-breaker
+    /// (e.g. a fully-settled invoice with rounding, or an explicit CANCELLED).
+    /// </summary>
+    private static string ResolvePatientPaymentStatus(decimal? paidAmount, decimal? totalAmount, string? status)
+    {
+        var normalized = (status ?? "").Trim().ToUpperInvariant();
+        if (normalized == "CANCELLED") return "CANCELLED";
+
+        var paid = paidAmount ?? 0m;
+        var total = totalAmount ?? 0m;
+
+        if (total > 0m && paid >= total - 0.01m) return "PAID";
+        if (paid > 0m) return "PARTIAL";
+
+        // No amount captured yet — fall back to a recognised paid synonym so a
+        // manually-marked invoice still unblocks the payout.
+        if (normalized is "PAID" or "COMPLETED" or "SETTLED") return "PAID";
+        if (normalized == "PARTIAL") return "PARTIAL";
+        return "PENDING";
     }
 }

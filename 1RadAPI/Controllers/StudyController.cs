@@ -328,7 +328,8 @@ namespace _1RadAPI.Controllers
                 }
                 catch (Exception ex)
                 {
-                    return StatusCode(500, new { success = false, error = $"AZURE STORAGE FAILURE: Could not stream clinical asset to the cloud. {ex.Message}" });
+                    var detail = ex.InnerException != null ? $"{ex.Message} → {ex.InnerException.Message}" : ex.Message;
+                    return StatusCode(500, new { success = false, error = $"AZURE STORAGE FAILURE: Could not stream clinical asset to the cloud. {detail}" });
                 }
 
                 // Tactical: Verify appointment existence and retrieve HospitalId
@@ -396,7 +397,11 @@ namespace _1RadAPI.Controllers
             }
             catch (Exception ex)
             {
-                return StatusCode(500, new { success = false, error = $"INTERNAL ACQUISITION FAILURE: {ex.Message}" });
+                // Surface the inner exception too — a missing column (e.g. an
+                // unapplied schema migration like ExtractionStatus / AppointmentServiceId)
+                // shows up there, not in the outer DbUpdateException message.
+                var detail = ex.InnerException != null ? $"{ex.Message} → {ex.InnerException.Message}" : ex.Message;
+                return StatusCode(500, new { success = false, error = $"INTERNAL ACQUISITION FAILURE: {detail}" });
             }
         }
 
