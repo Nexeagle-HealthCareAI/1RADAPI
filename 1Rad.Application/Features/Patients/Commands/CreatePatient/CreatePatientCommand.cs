@@ -1,3 +1,4 @@
+using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Entities;
 using MediatR;
@@ -29,12 +30,24 @@ public class CreatePatientCommandHandler : IRequestHandler<CreatePatientCommand,
     public async Task<Guid> Handle(CreatePatientCommand request, CancellationToken cancellationToken)
     {
         var hospitalId = _context.UserContext.HospitalId;
+        var mobile = (request.Mobile ?? string.Empty).Trim();
+        var normalizedName = NameNormalizer.Normalize(request.FullName);
 
-        // 1. Check for Deduplication (Name + Mobile)
-        var existingPatient = await _context.Patients
-            .FirstOrDefaultAsync(p => p.FullName == request.FullName && 
-                                     p.Mobile == request.Mobile && 
-                                     p.HospitalId == hospitalId, cancellationToken);
+        // 1. Deduplication SAFETY NET — only auto-merge on a strong, unambiguous
+        //    signal: the SAME phone number AND the same normalised name (collapses
+        //    casing/spacing/honorific/punctuation variants). When the mobile is
+        //    blank we never auto-merge on name alone — namesakes without a phone
+        //    are different people; the client-side fuzzy prompt + the operator's
+        //    "This is them" confirmation handle that case instead.
+        Patient? existingPatient = null;
+        if (!string.IsNullOrWhiteSpace(mobile))
+        {
+            existingPatient = await _context.Patients
+                .FirstOrDefaultAsync(p => p.HospitalId == hospitalId &&
+                                          p.Mobile == mobile &&
+                                          (p.NameNormalized == normalizedName || p.FullName == request.FullName),
+                                     cancellationToken);
+        }
 
         if (existingPatient != null)
         {
@@ -46,6 +59,7 @@ public class CreatePatientCommandHandler : IRequestHandler<CreatePatientCommand,
             existingPatient.Address = request.Address;
             existingPatient.SourceOfInfo = request.SourceOfInfo;
             existingPatient.ReferrerId = request.ReferrerId;
+            existingPatient.NameNormalized = normalizedName;
 
             await _context.SaveChangesAsync(cancellationToken);
             return existingPatient.PatientId;
@@ -58,7 +72,8 @@ public class CreatePatientCommandHandler : IRequestHandler<CreatePatientCommand,
         var patient = new Patient
         {
             FullName = request.FullName,
-            Mobile = request.Mobile,
+            Mobile = mobile,
+            NameNormalized = normalizedName,
             Age = request.Age,
             Gender = request.Gender,
             Village = request.Village,

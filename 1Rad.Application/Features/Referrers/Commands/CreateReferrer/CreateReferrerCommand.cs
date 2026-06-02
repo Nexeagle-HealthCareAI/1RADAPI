@@ -1,9 +1,11 @@
 using System;
 using System.Linq;
+using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Entities;
 using _1Rad.Domain.Exceptions;
 using MediatR;
+using Microsoft.EntityFrameworkCore;
 
 namespace _1Rad.Application.Features.Referrers.Commands.CreateReferrer;
 
@@ -40,12 +42,36 @@ public class CreateReferrerCommandHandler : IRequestHandler<CreateReferrerComman
         }
         var storedContact = digits.Length > 0 ? digits : contact;
 
+        // Dedup SAFETY NET — if a referrer with the same normalised name already
+        // exists for this hospital (casing/spacing/honorific/punctuation
+        // variant of "Dr Sharma"), reuse it instead of spawning a duplicate.
+        // The client-side fuzzy "did you mean" handles looser spelling drift.
+        var hospitalId = _context.UserContext.HospitalId;
+        var normalized = NameNormalizer.Normalize(request.Name);
+        if (!string.IsNullOrWhiteSpace(normalized))
+        {
+            var existing = await _context.Referrers
+                .Where(r => r.HospitalId == hospitalId && r.DeletedAt == null)
+                .ToListAsync(cancellationToken);
+            var match = existing.FirstOrDefault(r => NameNormalizer.Normalize(r.Name) == normalized);
+            if (match != null)
+            {
+                // Backfill a missing contact/address from the new submission.
+                if (string.IsNullOrWhiteSpace(match.Contact) && !string.IsNullOrWhiteSpace(storedContact))
+                    match.Contact = storedContact;
+                if (string.IsNullOrWhiteSpace(match.Address) && !string.IsNullOrWhiteSpace(request.Address))
+                    match.Address = request.Address;
+                await _context.SaveChangesAsync(cancellationToken);
+                return match.ReferrerId;
+            }
+        }
+
         var referrer = new Referrer
         {
             Name = request.Name,
             Contact = storedContact,
             Address = request.Address,
-            HospitalId = _context.UserContext.HospitalId
+            HospitalId = hospitalId
         };
 
         _context.Referrers.Add(referrer);

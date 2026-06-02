@@ -14,6 +14,11 @@ public class Patient : BaseEntity, IHospitalContext
     public string? Address { get; set; } = string.Empty;
     public string? PatientIdentifier { get; set; } = string.Empty; // MRN
     public string? SourceOfInfo { get; set; } = string.Empty;
+
+    // Normalised name (lowercased, punctuation/honorifics stripped) used by the
+    // duplicate-detection safety net to collapse casing/spacing/honorific
+    // variants of the same name. NULL on legacy rows until backfilled.
+    public string? NameNormalized { get; set; }
     public Guid? ReferrerId { get; set; }
     public Guid HospitalId { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
