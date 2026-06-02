@@ -84,6 +84,43 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
             throw new Exception("At least one service is required to book an appointment.");
         }
 
+        // Safeguard: the Lead Specialist must not be a non-doctor staffer (e.g. a
+        // custom-role or admin/technician user mistakenly assigned). We match the
+        // assigned name to a user ON THIS CENTRE'S roster; if that user exists and
+        // holds roles but NONE is a doctor role, reject. Names that match no
+        // on-roster user (an externally-typed referring physician) are allowed.
+        // Best-effort — a lookup hiccup must never block a legitimate booking.
+        if (!string.IsNullOrWhiteSpace(request.Doctor))
+        {
+            var docName = request.Doctor.Trim().ToLower();
+            bool assignedIsNonDoctor = false;
+            try
+            {
+                var match = await _context.Users
+                    .Where(u => u.FullName != null
+                                && u.FullName.ToLower() == docName
+                                && u.HospitalMappings.Any(m => m.HospitalId == hospitalId))
+                    .Select(u => new
+                    {
+                        IsDoctor = u.HospitalMappings
+                            .Where(m => m.HospitalId == hospitalId)
+                            .SelectMany(m => m.Roles)
+                            .Any(r => r.RoleName != null && r.RoleName.ToLower().Contains("doctor")),
+                        HasAnyRole =
+                            u.HospitalMappings.Where(m => m.HospitalId == hospitalId).SelectMany(m => m.Roles).Any()
+                            || u.HospitalMappings.Where(m => m.HospitalId == hospitalId).SelectMany(m => m.CustomRoles).Any()
+                    })
+                    .FirstOrDefaultAsync(cancellationToken);
+
+                if (match != null && match.HasAnyRole && !match.IsDoctor)
+                    assignedIsNonDoctor = true;
+            }
+            catch { /* best-effort — never block a booking on a roster lookup error */ }
+
+            if (assignedIsNonDoctor)
+                throw new Exception("The assigned Lead Specialist is not a registered doctor at this centre. Please assign a doctor to supervise this appointment.");
+        }
+
         // The "primary" line (first in the list) is the denormalised snapshot
         // on the parent Appointment — kept for backward compat with v1
         // clients that still read Appointment.Service / .Modality directly.
