@@ -594,9 +594,13 @@ namespace _1RadAPI.Controllers
             try
             {
                 if (string.IsNullOrEmpty(url)) return BadRequest("URL is required");
-                
-                // Security check: ensure the URL is from 1radstorage
-                if (!url.Contains("1radstorage.blob.core.windows.net"))
+
+                // Security check: only proxy our own storage. Accept any of our
+                // accounts (dev "1radstorage", prod "1radstorageprod", …) — the
+                // old check hardcoded "1radstorage.blob.core.windows.net", which
+                // does NOT match "1radstorageprod.blob…", so the proxy rejected
+                // every production asset as "Unauthorized asset origin".
+                if (!url.Contains("1radstorage") || !url.Contains(".blob.core.windows.net"))
                     return BadRequest("Unauthorized asset origin");
 
                 // Use Uri to strip query parameters for extension checking
