@@ -73,6 +73,9 @@ public class RecordReferralCommissionsCommandHandler : IRequestHandler<RecordRef
         foreach (var line in lines)
         {
             var modality = line.Modality.Trim();
+            // A payout line can never be negative — floor at zero so a bad input
+            // can't produce a negative commission / negative payout total.
+            var lineAmount = Math.Max(0m, line.Amount);
             // Match an existing line by modality (case-insensitive) so re-saving
             // the same payout updates in place rather than duplicating.
             var commission = existing.FirstOrDefault(c =>
@@ -82,7 +85,7 @@ public class RecordReferralCommissionsCommandHandler : IRequestHandler<RecordRef
             if (commission != null)
             {
                 matched.Add(commission.Id);
-                commission.CommissionAmount = line.Amount;
+                commission.CommissionAmount = lineAmount;
                 commission.Status = line.Status ?? commission.Status;
                 commission.AppointmentServiceId = line.AppointmentServiceId ?? commission.AppointmentServiceId;
                 commission.AppointmentId = request.AppointmentId ?? commission.AppointmentId;
@@ -100,7 +103,7 @@ public class RecordReferralCommissionsCommandHandler : IRequestHandler<RecordRef
                     PatientName = request.PatientName ?? "N/A",
                     AppointmentId = request.AppointmentId,
                     AppointmentServiceId = line.AppointmentServiceId,
-                    CommissionAmount = line.Amount,
+                    CommissionAmount = lineAmount,
                     AccumulatedTotal = 0,
                     TransactionDate = now,
                     Status = line.Status ?? "UNPAID",

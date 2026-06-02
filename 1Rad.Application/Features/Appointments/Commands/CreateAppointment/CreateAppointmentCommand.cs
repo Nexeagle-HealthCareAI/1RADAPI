@@ -357,7 +357,10 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
                     ServiceName:      (l.ServiceName ?? string.Empty).Trim(),
                     Modality:         (l.Modality ?? string.Empty).Trim().ToUpperInvariant(),
                     Amount:           l.Amount,
-                    ReferralCutValue: l.ReferralCutValue,
+                    // Floor the referral cut at zero. A modality with no incentive
+                    // must produce a 0 commission, never a negative one (which
+                    // would show up as a negative payout to the referrer).
+                    ReferralCutValue: Math.Max(0m, l.ReferralCutValue),
                     Id:               null,
                     ServiceChargeId:  l.ServiceChargeId))
                 .ToList();
@@ -370,7 +373,7 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
                 ServiceName:      (request.Service ?? string.Empty).Trim(),
                 Modality:         (request.Modality ?? string.Empty).Trim().ToUpperInvariant(),
                 Amount:           request.Amount,
-                ReferralCutValue: request.ReferralCutValue ?? 0,
+                ReferralCutValue: Math.Max(0m, request.ReferralCutValue ?? 0),
                 Id:               null,
                 ServiceChargeId:  null)
         };

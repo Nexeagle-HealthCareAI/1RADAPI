@@ -45,13 +45,16 @@ public class RecordReferralCommissionCommandHandler : IRequestHandler<RecordRefe
                 .FirstOrDefaultAsync(c => c.ReferenceNumber == request.ReferenceNumber && c.HospitalId == hospitalId, cancellationToken);
         }
 
+        // A referral commission is never negative — floor at zero.
+        var amount = Math.Max(0m, request.Amount);
+
         if (commission != null)
         {
             // Update Existing
-            commission.CommissionAmount = request.Amount;
+            commission.CommissionAmount = amount;
             commission.Modality = request.Modality;
             commission.PatientName = request.PatientName ?? commission.PatientName;
-            commission.Remarks = (commission.Remarks ?? "") + $" [Updated: ₹{request.Amount}]";
+            commission.Remarks = (commission.Remarks ?? "") + $" [Updated: ₹{amount}]";
             commission.Status = request.Status ?? commission.Status;
             commission.TransactionDate = DateTime.UtcNow;
         }
@@ -63,7 +66,7 @@ public class RecordReferralCommissionCommandHandler : IRequestHandler<RecordRefe
                 ReferrerName = referrer.Name ?? "Unknown",
                 Modality = request.Modality,
                 PatientName = request.PatientName ?? "N/A",
-                CommissionAmount = request.Amount,
+                CommissionAmount = amount,
                 AccumulatedTotal = 0, // Will be calculated below
                 TransactionDate = DateTime.UtcNow,
                 Status = request.Status ?? "UNPAID",

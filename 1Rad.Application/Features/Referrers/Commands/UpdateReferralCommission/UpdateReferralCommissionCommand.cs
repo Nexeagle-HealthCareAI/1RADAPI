@@ -30,7 +30,8 @@ public class UpdateReferralCommissionCommandHandler : IRequestHandler<UpdateRefe
         if (commission == null)
             throw new Exception($"FISCAL ERROR: Commission record [{request.CommissionId}] not found for modification.");
 
-        commission.CommissionAmount = request.Amount;
+        // Floor at zero — a referral commission is never negative.
+        commission.CommissionAmount = Math.Max(0m, request.Amount);
         commission.Modality = request.Modality;
         commission.ReferenceNumber = request.ReferenceNumber;
         commission.Remarks = request.Remarks;

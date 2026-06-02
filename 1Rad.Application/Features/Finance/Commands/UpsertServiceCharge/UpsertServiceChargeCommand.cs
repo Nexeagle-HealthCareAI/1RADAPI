@@ -50,7 +50,11 @@ public class UpsertServiceChargeCommandHandler : IRequestHandler<UpsertServiceCh
                 throw new ArgumentException("Amount must be greater than zero.", nameof(request.Amount));
             }
 
-            if (request.ReferralCutValue > request.Amount)
+            // A referral cut is always within [0, service price]. Floor at zero
+            // so a stray negative never becomes a negative commission — which
+            // would otherwise surface as a NEGATIVE payout to the referrer.
+            var referralCut = Math.Max(0m, request.ReferralCutValue);
+            if (referralCut > request.Amount)
             {
                 throw new ArgumentException("Referral cut cannot exceed the total service amount.", nameof(request.ReferralCutValue));
             }
@@ -96,7 +100,7 @@ public class UpsertServiceChargeCommandHandler : IRequestHandler<UpsertServiceCh
             entity.Modality = request.Modality;
             entity.ServiceName = request.ServiceName;
             entity.Amount = request.Amount;
-            entity.ReferralCutValue = request.ReferralCutValue;
+            entity.ReferralCutValue = referralCut;
             entity.TemplateId = request.TemplateId;
 
             await _context.SaveChangesAsync(cancellationToken);
