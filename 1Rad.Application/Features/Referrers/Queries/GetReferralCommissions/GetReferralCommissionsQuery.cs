@@ -24,6 +24,7 @@ public record ReferralCommissionDto(
     string? ReferenceNumber,
     string? Remarks,
     string? PatientName,
+    string? PatientPaymentStatus = null,
     DateTime? UpdatedAt = null,
     DateTime? DeletedAt = null
 );
@@ -61,8 +62,10 @@ public class GetReferralCommissionsQueryHandler : IRequestHandler<GetReferralCom
         if (request.EndDate.HasValue)
             commissionsQuery = commissionsQuery.Where(c => c.TransactionDate <= request.EndDate.Value);
 
-        // 3. Project with Tactical Joins to resolve missing columns (PatientName/ReferrerName) in DB
-        return await commissionsQuery
+        // 3. Project with Tactical Joins to resolve missing columns (PatientName/ReferrerName)
+        //    plus the linked invoice's collection state so the Referral Hub can show the
+        //    "patient payment received" tick and unblock the payout.
+        var raw = await commissionsQuery
             .OrderByDescending(c => c.TransactionDate)
             .Select(c => new {
                 Commission = c,
@@ -71,9 +74,19 @@ public class GetReferralCommissionsQueryHandler : IRequestHandler<GetReferralCom
                 PatientName = _context.Appointments
                     .Where(a => a.AppointmentId == c.AppointmentId)
                     .Select(a => a.Patient.FullName)
+                    .FirstOrDefault(),
+                // Match the commission to its invoice (AppointmentId first, then the
+                // display InvoiceId stored in ReferenceNumber).
+                Invoice = _context.Invoices
+                    .Where(i => (c.AppointmentId != null && i.AppointmentId == c.AppointmentId)
+                                || (c.ReferenceNumber != null && i.InvoiceId == c.ReferenceNumber))
+                    .OrderByDescending(i => i.PaidAmount)
+                    .Select(i => new { i.PaidAmount, i.TotalAmount, i.Status })
                     .FirstOrDefault()
             })
-            .Select(x => new ReferralCommissionDto(
+            .ToListAsync(cancellationToken);
+
+        return raw.Select(x => new ReferralCommissionDto(
                 x.Commission.Id,
                 x.Commission.ReferrerId,
                 x.ReferrerName ?? x.Commission.ReferrerName ?? "Unknown Referrer",
@@ -85,9 +98,29 @@ public class GetReferralCommissionsQueryHandler : IRequestHandler<GetReferralCom
                 x.Commission.ReferenceNumber,
                 x.Commission.Remarks,
                 x.PatientName ?? "Unknown Patient",
+                ResolvePatientPaymentStatus(x.Invoice?.PaidAmount, x.Invoice?.TotalAmount, x.Invoice?.Status),
                 x.Commission.UpdatedAt,
                 x.Commission.DeletedAt
-            ))
-            .ToListAsync(cancellationToken);
+            )).ToList();
+    }
+
+    /// <summary>
+    /// Normalises an invoice's collection state into PAID / PARTIAL / PENDING.
+    /// Amounts are the source of truth; the stored status is only a tie-breaker.
+    /// </summary>
+    private static string ResolvePatientPaymentStatus(decimal? paidAmount, decimal? totalAmount, string? status)
+    {
+        var normalized = (status ?? "").Trim().ToUpperInvariant();
+        if (normalized == "CANCELLED") return "CANCELLED";
+
+        var paid = paidAmount ?? 0m;
+        var total = totalAmount ?? 0m;
+
+        if (total > 0m && paid >= total - 0.01m) return "PAID";
+        if (paid > 0m) return "PARTIAL";
+
+        if (normalized is "PAID" or "COMPLETED" or "SETTLED") return "PAID";
+        if (normalized == "PARTIAL") return "PARTIAL";
+        return "PENDING";
     }
 }
