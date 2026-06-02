@@ -79,10 +79,24 @@ public class IdempotencyMiddleware
         var path   = context.Request.Path.Value ?? string.Empty;
 
         // --- Lookup ---
-        var existing = await db.IdempotencyKeys
-            .AsNoTracking()
-            .Where(r => r.Key == key && r.UserId == userId)
-            .FirstOrDefaultAsync();
+        // Resilience: if the IdempotencyKeys table is missing (schema script
+        // not yet applied) or the DB hiccups, we must NOT 500 the underlying
+        // mutation. Degrade to "no dedupe" — the request still goes through;
+        // we just lose the retry-replay guarantee for this one call.
+        IdempotencyRecord existing;
+        try
+        {
+            existing = await db.IdempotencyKeys
+                .AsNoTracking()
+                .Where(r => r.Key == key && r.UserId == userId)
+                .FirstOrDefaultAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Idempotency lookup failed (is the IdempotencyKeys table applied?) — proceeding WITHOUT dedupe for key {Key}", key);
+            await _next(context);
+            return;
+        }
 
         if (existing != null)
         {
