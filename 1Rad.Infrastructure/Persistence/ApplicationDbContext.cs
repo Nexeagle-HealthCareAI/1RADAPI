@@ -1,8 +1,11 @@
+using System.Data;
+using System.Data.Common;
 using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Common;
 using _1Rad.Domain.Entities;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 
 namespace _1Rad.Infrastructure.Persistence;
 
@@ -949,6 +952,57 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
                 modelBuilder.Entity(entityType.ClrType).HasQueryFilter(lambda);
             }
         }
+    }
+
+    // See IApplicationDbContext.NextSequenceValueAsync. Atomicity comes from
+    // running the whole "increment, or create from seed" as one server-side
+    // batch in an explicit transaction with UPDLOCK + HOLDLOCK on the counter
+    // key. HOLDLOCK takes a key-range lock, so a concurrent caller for the
+    // SAME key blocks on the UPDATE until we commit — it can neither read a
+    // stale value nor insert a duplicate row. Net effect: every caller walks
+    // away with a distinct, gap-free number.
+    public async Task<int> NextSequenceValueAsync(Guid hospitalId, string counterKey, int seedIfAbsent, CancellationToken cancellationToken)
+    {
+        const string sql = @"
+SET NOCOUNT ON;
+DECLARE @v INT;
+BEGIN TRANSACTION;
+    UPDATE dbo.SequenceCounters WITH (UPDLOCK, HOLDLOCK)
+       SET @v = CounterValue = CounterValue + 1
+     WHERE HospitalId = @h AND CounterKey = @k;
+    IF @@ROWCOUNT = 0
+    BEGIN
+        SET @v = @seed;
+        INSERT INTO dbo.SequenceCounters (HospitalId, CounterKey, CounterValue)
+        VALUES (@h, @k, @seed);
+    END
+COMMIT TRANSACTION;
+SELECT @v;";
+
+        var conn = Database.GetDbConnection();
+        if (conn.State != ConnectionState.Open)
+            await conn.OpenAsync(cancellationToken);
+
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+        // Attach an ambient EF transaction if one happens to be open (none is
+        // during the booking handler's read phase, but stay correct).
+        var ambient = Database.CurrentTransaction?.GetDbTransaction();
+        if (ambient != null) cmd.Transaction = ambient;
+
+        DbParameter Param(string name, object value)
+        {
+            var p = cmd.CreateParameter();
+            p.ParameterName = name;
+            p.Value = value;
+            return p;
+        }
+        cmd.Parameters.Add(Param("@h", hospitalId));
+        cmd.Parameters.Add(Param("@k", counterKey));
+        cmd.Parameters.Add(Param("@seed", seedIfAbsent));
+
+        var result = await cmd.ExecuteScalarAsync(cancellationToken);
+        return Convert.ToInt32(result);
     }
 
     public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)

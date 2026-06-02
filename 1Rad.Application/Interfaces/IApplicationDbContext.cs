@@ -46,6 +46,19 @@ public interface IApplicationDbContext
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken);
 
+    // Atomically hand out the next value for a named counter.
+    //
+    // Used by the booking flow to fix the concurrent-booking race: the
+    // daily token number and the APP-### display id were both computed with
+    // a read-then-write (count + 1) that let simultaneous bookings collide.
+    // This does the increment-and-return inside ONE locked statement, so 3-4
+    // terminals booking at the same instant each receive a DISTINCT value.
+    //
+    // seedIfAbsent is the value handed out the first time a counter key is
+    // seen (e.g. max existing token + 1, or the current display sequence), so
+    // a brand-new hospital-day starts in the right place with no data backfill.
+    Task<int> NextSequenceValueAsync(Guid hospitalId, string counterKey, int seedIfAbsent, CancellationToken cancellationToken);
+
     // EF Core ChangeTracker access — needed by OCC-aware command handlers
     // (Phase B2 Track 3) so they can set OriginalValues["RowVersion"] on
     // an existing tracked entity. Exposing the EntityEntry shape keeps

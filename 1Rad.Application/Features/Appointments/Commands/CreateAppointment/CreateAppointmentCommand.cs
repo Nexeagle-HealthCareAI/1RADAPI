@@ -63,16 +63,27 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
 
         if (patient == null) throw new Exception("Patient not found.");
 
-        var count = await _context.Appointments.CountAsync(cancellationToken);
-
-        // Compute a stable, persisted daily token number scoped to this hospital + date
         var appointmentDate = request.DateTime.Date;
         var hospitalId = _context.UserContext.HospitalId != Guid.Empty
             ? _context.UserContext.HospitalId
             : patient.HospitalId;
 
-        var dailyTokenNumber = await _context.Appointments
-            .CountAsync(a => a.HospitalId == hospitalId && a.DateTime.Date == appointmentDate, cancellationToken) + 1;
+        // --- CONCURRENCY-SAFE NUMBERING ---
+        // The display id ("APP-###") and the daily token number used to be
+        // "count of rows + 1" — a read-then-write that let several terminals
+        // booking at the same instant compute the SAME number. Hand both out
+        // atomically instead (NextSequenceValueAsync increments-and-returns
+        // under a key-range lock), so concurrent bookings each get a distinct
+        // value. The seeds reproduce the existing numbering the first time a
+        // counter key is used, so no data backfill is required.
+        var existingTotal = await _context.Appointments.CountAsync(cancellationToken);
+        var displaySeq = await _context.NextSequenceValueAsync(
+            Guid.Empty, "APPOINTMENT_DISPLAY_ID", 101 + existingTotal, cancellationToken);
+
+        var existingDayCount = await _context.Appointments
+            .CountAsync(a => a.HospitalId == hospitalId && a.DateTime.Date == appointmentDate, cancellationToken);
+        var dailyTokenNumber = await _context.NextSequenceValueAsync(
+            hospitalId, $"APPOINTMENT_TOKEN_{appointmentDate:yyyy-MM-dd}", existingDayCount + 1, cancellationToken);
 
         // Resolve the service-lines list. v2 callers send Services directly;
         // v1 callers send only the scalar fields and we build a single-line
@@ -121,6 +132,60 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
                 throw new Exception("The assigned Lead Specialist is not a registered doctor at this centre. Please assign a doctor to supervise this appointment.");
         }
 
+        // --- REFERRER RESOLUTION (race-safe, before the appointment is built) ---
+        // Resolve or create the referrer up front and commit a brand-new one on
+        // its own. This closes the race where two bookings naming the SAME new
+        // referrer at once each insert a row (splitting that doctor's
+        // commissions). The unique index UX_Referrers_Hospital_Name makes the
+        // losing insert fail; we catch it, re-read the winner, and carry on with
+        // the existing referrer — no duplicate, no failed booking.
+        Referrer? referrer = null;
+        if (!string.IsNullOrEmpty(request.ReferredBy))
+        {
+            var searchName = request.ReferredBy.Trim();
+            referrer = await _context.Referrers
+                .FirstOrDefaultAsync(r => r.Name!.ToLower() == searchName.ToLower() && r.HospitalId == hospitalId, cancellationToken);
+
+            if (referrer == null)
+            {
+                var digits = string.Empty;
+                if (!string.IsNullOrEmpty(request.ReferredContact))
+                {
+                    digits = new string(request.ReferredContact.Where(char.IsDigit).ToArray());
+                    if (digits.StartsWith("91") && digits.Length == 12)
+                        digits = digits.Substring(2);
+                    else if (digits.StartsWith("0") && digits.Length == 11)
+                        digits = digits.Substring(1);
+                }
+
+                referrer = new Referrer
+                {
+                    Name = searchName,
+                    Contact = digits,
+                    Address = string.Empty,
+                    HospitalId = hospitalId
+                };
+                _context.Referrers.Add(referrer);
+
+                try
+                {
+                    await _context.SaveChangesAsync(cancellationToken);
+                }
+                catch (DbUpdateException)
+                {
+                    // Lost the create race — another booking inserted this
+                    // referrer first. Drop our duplicate and use the winner.
+                    _context.Entry(referrer).State = EntityState.Detached;
+                    referrer = await _context.Referrers
+                        .FirstOrDefaultAsync(r => r.Name!.ToLower() == searchName.ToLower() && r.HospitalId == hospitalId, cancellationToken);
+                    if (referrer == null) throw; // couldn't resolve at all — surface it
+                }
+            }
+
+            // Link the patient to this referrer for longitudinal tracking.
+            patient.ReferrerId = referrer.ReferrerId;
+        }
+
         // The "primary" line (first in the list) is the denormalised snapshot
         // on the parent Appointment — kept for backward compat with v1
         // clients that still read Appointment.Service / .Modality directly.
@@ -128,7 +193,7 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
 
         var appointment = new Appointment
         {
-            DisplayId = $"APP-{101 + count}",
+            DisplayId = $"APP-{displaySeq}",
             PatientId = request.PatientId,
             PatientName = patient.FullName ?? "Unknown",
             Mobile = patient.Mobile,
@@ -214,48 +279,16 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
             _context.Invoices.Add(invoice);
         }
 
-        // --- REFERRAL SYNCHRONISATION ---
-        if (!string.IsNullOrEmpty(request.ReferredBy))
+        // --- REFERRAL COMMISSIONS ---
+        // The referrer was resolved (and any brand-new one committed) up front.
+        // Here we only spawn the per-service commission rows. Each carries the
+        // AppointmentServiceId so the referrer dashboard can break commissions
+        // down by modality / service.
+        if (referrer != null)
         {
-            var searchName = request.ReferredBy.Trim();
-            var referrer = await _context.Referrers
-                .FirstOrDefaultAsync(r => r.Name.ToLower() == searchName.ToLower() && r.HospitalId == appointment.HospitalId, cancellationToken);
-
-            if (referrer == null)
-            {
-                var digits = string.Empty;
-                if (!string.IsNullOrEmpty(request.ReferredContact))
-                {
-                    digits = new string(request.ReferredContact.Where(char.IsDigit).ToArray());
-                    if (digits.StartsWith("91") && digits.Length == 12)
-                    {
-                        digits = digits.Substring(2);
-                    }
-                    else if (digits.StartsWith("0") && digits.Length == 11)
-                    {
-                        digits = digits.Substring(1);
-                    }
-                }
-
-                referrer = new Referrer
-                {
-                    Name = searchName,
-                    Contact = digits,
-                    Address = string.Empty,
-                    HospitalId = appointment.HospitalId
-                };
-
-                _context.Referrers.Add(referrer);
-            }
-
-            // Ensure patient record is linked to this referrer for longitudinal tracking
-            patient.ReferrerId = referrer.ReferrerId;
-
             // Generate one commission row per service line that carries a
             // positive cut (or unconditionally when auto-billing is on and
-            // the line has a cut). Each commission carries the
-            // AppointmentServiceId so the referrer dashboard can break
-            // commissions down by modality / service.
+            // the line has a cut).
             if (isAutoBillingEnabled || totalReferralCut > 0)
             {
                 // The accumulated total walks forward across all lines so
