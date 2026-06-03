@@ -151,7 +151,10 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
                     // batched second query) — projecting a typed null
                     // here keeps EF happy (it can't translate optional
                     // ctor args otherwise) and reserves the slot.
-                    (IReadOnlyList<AppointmentServiceDto>?)null
+                    (IReadOnlyList<AppointmentServiceDto>?)null,
+                    // ReferringDoctorName — only resolved on the single-record
+                    // (reporting) fetch; the worklist doesn't need it.
+                    (string?)null
                 ))
                 .ToListAsync(cancellationToken);
 

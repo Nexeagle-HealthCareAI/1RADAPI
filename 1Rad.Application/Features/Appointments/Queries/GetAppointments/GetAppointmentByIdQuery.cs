@@ -74,7 +74,15 @@ public class GetAppointmentByIdQueryHandler : IRequestHandler<GetAppointmentById
                 x.Appointment.DeletedAt,
                 // Services is materialised by the second query below;
                 // typed null here keeps EF's expression tree happy.
-                (IReadOnlyList<AppointmentServiceDto>?)null
+                (IReadOnlyList<AppointmentServiceDto>?)null,
+                // Resolve the referring DOCTOR from the referral source so the
+                // report's "Referred By" is always a doctor: a doctor referrer
+                // is their own name; an agent referrer resolves to the doctor
+                // they're supported by. Falls back to the raw ReferredBy.
+                _context.Referrers
+                    .Where(r => r.HospitalId == x.Appointment.HospitalId && r.Name == x.Appointment.ReferredBy)
+                    .Select(r => r.IsDoctor ? r.Name : r.SupportedByDoctor)
+                    .FirstOrDefault() ?? x.Appointment.ReferredBy
             ))
 
             .FirstOrDefaultAsync(cancellationToken);

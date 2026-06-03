@@ -34,6 +34,27 @@ public class UpdateAppointmentStatusCommandHandler : IRequestHandler<UpdateAppoi
 
         var newStatus = request.Status.ToUpperInvariant();
 
+        // Arrival gate: a study can't be advanced (scanning, reporting, etc.)
+        // until the patient has actually arrived. Only marking the patient
+        // arrived (CONFIRMED) and cancelling are allowed before that — so the
+        // technician/doctor boards can't move a no-show through the workflow.
+        var ADVANCE_STATUSES = new[] { "IN_PROGRESS", "SCANNED", "REPORTING", "REPORTED", "DELIVERED", "COMPLETED" };
+        if (ADVANCE_STATUSES.Contains(newStatus))
+        {
+            var curStatus = (appointment.Status ?? string.Empty).ToLowerInvariant();
+            var notArrivedYet = appointment.ArrivedAt == null &&
+                (curStatus == string.Empty || curStatus == "scheduled" || curStatus == "booked" || curStatus == "future");
+            if (notArrivedYet)
+            {
+                return new UpdateAppointmentStatusResult
+                {
+                    Success = true,
+                    NotAllowed = true,
+                    Message = "The patient has not arrived yet. Mark the patient as arrived before updating the study status."
+                };
+            }
+        }
+
         if (newStatus == "CANCELLED")
         {
             // Enforce validation: Check if study is currently being reported or already finalized

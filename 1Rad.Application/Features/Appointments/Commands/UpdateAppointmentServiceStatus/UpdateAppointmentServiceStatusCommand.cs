@@ -117,6 +117,26 @@ public class UpdateAppointmentServiceStatusCommandHandler
             };
         }
 
+        // Arrival gate — a service line can't be advanced (scanning, reporting,
+        // delivery) until the patient has actually arrived. Cancelling or
+        // resetting to NOT_STARTED is still allowed.
+        var ADVANCE_STATUSES = new[] { "IN_PROGRESS", "IN_MID", "SCANNED", "REPORTED", "DELIVERED" };
+        if (ADVANCE_STATUSES.Contains(newStatus))
+        {
+            var curStatus = (appointment.Status ?? string.Empty).ToLowerInvariant();
+            var notArrivedYet = appointment.ArrivedAt == null &&
+                (curStatus == string.Empty || curStatus == "scheduled" || curStatus == "booked" || curStatus == "future");
+            if (notArrivedYet)
+            {
+                return new UpdateAppointmentServiceStatusResult
+                {
+                    Success = true,
+                    NotAllowed = true,
+                    Message = "The patient has not arrived yet. Mark the patient as arrived before updating the study status."
+                };
+            }
+        }
+
         var nowUtc = DateTime.UtcNow;
 
         // Per-service timestamp rules. Idempotent — re-marking SCANNED

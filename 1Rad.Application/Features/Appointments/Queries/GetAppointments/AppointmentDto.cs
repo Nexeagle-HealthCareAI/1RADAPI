@@ -50,7 +50,12 @@ public record AppointmentDto(
     // to only carry one service. Frontends that haven't migrated yet
     // can still read the scalar Service / Modality / Amount fields
     // above — they reflect the primary (first) service line.
-    IReadOnlyList<AppointmentServiceDto>? Services = null
+    IReadOnlyList<AppointmentServiceDto>? Services = null,
+    // The DOCTOR who referred this patient, resolved from the referral source:
+    // if the referrer is a doctor it's their name; if the referrer is an agent
+    // it's the doctor they're "supported by". Populated on the single-record
+    // (reporting) fetch so the report always shows a doctor as "Referred By".
+    string? ReferringDoctorName = null
 );
 
 /// <summary>
