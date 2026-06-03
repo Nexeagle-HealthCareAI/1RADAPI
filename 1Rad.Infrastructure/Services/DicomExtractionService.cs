@@ -24,6 +24,11 @@ public class DicomExtractionService : IDicomExtractionService
     private const string Container = "dicom-files";
     private const int ThumbnailMaxDim = 256;
 
+    // Extracted slices + thumbnails are immutable (keyed by asset/series/instance),
+    // so tell browsers and any CDN to cache them for a year. This turns repeat
+    // study views into local cache hits instead of re-downloading every slice.
+    private const string ImmutableCacheControl = "public, max-age=31536000, immutable";
+
     // Transcode uncompressed DICOM pixel data to JPEG-LS Lossless before
     // uploading to blob storage. Lossless = identical pixel values after
     // decode (primary-diagnosis safe), but typically 3-4x smaller bytes.
@@ -247,7 +252,7 @@ public class DicomExtractionService : IDicomExtractionService
                     string sliceUrl;
                     using (var sliceUp = new MemoryStream(uploadBytes, writable: false))
                     {
-                        sliceUrl = await _blob.UploadFileAtPathAsync(sliceUp, sliceBlobPath, "application/dicom", Container);
+                        sliceUrl = await _blob.UploadFileAtPathAsync(sliceUp, sliceBlobPath, "application/dicom", Container, ImmutableCacheControl);
                     }
 
                     // Thumbnail: first slice of each series only.
@@ -262,7 +267,7 @@ public class DicomExtractionService : IDicomExtractionService
                                 thumb.SaveAsJpeg(ms, new JpegEncoder { Quality = 70 });
                                 ms.Position = 0;
                                 var thumbPath = $"{hospitalIdN}/{appointmentIdN}/extracted/{assetIdN}/thumbs/{series.Index:D3}.jpg";
-                                thumbnailUrl = await _blob.UploadFileAtPathAsync(ms, thumbPath, "image/jpeg", Container);
+                                thumbnailUrl = await _blob.UploadFileAtPathAsync(ms, thumbPath, "image/jpeg", Container, ImmutableCacheControl);
                             }
                         }
                         catch (Exception thumbEx)

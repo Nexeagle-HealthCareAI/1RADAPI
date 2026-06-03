@@ -15,7 +15,7 @@ namespace _1Rad.Application.Interfaces
         /// Uploads a file using a caller-supplied blob path (supports virtual folders, e.g. "hospitalId/staffId/file.pdf").
         /// Returns the full HTTPS URL of the uploaded blob.
         /// </summary>
-        Task<string> UploadFileAtPathAsync(Stream fileStream, string blobPath, string contentType, string containerName);
+        Task<string> UploadFileAtPathAsync(Stream fileStream, string blobPath, string contentType, string containerName, string? cacheControl = null);
 
         Task DeleteFileAsync(string fileUrl, string? containerName = null);
         Task<Stream> DownloadFileAsync(string fileUrl);

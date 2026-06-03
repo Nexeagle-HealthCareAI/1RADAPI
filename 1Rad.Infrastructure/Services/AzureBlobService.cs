@@ -41,7 +41,7 @@ namespace _1Rad.Infrastructure.Services
             return blobClient.Uri.ToString();
         }
 
-        public async Task<string> UploadFileAtPathAsync(Stream fileStream, string blobPath, string contentType, string containerName)
+        public async Task<string> UploadFileAtPathAsync(Stream fileStream, string blobPath, string contentType, string containerName, string? cacheControl = null)
         {
             if (string.IsNullOrWhiteSpace(blobPath))
                 throw new ArgumentException("blobPath is required", nameof(blobPath));
@@ -59,6 +59,11 @@ namespace _1Rad.Infrastructure.Services
             var blobClient = containerClient.GetBlobClient(sanitisedPath);
 
             var blobHttpHeader = new BlobHttpHeaders { ContentType = contentType };
+            // Optional Cache-Control — set for immutable assets (e.g. extracted
+            // DICOM slices) so browsers/CDNs serve repeat views from cache
+            // instead of re-downloading every slice.
+            if (!string.IsNullOrWhiteSpace(cacheControl))
+                blobHttpHeader.CacheControl = cacheControl;
             await blobClient.UploadAsync(fileStream, new BlobUploadOptions { HttpHeaders = blobHttpHeader, });
 
             return blobClient.Uri.ToString();
