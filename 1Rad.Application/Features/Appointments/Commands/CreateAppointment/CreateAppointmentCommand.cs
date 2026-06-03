@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using _1Rad.Application.Features.Appointments;
 using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Entities;
+using _1Rad.Domain.Exceptions;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
 
@@ -54,6 +55,10 @@ public record CreateAppointmentCommand(
     // (SupportedByDoctor names the doctor they collect on behalf of).
     bool ReferrerIsDoctor = true,
     string? ReferrerSupportedByDoctor = null,
+    // When the payee is an agent, the supporting doctor's profile so that
+    // doctor is upserted into the partner list (reusable + auto-selectable).
+    string? ReferrerSupportedSpecialty = null,
+    string? ReferrerSupportedDegree = null,
     // Legacy per-booking payee fields (superseded by the payee-first model;
     // kept so older clients still bind without error).
     string? ReferralPayeeName = null,
@@ -103,6 +108,58 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
         if (serviceLines.Count == 0)
         {
             throw new Exception("At least one service is required to book an appointment.");
+        }
+
+        // ── DUPLICATE-APPOINTMENT GUARD ──────────────────────────────────────
+        // Block an accidental re-entry: the SAME patient identity (name + age +
+        // gender) already has a non-cancelled appointment TODAY for one of the
+        // SAME services. Surface the existing appointment's time, token and
+        // patient id so the front desk can verify instead of double-booking.
+        var dupDate = request.DateTime.Date;
+        var dupNameLower = (patient.FullName ?? string.Empty).Trim().ToLower();
+        var dupCandidates = await _context.Appointments
+            .Where(a => a.HospitalId == hospitalId
+                     && a.DateTime.Date == dupDate
+                     && a.Status != "CANCELLED"
+                     && a.Patient.FullName != null
+                     && a.Patient.FullName.ToLower() == dupNameLower
+                     && a.Patient.Age == patient.Age
+                     && a.Patient.Gender == patient.Gender)
+            .Select(a => new
+            {
+                a.AppointmentId,
+                a.DisplayId,
+                a.DailyTokenNumber,
+                a.DateTime,
+                PatientIdentifier = a.Patient.PatientIdentifier
+            })
+            .ToListAsync(cancellationToken);
+
+        if (dupCandidates.Count > 0)
+        {
+            var candidateIds = dupCandidates.Select(a => a.AppointmentId).ToList();
+            var existingLines = await _context.AppointmentServices
+                .Where(s => candidateIds.Contains(s.AppointmentId) && s.DeletedAt == null && s.Status != "CANCELLED")
+                .Select(s => new { s.AppointmentId, s.Modality, s.ServiceName })
+                .ToListAsync(cancellationToken);
+
+            static string Norm(string? s) => (s ?? string.Empty).Trim().ToLowerInvariant();
+            var newSet = serviceLines
+                .Select(l => (Mod: Norm(l.Modality), Svc: Norm(l.ServiceName)))
+                .ToHashSet();
+
+            var clash = dupCandidates.FirstOrDefault(appt =>
+                existingLines.Any(el => el.AppointmentId == appt.AppointmentId
+                                     && newSet.Contains((Norm(el.Modality), Norm(el.ServiceName)))));
+
+            if (clash != null)
+            {
+                var timeStr  = clash.DateTime.ToString("hh:mm tt");
+                var tokenStr = clash.DailyTokenNumber.HasValue ? $" Token No: {clash.DailyTokenNumber.Value}." : string.Empty;
+                var pidStr   = string.IsNullOrWhiteSpace(clash.PatientIdentifier) ? string.Empty : $" Patient ID: {clash.PatientIdentifier}.";
+                throw new ConflictException(
+                    $"This patient already has an appointment today (booked at {timeStr}) for the same service.{tokenStr}{pidStr} Reference: {clash.DisplayId}. Please verify before booking again.");
+            }
         }
 
         // Safeguard: the Lead Specialist must not be a non-doctor staffer (e.g. a
@@ -210,6 +267,52 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
 
             // Link the patient to this referrer for longitudinal tracking.
             patient.ReferrerId = referrer.ReferrerId;
+
+            // When the payee is an agent, make sure the supporting doctor also
+            // exists as a partner doctor — so their profile (speciality/degree)
+            // is stored once and they become auto-selectable on the next booking.
+            if (!request.ReferrerIsDoctor)
+            {
+                var supportName = NullIfBlank(request.ReferrerSupportedByDoctor);
+                if (supportName != null)
+                {
+                    var supportDoc = await _context.Referrers
+                        .FirstOrDefaultAsync(r => r.Name!.ToLower() == supportName.ToLower() && r.HospitalId == hospitalId, cancellationToken);
+
+                    if (supportDoc == null)
+                    {
+                        supportDoc = new Referrer
+                        {
+                            Name = supportName,
+                            Contact = string.Empty,
+                            Address = string.Empty,
+                            HospitalId = hospitalId,
+                            IsDoctor = true,
+                            Specialty = NullIfBlank(request.ReferrerSupportedSpecialty),
+                            Degree    = NullIfBlank(request.ReferrerSupportedDegree),
+                        };
+                        _context.Referrers.Add(supportDoc);
+                        try
+                        {
+                            await _context.SaveChangesAsync(cancellationToken);
+                        }
+                        catch (DbUpdateException)
+                        {
+                            _context.Entry(supportDoc).State = EntityState.Detached;
+                            supportDoc = await _context.Referrers
+                                .FirstOrDefaultAsync(r => r.Name!.ToLower() == supportName.ToLower() && r.HospitalId == hospitalId, cancellationToken);
+                        }
+                    }
+
+                    // Refresh the doctor's profile only when this booking
+                    // actually supplied a value (never wipe a saved profile).
+                    if (supportDoc != null)
+                    {
+                        supportDoc.Specialty = NullIfBlank(request.ReferrerSupportedSpecialty) ?? supportDoc.Specialty;
+                        supportDoc.Degree    = NullIfBlank(request.ReferrerSupportedDegree)    ?? supportDoc.Degree;
+                    }
+                }
+            }
         }
 
         // The "primary" line (first in the list) is the denormalised snapshot

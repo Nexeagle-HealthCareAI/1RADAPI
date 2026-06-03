@@ -33,6 +33,7 @@ public record UpdateAppointmentCommand(
     string Doctor,
     string Notes,
     string ReferredBy,
+    string? ReferredContact = null,
     string? PatientName = null,
     string? Mobile = null,
     string? PatientAge = null,
@@ -54,6 +55,8 @@ public record UpdateAppointmentCommand(
     // (don't accidentally flip an agent back to "doctor").
     bool? ReferrerIsDoctor = null,
     string? ReferrerSupportedByDoctor = null,
+    string? ReferrerSupportedSpecialty = null,
+    string? ReferrerSupportedDegree = null,
     string? ReferrerEmail = null,
     string? ReferrerSpecialty = null,
     string? ReferrerDegree = null
@@ -104,6 +107,8 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         appointment.Doctor = request.Doctor;
         appointment.Notes = request.Notes;
         appointment.ReferredBy = request.ReferredBy;
+        if (request.ReferredContact != null)
+            appointment.ReferredContact = request.ReferredContact;
 
         // Update priority only if the client explicitly sent one. Null leaves
         // the existing value alone so a partial edit can't accidentally
@@ -433,6 +438,43 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         referrer.Email     = Clean(request.ReferrerEmail)     ?? referrer.Email;
         referrer.Specialty = Clean(request.ReferrerSpecialty) ?? referrer.Specialty;
         referrer.Degree    = Clean(request.ReferrerDegree)    ?? referrer.Degree;
+
+        // Keep the payee's contact fresh too (doctor or agent). Normalise to a
+        // 10-digit local number the same way booking does; only overwrite when
+        // a non-blank value arrived so an empty edit never wipes a saved number.
+        var contactDigits = Clean(request.ReferredContact);
+        if (contactDigits != null)
+        {
+            contactDigits = new string(contactDigits.Where(char.IsDigit).ToArray());
+            if (contactDigits.StartsWith("91") && contactDigits.Length == 12) contactDigits = contactDigits.Substring(2);
+            else if (contactDigits.StartsWith("0") && contactDigits.Length == 11) contactDigits = contactDigits.Substring(1);
+            if (contactDigits.Length > 0) referrer.Contact = contactDigits;
+        }
+
+        // Agent payee → ensure the supporting doctor is also a partner doctor,
+        // so the profile is stored once and the name is auto-selectable later.
+        var isAgentEdit = request.ReferrerIsDoctor.HasValue && !request.ReferrerIsDoctor.Value;
+        var supportName = Clean(request.ReferrerSupportedByDoctor);
+        if (isAgentEdit && supportName != null)
+        {
+            var supportDoc = await _context.Referrers
+                .FirstOrDefaultAsync(r => r.Name.ToLower() == supportName.ToLower() && r.HospitalId == appointment.HospitalId, cancellationToken);
+            if (supportDoc == null)
+            {
+                supportDoc = new Referrer
+                {
+                    Name = supportName,
+                    Contact = string.Empty,
+                    Address = string.Empty,
+                    HospitalId = appointment.HospitalId,
+                    IsDoctor = true,
+                };
+                _context.Referrers.Add(supportDoc);
+            }
+            supportDoc.IsDoctor  = true;
+            supportDoc.Specialty = Clean(request.ReferrerSupportedSpecialty) ?? supportDoc.Specialty;
+            supportDoc.Degree    = Clean(request.ReferrerSupportedDegree)    ?? supportDoc.Degree;
+        }
 
         bool isMultiServiceEdit = request.Services is { Count: > 0 };
 
