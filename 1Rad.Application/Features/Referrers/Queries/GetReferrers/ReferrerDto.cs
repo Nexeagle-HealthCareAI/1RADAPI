@@ -7,5 +7,9 @@ public record ReferrerDto(
     string Address,
     // Sync fields (Phase B3 Slice 4).
     DateTime? UpdatedAt = null,
-    DateTime? DeletedAt = null
+    DateTime? DeletedAt = null,
+    // Optional referring-doctor profile.
+    string? Email = null,
+    string? Specialty = null,
+    string? Degree = null
 );

@@ -65,52 +65,51 @@ public class UpdateAppointmentStatusCommandHandler : IRequestHandler<UpdateAppoi
             }
 
             var hospitalId = appointment.HospitalId;
+            var cancelNow = DateTime.UtcNow;
 
-            // 1. Fetch related invoices, items, and payments
+            // 1. SOFT-delete the related invoices. A HARD delete vanishes from
+            //    the DB and is therefore never returned as a tombstone on the
+            //    next delta sync — so the offline-first billing page would keep
+            //    showing the cancelled appointment's invoice forever. Setting
+            //    DeletedAt + UpdatedAt makes the sync engine remove it from the
+            //    local cache on the next pull.
             var invoices = await _context.Invoices
-                .Include(i => i.Items)
-                .Include(i => i.Payments)
-                .Where(i => i.AppointmentId == request.AppointmentId && i.HospitalId == hospitalId)
+                .Where(i => i.AppointmentId == request.AppointmentId && i.HospitalId == hospitalId && i.DeletedAt == null)
                 .ToListAsync(cancellationToken);
 
+            var invoiceDisplayIds = invoices.Select(i => i.InvoiceId).ToList();
             foreach (var invoice in invoices)
             {
-                if (invoice.Payments != null && invoice.Payments.Any())
-                {
-                    ((DbContext)_context).RemoveRange(invoice.Payments);
-                }
-
-                if (invoice.Items != null && invoice.Items.Any())
-                {
-                    ((DbContext)_context).RemoveRange(invoice.Items);
-                }
-
-                _context.Invoices.Remove(invoice);
+                invoice.DeletedAt = cancelNow;
+                invoice.UpdatedAt = cancelNow;
             }
 
-            // 2. Fetch and remove associated referral commissions
-            var invoiceDisplayIds = invoices.Select(i => i.InvoiceId).ToList();
+            // 2. SOFT-delete the associated referral commissions (same tombstone
+            //    reasoning — otherwise the Referral Hub keeps showing them) and
+            //    zero the amount so any aggregate that ignores the tombstone
+            //    still nets to nothing.
             var commissions = await _context.ReferralCommissions
-                .Where(c => (c.AppointmentId == request.AppointmentId || 
-                             (c.ReferenceNumber != null && invoiceDisplayIds.Contains(c.ReferenceNumber))) && 
-                            c.HospitalId == hospitalId)
+                .Where(c => (c.AppointmentId == request.AppointmentId ||
+                             (c.ReferenceNumber != null && invoiceDisplayIds.Contains(c.ReferenceNumber))) &&
+                            c.HospitalId == hospitalId && c.DeletedAt == null)
                 .ToListAsync(cancellationToken);
 
             var referrersToRecalculate = commissions.Select(c => c.ReferrerId).Distinct().ToList();
-
-            if (commissions.Any())
+            foreach (var c in commissions)
             {
-                _context.ReferralCommissions.RemoveRange(commissions);
+                c.DeletedAt = cancelNow;
+                c.UpdatedAt = cancelNow;
+                c.CommissionAmount = 0;
             }
 
-            // Save changes to clear the DB state before recalculation
             await _context.SaveChangesAsync(cancellationToken);
 
-            // 3. Cascade recalculation of accumulated commission totals for any affected referrers
+            // 3. Recompute accumulated totals for affected referrers over their
+            //    LIVE (non-deleted) commissions so the ledger doesn't drift.
             foreach (var referrerId in referrersToRecalculate)
             {
                 var allRemainingCommissions = await _context.ReferralCommissions
-                    .Where(c => c.ReferrerId == referrerId && c.HospitalId == hospitalId)
+                    .Where(c => c.ReferrerId == referrerId && c.HospitalId == hospitalId && c.DeletedAt == null)
                     .OrderBy(c => c.TransactionDate)
                     .ToListAsync(cancellationToken);
 
@@ -137,6 +136,26 @@ public class UpdateAppointmentStatusCommandHandler : IRequestHandler<UpdateAppoi
         var nowUtc = DateTime.UtcNow;
         if (newStatus == "CONFIRMED"   && appointment.ArrivedAt     == null) appointment.ArrivedAt     = nowUtc;
         if (newStatus == "IN_PROGRESS" && appointment.ScanStartedAt == null) appointment.ScanStartedAt = nowUtc;
+
+        // Generate the daily token on ARRIVAL (first time the patient is marked
+        // CONFIRMED / arrived), not at booking — so the number reflects who
+        // actually showed up first, in order. Only assign once; a re-confirm or
+        // a status correction never re-issues or changes an existing token.
+        // The atomic counter (seeded from the current max) guarantees the number
+        // is unique for the hospital + day, even with several front desks
+        // marking arrivals at the same moment.
+        if (newStatus == "CONFIRMED" && !appointment.DailyTokenNumber.HasValue)
+        {
+            var tokenDate = appointment.DateTime.Date;
+            var maxToken = await _context.Appointments
+                .Where(a => a.HospitalId == appointment.HospitalId && a.DateTime.Date == tokenDate)
+                .MaxAsync(a => (int?)a.DailyTokenNumber, cancellationToken) ?? 0;
+            appointment.DailyTokenNumber = await _context.NextSequenceValueAsync(
+                appointment.HospitalId,
+                $"APPOINTMENT_TOKEN_{tokenDate:yyyy-MM-dd}",
+                maxToken + 1,
+                cancellationToken);
+        }
 
         // Normalize to uppercase to match backend-set statuses (REPORTED, SCANNED, IN_PROGRESS, etc.)
         appointment.Status = newStatus;

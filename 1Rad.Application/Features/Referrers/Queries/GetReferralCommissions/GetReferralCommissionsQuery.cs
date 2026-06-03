@@ -26,7 +26,10 @@ public record ReferralCommissionDto(
     string? PatientName,
     string? PatientPaymentStatus = null,
     DateTime? UpdatedAt = null,
-    DateTime? DeletedAt = null
+    DateTime? DeletedAt = null,
+    // Who actually receives this payment. Null PayeeName = pay the referrer.
+    string? PayeeName = null,
+    string? PayeeContact = null
 );
 
 
@@ -100,7 +103,9 @@ public class GetReferralCommissionsQueryHandler : IRequestHandler<GetReferralCom
                 x.PatientName ?? "Unknown Patient",
                 ResolvePatientPaymentStatus(x.Invoice?.PaidAmount, x.Invoice?.TotalAmount, x.Invoice?.Status),
                 x.Commission.UpdatedAt,
-                x.Commission.DeletedAt
+                x.Commission.DeletedAt,
+                x.Commission.PayeeName,
+                x.Commission.PayeeContact
             )).ToList();
     }
 

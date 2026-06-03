@@ -10,7 +10,15 @@ using Microsoft.EntityFrameworkCore;
 
 namespace _1Rad.Application.Features.Referrers.Commands.UpdateReferrer;
 
-public record UpdateReferrerCommand(Guid ReferrerId, string Name, string Contact, string Address) : IRequest<bool>;
+public record UpdateReferrerCommand(
+    Guid ReferrerId,
+    string Name,
+    string Contact,
+    string Address,
+    string? Email = null,
+    string? Specialty = null,
+    string? Degree = null
+) : IRequest<bool>;
 
 public class UpdateReferrerCommandHandler : IRequestHandler<UpdateReferrerCommand, bool>
 {
@@ -47,6 +55,9 @@ public class UpdateReferrerCommandHandler : IRequestHandler<UpdateReferrerComman
         referrer.Name = request.Name;
         referrer.Contact = digits;
         referrer.Address = request.Address;
+        referrer.Email     = string.IsNullOrWhiteSpace(request.Email)     ? null : request.Email.Trim();
+        referrer.Specialty = string.IsNullOrWhiteSpace(request.Specialty) ? null : request.Specialty.Trim();
+        referrer.Degree    = string.IsNullOrWhiteSpace(request.Degree)    ? null : request.Degree.Trim();
 
         await _context.SaveChangesAsync(cancellationToken);
         return true;

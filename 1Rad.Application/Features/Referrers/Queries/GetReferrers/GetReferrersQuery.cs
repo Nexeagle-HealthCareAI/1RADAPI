@@ -54,7 +54,10 @@ public class GetReferrersQueryHandler : IRequestHandler<GetReferrersQuery, List<
                 r.Contact ?? string.Empty,
                 r.Address ?? string.Empty,
                 r.UpdatedAt,
-                r.DeletedAt
+                r.DeletedAt,
+                r.Email,
+                r.Specialty,
+                r.Degree
             ))
             .ToListAsync(cancellationToken);
     }

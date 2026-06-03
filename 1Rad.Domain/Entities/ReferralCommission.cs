@@ -38,6 +38,13 @@ public class ReferralCommission : BaseEntity, IHospitalContext
     public DateTime? PaymentDate { get; set; }
     public string? ReferenceNumber { get; set; }
     public string? Remarks { get; set; }
+
+    // Who actually receives this referral payment. NULL means "pay the
+    // referring doctor" (the common case); a value means the cut is owed to an
+    // associated person (e.g. the doctor's agent) instead. The payout screen
+    // pays whoever is named here, falling back to the referrer when null.
+    public string? PayeeName { get; set; }
+    public string? PayeeContact { get; set; }
     
     // Multi-Facility Context
     public Guid HospitalId { get; set; }

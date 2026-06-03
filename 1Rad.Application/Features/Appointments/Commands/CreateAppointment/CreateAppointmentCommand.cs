@@ -43,7 +43,16 @@ public record CreateAppointmentCommand(
     // of truth; the scalar Service/Modality/Amount/ReferralCutValue above
     // are ignored as input (they are re-derived from the first line as a
     // denormalised "primary service" snapshot on the parent Appointment).
-    IReadOnlyList<AppointmentServiceLine>? Services = null
+    IReadOnlyList<AppointmentServiceLine>? Services = null,
+    // Optional referring-doctor profile — stored on the Referrer the first
+    // time we see this doctor (and refreshed if a later booking sends them).
+    string? ReferrerEmail = null,
+    string? ReferrerSpecialty = null,
+    string? ReferrerDegree = null,
+    // Optional referral pay-to person. NULL/empty = pay the referring doctor;
+    // a name means the cut is owed to that associated person instead.
+    string? ReferralPayeeName = null,
+    string? ReferralPayeeContact = null
 ) : IRequest<Guid>;
 
 
@@ -63,27 +72,23 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
 
         if (patient == null) throw new Exception("Patient not found.");
 
-        var appointmentDate = request.DateTime.Date;
         var hospitalId = _context.UserContext.HospitalId != Guid.Empty
             ? _context.UserContext.HospitalId
             : patient.HospitalId;
 
-        // --- CONCURRENCY-SAFE NUMBERING ---
-        // The display id ("APP-###") and the daily token number used to be
-        // "count of rows + 1" — a read-then-write that let several terminals
-        // booking at the same instant compute the SAME number. Hand both out
-        // atomically instead (NextSequenceValueAsync increments-and-returns
-        // under a key-range lock), so concurrent bookings each get a distinct
-        // value. The seeds reproduce the existing numbering the first time a
-        // counter key is used, so no data backfill is required.
+        // --- CONCURRENCY-SAFE DISPLAY ID ---
+        // The display id ("APP-###") used to be "count of rows + 1" — a
+        // read-then-write that let several terminals booking at the same instant
+        // compute the SAME number. Hand it out atomically instead
+        // (NextSequenceValueAsync increments-and-returns under a key-range lock).
+        //
+        // NOTE: the daily TOKEN number is intentionally NOT assigned here. Tokens
+        // are now generated when the patient ARRIVES (the "Arrived" status), so
+        // the number reflects real arrival order rather than booking order. See
+        // UpdateAppointmentStatusCommand.
         var existingTotal = await _context.Appointments.CountAsync(cancellationToken);
         var displaySeq = await _context.NextSequenceValueAsync(
             Guid.Empty, "APPOINTMENT_DISPLAY_ID", 101 + existingTotal, cancellationToken);
-
-        var existingDayCount = await _context.Appointments
-            .CountAsync(a => a.HospitalId == hospitalId && a.DateTime.Date == appointmentDate, cancellationToken);
-        var dailyTokenNumber = await _context.NextSequenceValueAsync(
-            hospitalId, $"APPOINTMENT_TOKEN_{appointmentDate:yyyy-MM-dd}", existingDayCount + 1, cancellationToken);
 
         // Resolve the service-lines list. v2 callers send Services directly;
         // v1 callers send only the scalar fields and we build a single-line
@@ -163,7 +168,10 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
                     Name = searchName,
                     Contact = digits,
                     Address = string.Empty,
-                    HospitalId = hospitalId
+                    HospitalId = hospitalId,
+                    Email     = NullIfBlank(request.ReferrerEmail),
+                    Specialty = NullIfBlank(request.ReferrerSpecialty),
+                    Degree    = NullIfBlank(request.ReferrerDegree),
                 };
                 _context.Referrers.Add(referrer);
 
@@ -181,6 +189,13 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
                     if (referrer == null) throw; // couldn't resolve at all — surface it
                 }
             }
+
+            // Keep the doctor profile fresh — fill in anything this booking
+            // supplied (only overwrite when a non-blank value arrived, so an
+            // empty booking field never wipes a previously-saved profile).
+            referrer.Email     = NullIfBlank(request.ReferrerEmail)     ?? referrer.Email;
+            referrer.Specialty = NullIfBlank(request.ReferrerSpecialty) ?? referrer.Specialty;
+            referrer.Degree    = NullIfBlank(request.ReferrerDegree)    ?? referrer.Degree;
 
             // Link the patient to this referrer for longitudinal tracking.
             patient.ReferrerId = referrer.ReferrerId;
@@ -207,7 +222,8 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
             ReferredBy = request.ReferredBy,
             ReferredContact = request.ReferredContact,
             Notes = request.Notes,
-            DailyTokenNumber = dailyTokenNumber,
+            // Token assigned on arrival, not at booking (see status handler).
+            DailyTokenNumber = null,
             HospitalId = hospitalId
         };
 
@@ -291,6 +307,10 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
             // the line has a cut).
             if (isAutoBillingEnabled || totalReferralCut > 0)
             {
+                // Pay-to person for this visit. NULL = pay the referring doctor.
+                var payeeName    = NullIfBlank(request.ReferralPayeeName);
+                var payeeContact = SanitizeContact(request.ReferralPayeeContact);
+
                 // The accumulated total walks forward across all lines so
                 // the commission ledger remains a monotonic running sum.
                 var currentTotal = await _context.ReferralCommissions
@@ -316,7 +336,9 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
                         HospitalId = appointment.HospitalId,
                         AppointmentId = appointment.AppointmentId,
                         AppointmentServiceId = createdServices[i].Id,
-                        ReferenceNumber = invoiceDisplayId
+                        ReferenceNumber = invoiceDisplayId,
+                        PayeeName = payeeName,
+                        PayeeContact = payeeContact
                     };
 
                     _context.ReferralCommissions.Add(commission);
@@ -377,6 +399,21 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
                 Id:               null,
                 ServiceChargeId:  null)
         };
+    }
+
+    // Trim a string; return null when it's null/empty/whitespace so optional
+    // profile + payee fields never store an empty string.
+    private static string? NullIfBlank(string? s)
+        => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
+
+    // Keep only the digits of a contact number (light tidy of a payee phone).
+    private static string? SanitizeContact(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        var digits = new string(raw.Where(char.IsDigit).ToArray());
+        if (digits.StartsWith("91") && digits.Length == 12) digits = digits.Substring(2);
+        else if (digits.StartsWith("0") && digits.Length == 11) digits = digits.Substring(1);
+        return string.IsNullOrEmpty(digits) ? null : digits;
     }
 
     // Whitelist + normalise — guards the DB from arbitrary strings reaching

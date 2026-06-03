@@ -61,31 +61,38 @@ public class DeleteInvoiceCommandHandler : IRequestHandler<DeleteInvoiceCommand,
                     c.HospitalId == hospitalId, cancellationToken);
         }
         
+        var deleteNow = DateTime.UtcNow;
+
         Guid? referrerIdToRecalculate = null;
         if (commission != null)
         {
             referrerIdToRecalculate = commission.ReferrerId;
-            _context.ReferralCommissions.Remove(commission);
+            // SOFT-delete so the Referral Hub's offline cache tombstones it.
+            commission.DeletedAt = deleteNow;
+            commission.UpdatedAt = deleteNow;
+            commission.CommissionAmount = 0;
         }
 
+        // Payments are a real financial event — clear them so the invoice's
+        // collected total resets, but do it before tombstoning the header.
         if (invoice.Payments != null && invoice.Payments.Any())
         {
             _context.Payments.RemoveRange(invoice.Payments);
+            invoice.PaidAmount = 0;
         }
 
-        if (invoice.Items != null && invoice.Items.Any())
-        {
-            ((DbContext)_context).RemoveRange(invoice.Items);
-        }
-
-        _context.Invoices.Remove(invoice);
+        // SOFT-delete the invoice header (NOT a hard delete) — a hard delete
+        // never reaches the offline cache as a tombstone, so the billing page
+        // would keep showing it. DeletedAt + UpdatedAt makes the sync remove it.
+        invoice.DeletedAt = deleteNow;
+        invoice.UpdatedAt = deleteNow;
         await _context.SaveChangesAsync(cancellationToken);
 
         // Cascade recalculation of Accumulated Totals for the referrer to prevent ledger drift after deletion
         if (referrerIdToRecalculate.HasValue)
         {
             var allCommissions = await _context.ReferralCommissions
-                .Where(c => c.ReferrerId == referrerIdToRecalculate.Value && c.HospitalId == hospitalId)
+                .Where(c => c.ReferrerId == referrerIdToRecalculate.Value && c.HospitalId == hospitalId && c.DeletedAt == null)
                 .OrderBy(c => c.TransactionDate)
                 .ToListAsync(cancellationToken);
 

@@ -10,6 +10,12 @@ public class Referrer : BaseEntity, IHospitalContext
     public string? Address { get; set; } = string.Empty;
     public Guid HospitalId { get; set; }
 
+    // Optional referring-doctor profile. All nullable — a referrer may be a
+    // walk-in physician we only know by name.
+    public string? Email { get; set; }
+    public string? Specialty { get; set; }
+    public string? Degree { get; set; }
+
     // Sync engine fields (Phase B3 Slice 4).
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? DeletedAt { get; set; }

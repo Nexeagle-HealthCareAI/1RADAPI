@@ -9,7 +9,14 @@ using Microsoft.EntityFrameworkCore;
 
 namespace _1Rad.Application.Features.Referrers.Commands.CreateReferrer;
 
-public record CreateReferrerCommand(string Name, string Contact, string Address) : IRequest<Guid>;
+public record CreateReferrerCommand(
+    string Name,
+    string Contact,
+    string Address,
+    string? Email = null,
+    string? Specialty = null,
+    string? Degree = null
+) : IRequest<Guid>;
 
 public class CreateReferrerCommandHandler : IRequestHandler<CreateReferrerCommand, Guid>
 {
@@ -61,6 +68,10 @@ public class CreateReferrerCommandHandler : IRequestHandler<CreateReferrerComman
                     match.Contact = storedContact;
                 if (string.IsNullOrWhiteSpace(match.Address) && !string.IsNullOrWhiteSpace(request.Address))
                     match.Address = request.Address;
+                // Fill in any doctor-profile fields this submission supplied.
+                if (!string.IsNullOrWhiteSpace(request.Email))     match.Email     = request.Email.Trim();
+                if (!string.IsNullOrWhiteSpace(request.Specialty)) match.Specialty = request.Specialty.Trim();
+                if (!string.IsNullOrWhiteSpace(request.Degree))    match.Degree    = request.Degree.Trim();
                 await _context.SaveChangesAsync(cancellationToken);
                 return match.ReferrerId;
             }
@@ -71,7 +82,10 @@ public class CreateReferrerCommandHandler : IRequestHandler<CreateReferrerComman
             Name = request.Name,
             Contact = storedContact,
             Address = request.Address,
-            HospitalId = hospitalId
+            HospitalId = hospitalId,
+            Email     = string.IsNullOrWhiteSpace(request.Email)     ? null : request.Email.Trim(),
+            Specialty = string.IsNullOrWhiteSpace(request.Specialty) ? null : request.Specialty.Trim(),
+            Degree    = string.IsNullOrWhiteSpace(request.Degree)    ? null : request.Degree.Trim(),
         };
 
         _context.Referrers.Add(referrer);
