@@ -36,6 +36,7 @@ public record UpdateAppointmentCommand(
     string? PatientName = null,
     string? Mobile = null,
     string? PatientAge = null,
+    string? PatientGender = null,
     decimal? Amount = null,
     decimal? ReferralCutValue = null,
     // Clinical urgency: STAT / URGENT / ROUTINE. Null = leave unchanged.
@@ -68,14 +69,22 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
 
         bool dateChanged = appointment.DateTime.Date != request.DateTime.Date;
 
-        // If the date has changed, calculate a new token number for the new date
+        // If the date has changed, hand out a token for the NEW date. Use the
+        // atomic counter seeded from the current MAX token (not count+1, which
+        // can collide when tokens have gaps) so the new number is always unique
+        // — otherwise the unique index UX_Appointments_Hospital_Date_Token would
+        // reject the save with a 500 on a date-change edit.
         if (dateChanged)
         {
             var appointmentDate = request.DateTime.Date;
-            var newDailyTokenNumber = await _context.Appointments
-                .CountAsync(a => a.HospitalId == appointment.HospitalId && a.DateTime.Date == appointmentDate, cancellationToken) + 1;
-
-            appointment.DailyTokenNumber = newDailyTokenNumber;
+            var maxToken = await _context.Appointments
+                .Where(a => a.HospitalId == appointment.HospitalId && a.DateTime.Date == appointmentDate)
+                .MaxAsync(a => (int?)a.DailyTokenNumber, cancellationToken) ?? 0;
+            appointment.DailyTokenNumber = await _context.NextSequenceValueAsync(
+                appointment.HospitalId,
+                $"APPOINTMENT_TOKEN_{appointmentDate:yyyy-MM-dd}",
+                maxToken + 1,
+                cancellationToken);
         }
 
         // Update Appointment scalar fields. Service/Modality are rewritten
@@ -106,6 +115,7 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             if (!string.IsNullOrEmpty(request.PatientName)) appointment.Patient.FullName = request.PatientName;
             if (!string.IsNullOrEmpty(request.Mobile)) appointment.Patient.Mobile = request.Mobile;
             if (!string.IsNullOrEmpty(request.PatientAge)) appointment.Patient.Age = request.PatientAge;
+            if (!string.IsNullOrEmpty(request.PatientGender)) appointment.Patient.Gender = request.PatientGender;
         }
 
         // Load every live AppointmentService row on this visit. We reconcile
