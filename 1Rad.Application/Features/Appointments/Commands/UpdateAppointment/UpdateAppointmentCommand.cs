@@ -138,10 +138,11 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         }
 
         // ── Invoice reconciliation ────────────────────────────────────────
-        // One Invoice per visit; one InvoiceItem per live service line.
+        // One Invoice per visit; one InvoiceItem per live service line. Only a
+        // LIVE (non-deleted) invoice is reconciled.
         var invoice = await _context.Invoices
             .Include(i => i.Items)
-            .FirstOrDefaultAsync(i => i.AppointmentId == request.AppointmentId, cancellationToken);
+            .FirstOrDefaultAsync(i => i.AppointmentId == request.AppointmentId && i.DeletedAt == null, cancellationToken);
 
         if (invoice != null)
         {
@@ -157,6 +158,24 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             invoice.GrossAmount = invoice.Items.Sum(i => i.Amount * i.Quantity);
             invoice.TotalAmount = invoice.GrossAmount - invoice.DiscountAmount;
             invoice.ReferralCutValue = liveServices.Sum(s => s.ReferralCutValue);
+
+            // Re-derive the payment status from the new total so an edit that
+            // adds a service to a settled invoice doesn't keep showing "PAID"
+            // with an outstanding balance (and removing a service flips a
+            // part-paid bill to PAID when it's now fully covered). Mirrors the
+            // canonical rule in CollectPaymentCommand.
+            if (invoice.Status != "CANCELLED")
+            {
+                if (invoice.PaidAmount >= invoice.TotalAmount - 0.01m)
+                    invoice.Status = invoice.PaidAmount > 0 ? "PAID" : "PENDING";
+                else if (invoice.PaidAmount > 0)
+                    invoice.Status = "PARTIAL";
+                else
+                    invoice.Status = "PENDING";
+
+                if (invoice.Status == "PAID" && invoice.PaidAt == null)
+                    invoice.PaidAt = DateTime.UtcNow;
+            }
         }
 
         // ── Referral commission reconciliation ────────────────────────────
