@@ -31,7 +31,10 @@ public class ExportReferralIntelligenceQueryHandler : IRequestHandler<ExportRefe
     {
         var query = _context.Appointments
             .Include(a => a.Patient)
-            .AsNoTracking();
+            .AsNoTracking()
+            // Cancelled visits aren't referral business — keep them out of the
+            // export so it matches the on-screen referral intelligence.
+            .Where(a => a.Status != "CANCELLED");
 
         if (!request.AllTime)
         {

@@ -29,7 +29,12 @@ public record ReferralCommissionDto(
     DateTime? DeletedAt = null,
     // Who actually receives this payment. Null PayeeName = pay the referrer.
     string? PayeeName = null,
-    string? PayeeContact = null
+    string? PayeeContact = null,
+    // Payee-first model: the referrer IS the payee. When the referrer is NOT a
+    // doctor, SupportedByDoctor names the doctor they collect on behalf of —
+    // that's what the payout list shows as "referred by".
+    bool ReferrerIsDoctor = true,
+    string? SupportedByDoctor = null
 );
 
 
@@ -73,6 +78,8 @@ public class GetReferralCommissionsQueryHandler : IRequestHandler<GetReferralCom
             .Select(c => new {
                 Commission = c,
                 ReferrerName = c.Referrer.Name,
+                ReferrerIsDoctor = c.Referrer.IsDoctor,
+                SupportedByDoctor = c.Referrer.SupportedByDoctor,
                 // Join with Appointments/Patients to get the true identity
                 PatientName = _context.Appointments
                     .Where(a => a.AppointmentId == c.AppointmentId)
@@ -105,7 +112,9 @@ public class GetReferralCommissionsQueryHandler : IRequestHandler<GetReferralCom
                 x.Commission.UpdatedAt,
                 x.Commission.DeletedAt,
                 x.Commission.PayeeName,
-                x.Commission.PayeeContact
+                x.Commission.PayeeContact,
+                x.ReferrerIsDoctor,
+                x.SupportedByDoctor
             )).ToList();
     }
 

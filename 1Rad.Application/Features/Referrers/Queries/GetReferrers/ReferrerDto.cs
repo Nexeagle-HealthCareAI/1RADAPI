@@ -11,5 +11,8 @@ public record ReferrerDto(
     // Optional referring-doctor profile.
     string? Email = null,
     string? Specialty = null,
-    string? Degree = null
+    string? Degree = null,
+    // Payee-first model: kind of referral source + the doctor an agent supports.
+    bool IsDoctor = true,
+    string? SupportedByDoctor = null
 );

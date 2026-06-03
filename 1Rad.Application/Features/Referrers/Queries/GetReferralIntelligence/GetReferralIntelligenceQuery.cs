@@ -36,6 +36,9 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
             .Include(a => a.Patient.Referrer)
             .Where(a => a.HospitalId == hospitalId)
             .Where(a => a.Patient.ReferrerId != null || !string.IsNullOrEmpty(a.ReferredBy)) // Broaden detection
+            // Cancelled visits are not referral business — exclude them so the
+            // intelligence counts, revenue and commissions all stay correct.
+            .Where(a => a.Status != "CANCELLED")
             .AsQueryable();
 
         // 2. Apply Institutional Routing Filters
@@ -67,11 +70,11 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
                 Appointment = a,
                 Patient = a.Patient,
                 Commissions = _context.ReferralCommissions
-                    .Where(c => c.AppointmentId == a.AppointmentId && c.Status != "Cancelled")
+                    .Where(c => c.AppointmentId == a.AppointmentId && c.Status != "Cancelled" && c.DeletedAt == null)
                     .Select(c => new { c.CommissionAmount, c.Status, c.AppointmentServiceId, c.Modality })
                     .ToList(),
                 Financials = _context.Invoices
-                    .Where(i => i.AppointmentId == a.AppointmentId)
+                    .Where(i => i.AppointmentId == a.AppointmentId && i.DeletedAt == null)
                     .Select(i => new { i.TotalAmount, i.DiscountAmount })
                     .FirstOrDefault() ?? new { TotalAmount = 0m, DiscountAmount = 0m }
             })

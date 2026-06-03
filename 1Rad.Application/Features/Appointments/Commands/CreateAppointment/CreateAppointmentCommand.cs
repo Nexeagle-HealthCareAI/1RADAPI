@@ -49,8 +49,13 @@ public record CreateAppointmentCommand(
     string? ReferrerEmail = null,
     string? ReferrerSpecialty = null,
     string? ReferrerDegree = null,
-    // Optional referral pay-to person. NULL/empty = pay the referring doctor;
-    // a name means the cut is owed to that associated person instead.
+    // Payee-first model. The referrer IS the payee. IsDoctor distinguishes a
+    // self-paying doctor (uses the profile fields) from another person/agent
+    // (SupportedByDoctor names the doctor they collect on behalf of).
+    bool ReferrerIsDoctor = true,
+    string? ReferrerSupportedByDoctor = null,
+    // Legacy per-booking payee fields (superseded by the payee-first model;
+    // kept so older clients still bind without error).
     string? ReferralPayeeName = null,
     string? ReferralPayeeContact = null
 ) : IRequest<Guid>;
@@ -169,6 +174,8 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
                     Contact = digits,
                     Address = string.Empty,
                     HospitalId = hospitalId,
+                    IsDoctor  = request.ReferrerIsDoctor,
+                    SupportedByDoctor = request.ReferrerIsDoctor ? null : NullIfBlank(request.ReferrerSupportedByDoctor),
                     Email     = NullIfBlank(request.ReferrerEmail),
                     Specialty = NullIfBlank(request.ReferrerSpecialty),
                     Degree    = NullIfBlank(request.ReferrerDegree),
@@ -190,9 +197,13 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
                 }
             }
 
-            // Keep the doctor profile fresh — fill in anything this booking
+            // Keep the referral record fresh — fill in anything this booking
             // supplied (only overwrite when a non-blank value arrived, so an
             // empty booking field never wipes a previously-saved profile).
+            referrer.IsDoctor  = request.ReferrerIsDoctor;
+            referrer.SupportedByDoctor = request.ReferrerIsDoctor
+                ? null
+                : (NullIfBlank(request.ReferrerSupportedByDoctor) ?? referrer.SupportedByDoctor);
             referrer.Email     = NullIfBlank(request.ReferrerEmail)     ?? referrer.Email;
             referrer.Specialty = NullIfBlank(request.ReferrerSpecialty) ?? referrer.Specialty;
             referrer.Degree    = NullIfBlank(request.ReferrerDegree)    ?? referrer.Degree;
@@ -307,9 +318,8 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
             // the line has a cut).
             if (isAutoBillingEnabled || totalReferralCut > 0)
             {
-                // Pay-to person for this visit. NULL = pay the referring doctor.
-                var payeeName    = NullIfBlank(request.ReferralPayeeName);
-                var payeeContact = SanitizeContact(request.ReferralPayeeContact);
+                // Payee-first model: the referrer IS the payee, so the commission
+                // simply belongs to the referrer — no separate per-line payee.
 
                 // The accumulated total walks forward across all lines so
                 // the commission ledger remains a monotonic running sum.
@@ -336,9 +346,7 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
                         HospitalId = appointment.HospitalId,
                         AppointmentId = appointment.AppointmentId,
                         AppointmentServiceId = createdServices[i].Id,
-                        ReferenceNumber = invoiceDisplayId,
-                        PayeeName = payeeName,
-                        PayeeContact = payeeContact
+                        ReferenceNumber = invoiceDisplayId
                     };
 
                     _context.ReferralCommissions.Add(commission);

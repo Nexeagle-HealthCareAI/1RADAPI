@@ -129,6 +129,8 @@ public class GetReferralMatrixQueryHandler : IRequestHandler<GetReferralMatrixQu
             .Include(a => a.Patient)
             .ThenInclude(p => p.Referrer)
             .Where(a => a.Patient.ReferrerId != null)
+            // Cancelled visits don't count toward referral volume.
+            .Where(a => a.Status != "CANCELLED")
             .Where(a => a.DateTime >= startDate && a.DateTime <= endDate);
 
         if (!string.IsNullOrWhiteSpace(request.SearchQuery))

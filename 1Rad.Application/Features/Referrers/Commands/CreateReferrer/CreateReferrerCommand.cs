@@ -15,7 +15,9 @@ public record CreateReferrerCommand(
     string Address,
     string? Email = null,
     string? Specialty = null,
-    string? Degree = null
+    string? Degree = null,
+    bool IsDoctor = true,
+    string? SupportedByDoctor = null
 ) : IRequest<Guid>;
 
 public class CreateReferrerCommandHandler : IRequestHandler<CreateReferrerCommand, Guid>
@@ -72,6 +74,8 @@ public class CreateReferrerCommandHandler : IRequestHandler<CreateReferrerComman
                 if (!string.IsNullOrWhiteSpace(request.Email))     match.Email     = request.Email.Trim();
                 if (!string.IsNullOrWhiteSpace(request.Specialty)) match.Specialty = request.Specialty.Trim();
                 if (!string.IsNullOrWhiteSpace(request.Degree))    match.Degree    = request.Degree.Trim();
+                match.IsDoctor = request.IsDoctor;
+                match.SupportedByDoctor = string.IsNullOrWhiteSpace(request.SupportedByDoctor) ? match.SupportedByDoctor : request.SupportedByDoctor.Trim();
                 await _context.SaveChangesAsync(cancellationToken);
                 return match.ReferrerId;
             }
@@ -86,6 +90,8 @@ public class CreateReferrerCommandHandler : IRequestHandler<CreateReferrerComman
             Email     = string.IsNullOrWhiteSpace(request.Email)     ? null : request.Email.Trim(),
             Specialty = string.IsNullOrWhiteSpace(request.Specialty) ? null : request.Specialty.Trim(),
             Degree    = string.IsNullOrWhiteSpace(request.Degree)    ? null : request.Degree.Trim(),
+            IsDoctor  = request.IsDoctor,
+            SupportedByDoctor = string.IsNullOrWhiteSpace(request.SupportedByDoctor) ? null : request.SupportedByDoctor.Trim(),
         };
 
         _context.Referrers.Add(referrer);

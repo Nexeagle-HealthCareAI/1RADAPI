@@ -17,7 +17,9 @@ public record UpdateReferrerCommand(
     string Address,
     string? Email = null,
     string? Specialty = null,
-    string? Degree = null
+    string? Degree = null,
+    bool IsDoctor = true,
+    string? SupportedByDoctor = null
 ) : IRequest<bool>;
 
 public class UpdateReferrerCommandHandler : IRequestHandler<UpdateReferrerCommand, bool>
@@ -42,7 +44,9 @@ public class UpdateReferrerCommandHandler : IRequestHandler<UpdateReferrerComman
             digits = digits.Substring(1);
         }
 
-        if (digits.Length != 10 || !Regex.IsMatch(digits, "^[6-9][0-9]{9}$"))
+        // Mobile is optional (an agent may have none). Only validate the format
+        // when a number was actually entered.
+        if (digits.Length > 0 && (digits.Length != 10 || !Regex.IsMatch(digits, "^[6-9][0-9]{9}$")))
         {
             throw new ValidationException("Contact", "Please enter a valid 10-digit Indian mobile number.");
         }
@@ -58,6 +62,8 @@ public class UpdateReferrerCommandHandler : IRequestHandler<UpdateReferrerComman
         referrer.Email     = string.IsNullOrWhiteSpace(request.Email)     ? null : request.Email.Trim();
         referrer.Specialty = string.IsNullOrWhiteSpace(request.Specialty) ? null : request.Specialty.Trim();
         referrer.Degree    = string.IsNullOrWhiteSpace(request.Degree)    ? null : request.Degree.Trim();
+        referrer.IsDoctor  = request.IsDoctor;
+        referrer.SupportedByDoctor = string.IsNullOrWhiteSpace(request.SupportedByDoctor) ? null : request.SupportedByDoctor.Trim();
 
         await _context.SaveChangesAsync(cancellationToken);
         return true;

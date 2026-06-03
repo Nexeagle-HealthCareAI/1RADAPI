@@ -46,7 +46,17 @@ public record UpdateAppointmentCommand(
     // of truth for reconciling AppointmentService rows. v1 callers who
     // leave it null get the scalar-only legacy path: only the visit's
     // "primary" service row is touched.
-    IReadOnlyList<AppointmentServiceLine>? Services = null
+    IReadOnlyList<AppointmentServiceLine>? Services = null,
+    // Referral source profile (payee-first model) — kept in sync on edit so
+    // changing the referrer here matches the booking flow. The referrer IS the
+    // payee; IsDoctor decides which extra fields apply. NULL = the edit didn't
+    // touch the referral type, so leave the existing referrer's type alone
+    // (don't accidentally flip an agent back to "doctor").
+    bool? ReferrerIsDoctor = null,
+    string? ReferrerSupportedByDoctor = null,
+    string? ReferrerEmail = null,
+    string? ReferrerSpecialty = null,
+    string? ReferrerDegree = null
 ) : IRequest<bool>;
 
 
@@ -406,6 +416,23 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             };
             _context.Referrers.Add(referrer);
         }
+
+        // Keep the referral source profile in sync with what the edit sent
+        // (payee-first model — same behaviour as booking). The type is only
+        // updated when the edit explicitly specified it; profile fields are
+        // only overwritten when a non-blank value arrived, so an empty edit
+        // field never wipes a saved profile.
+        string? Clean(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
+        if (request.ReferrerIsDoctor.HasValue)
+        {
+            referrer.IsDoctor = request.ReferrerIsDoctor.Value;
+            referrer.SupportedByDoctor = request.ReferrerIsDoctor.Value
+                ? null
+                : (Clean(request.ReferrerSupportedByDoctor) ?? referrer.SupportedByDoctor);
+        }
+        referrer.Email     = Clean(request.ReferrerEmail)     ?? referrer.Email;
+        referrer.Specialty = Clean(request.ReferrerSpecialty) ?? referrer.Specialty;
+        referrer.Degree    = Clean(request.ReferrerDegree)    ?? referrer.Degree;
 
         bool isMultiServiceEdit = request.Services is { Count: > 0 };
 

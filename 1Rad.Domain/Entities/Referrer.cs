@@ -10,8 +10,17 @@ public class Referrer : BaseEntity, IHospitalContext
     public string? Address { get; set; } = string.Empty;
     public Guid HospitalId { get; set; }
 
-    // Optional referring-doctor profile. All nullable — a referrer may be a
-    // walk-in physician we only know by name.
+    // Payee-first model. The referrer record IS the payee (who collects the
+    // cut). IsDoctor distinguishes the two kinds:
+    //   • true  → a doctor who refers and collects for themselves; the
+    //             Email/Specialty/Degree profile below applies.
+    //   • false → another person (agent) who collects on a doctor's behalf;
+    //             SupportedByDoctor names that doctor.
+    public bool IsDoctor { get; set; } = true;
+    public string? SupportedByDoctor { get; set; }
+
+    // Optional referring-doctor profile (used when IsDoctor). All nullable —
+    // a referrer may be a walk-in physician we only know by name.
     public string? Email { get; set; }
     public string? Specialty { get; set; }
     public string? Degree { get; set; }

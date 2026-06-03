@@ -36,10 +36,12 @@ public class GetDetailedReferralLedgerQueryHandler : IRequestHandler<GetDetailed
     {
         var hospitalId = _context.UserContext.HospitalId;
         
-        // 1. Initial query from Commissions scoped to current hospital tenant
+        // 1. Initial query from Commissions scoped to current hospital tenant.
+        //    Exclude soft-deleted rows (e.g. commissions removed when an
+        //    appointment was cancelled) so the ledger matches the live data.
         var commissionsQuery = _context.ReferralCommissions
             .AsNoTracking()
-            .Where(c => c.HospitalId == hospitalId)
+            .Where(c => c.HospitalId == hospitalId && c.DeletedAt == null)
             .AsQueryable();
 
         // 2. Apply Filters
