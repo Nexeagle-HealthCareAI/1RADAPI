@@ -27,6 +27,10 @@ public class Appointment : BaseEntity, IHospitalContext
     
     public string? ReferredBy { get; set; }
     public string? ReferredContact { get; set; }
+    // When ReferredBy is an agent (Referrer.IsDoctor = 0), the doctor THIS visit
+    // is referred for. Stored per-appointment because an agent can refer for many
+    // doctors. Used as the report's "Referred By". Null for doctor/self referrals.
+    public string? SupportedByDoctor { get; set; }
     public string? Notes { get; set; }
     public string? TechnicianComments { get; set; }
     public Guid? TechnicianId { get; set; }

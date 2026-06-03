@@ -154,7 +154,8 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
                     (IReadOnlyList<AppointmentServiceDto>?)null,
                     // ReferringDoctorName — only resolved on the single-record
                     // (reporting) fetch; the worklist doesn't need it.
-                    (string?)null
+                    (string?)null,
+                    x.Appointment.SupportedByDoctor
                 ))
                 .ToListAsync(cancellationToken);
 

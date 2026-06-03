@@ -55,7 +55,11 @@ public record AppointmentDto(
     // if the referrer is a doctor it's their name; if the referrer is an agent
     // it's the doctor they're "supported by". Populated on the single-record
     // (reporting) fetch so the report always shows a doctor as "Referred By".
-    string? ReferringDoctorName = null
+    string? ReferringDoctorName = null,
+    // The per-appointment supporting doctor (set when ReferredBy is an agent).
+    // Lets the edit drawer prefill THIS visit's doctor without re-typing, and
+    // syncs offline like the other scalar fields.
+    string? SupportedByDoctor = null
 );
 
 /// <summary>

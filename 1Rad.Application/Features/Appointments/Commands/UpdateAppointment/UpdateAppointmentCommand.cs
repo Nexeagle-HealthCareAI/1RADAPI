@@ -444,6 +444,13 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             referrer.SupportedByDoctor = request.ReferrerIsDoctor.Value
                 ? null
                 : (Clean(request.ReferrerSupportedByDoctor) ?? referrer.SupportedByDoctor);
+
+            // Per-appointment supporting doctor: a doctor referral clears it; an
+            // agent referral stamps THIS visit's chosen doctor (so the same agent
+            // can refer for different doctors on different appointments).
+            appointment.SupportedByDoctor = request.ReferrerIsDoctor.Value
+                ? null
+                : (Clean(request.ReferrerSupportedByDoctor) ?? appointment.SupportedByDoctor);
         }
         referrer.Email     = Clean(request.ReferrerEmail)     ?? referrer.Email;
         referrer.Specialty = Clean(request.ReferrerSpecialty) ?? referrer.Specialty;

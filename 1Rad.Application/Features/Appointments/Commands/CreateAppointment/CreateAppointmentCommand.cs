@@ -335,6 +335,8 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
             Status = "scheduled",
             ReferredBy = request.ReferredBy,
             ReferredContact = request.ReferredContact,
+            // Per-appointment supporting doctor — only for an agent referral.
+            SupportedByDoctor = request.ReferrerIsDoctor ? null : NullIfBlank(request.ReferrerSupportedByDoctor),
             Notes = request.Notes,
             // Token assigned on arrival, not at booking (see status handler).
             DailyTokenNumber = null,
