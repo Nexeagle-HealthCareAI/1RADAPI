@@ -1,4 +1,5 @@
 using _1Rad.Application.Interfaces;
+using _1Rad.Domain.Entities;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
 
@@ -178,10 +179,121 @@ public class UpdateAppointmentStatusCommandHandler : IRequestHandler<UpdateAppoi
                 cancellationToken);
         }
 
+        // Billing + referral commissions are generated on ARRIVAL — the first
+        // time the patient is marked CONFIRMED — not at booking. A no-show is
+        // therefore never billed and never pays a referral cut.
+        if (newStatus == "CONFIRMED")
+        {
+            await GenerateBillingOnArrivalAsync(appointment, cancellationToken);
+        }
+
         // Normalize to uppercase to match backend-set statuses (REPORTED, SCANNED, IN_PROGRESS, etc.)
         appointment.Status = newStatus;
         await _context.SaveChangesAsync(cancellationToken);
 
         return new UpdateAppointmentStatusResult { Success = true };
+    }
+
+    // Generate the visit's Invoice (when auto-billing is on) and the per-service
+    // referral commissions, from the appointment's current service lines. Mirrors
+    // the logic that used to run at booking. Idempotent: a re-confirm or status
+    // correction never double-bills, because we bail if a live invoice or any
+    // live commission already exists for this appointment.
+    private async Task GenerateBillingOnArrivalAsync(Appointment appointment, CancellationToken ct)
+    {
+        var alreadyBilled = await _context.Invoices
+            .AnyAsync(i => i.AppointmentId == appointment.AppointmentId && i.DeletedAt == null, ct);
+        var alreadyCommissioned = await _context.ReferralCommissions
+            .AnyAsync(c => c.AppointmentId == appointment.AppointmentId && c.DeletedAt == null, ct);
+        if (alreadyBilled || alreadyCommissioned) return;
+
+        var services = await _context.AppointmentServices
+            .Where(s => s.AppointmentId == appointment.AppointmentId && s.DeletedAt == null)
+            .OrderBy(s => s.UpdatedAt)
+            .ToListAsync(ct);
+        if (services.Count == 0) return;
+
+        var hospital = await _context.Hospitals.FindAsync(new object[] { appointment.HospitalId }, ct);
+        bool isAutoBillingEnabled = hospital?.IsAutoBillingEnabled ?? false;
+
+        decimal totalAmount      = services.Sum(s => s.Amount);
+        decimal totalReferralCut = services.Sum(s => s.ReferralCutValue);
+
+        // Anchor financial records to the SERVICE date (the scheduled visit),
+        // not the arrival timestamp, so dashboards group by when care happened.
+        var serviceDate = appointment.DateTime;
+        string? invoiceDisplayId = null;
+
+        if (totalAmount > 0 && isAutoBillingEnabled)
+        {
+            invoiceDisplayId = $"INV-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString().Substring(0, 8).ToUpper()}";
+            var invoice = new Invoice
+            {
+                AppointmentId = appointment.AppointmentId,
+                PatientId = appointment.PatientId,
+                PatientName = appointment.PatientName ?? "Unknown",
+                HospitalId = appointment.HospitalId,
+                InvoiceId = invoiceDisplayId,
+                GrossAmount = totalAmount,
+                DiscountAmount = 0,
+                TotalAmount = totalAmount,
+                PaidAmount = 0,
+                Status = "PENDING",
+                ReferralCutValue = totalReferralCut,
+                CreatedAt = DateTime.UtcNow,
+                ServiceDate = serviceDate,
+            };
+            foreach (var s in services)
+            {
+                invoice.Items.Add(new InvoiceItem
+                {
+                    Description = s.ServiceName,
+                    Amount = s.Amount,
+                    Quantity = 1,
+                    AppointmentServiceId = s.Id
+                });
+            }
+            _context.Invoices.Add(invoice);
+        }
+
+        // Resolve the referrer via the patient link set at booking.
+        var patient = await _context.Patients
+            .FirstOrDefaultAsync(p => p.PatientId == appointment.PatientId, ct);
+        Guid? referrerId = patient?.ReferrerId;
+        string? referrerName = appointment.ReferredBy;
+        if (referrerId != null)
+        {
+            var refRec = await _context.Referrers
+                .FirstOrDefaultAsync(r => r.ReferrerId == referrerId, ct);
+            if (refRec?.Name != null) referrerName = refRec.Name;
+        }
+
+        if (referrerId != null && (isAutoBillingEnabled || totalReferralCut > 0))
+        {
+            var currentTotal = await _context.ReferralCommissions
+                .Where(c => c.ReferrerId == referrerId && c.HospitalId == appointment.HospitalId)
+                .SumAsync(c => (decimal?)c.CommissionAmount, ct) ?? 0;
+
+            foreach (var s in services)
+            {
+                if (s.ReferralCutValue <= 0 && !isAutoBillingEnabled) continue;
+                currentTotal += s.ReferralCutValue;
+                _context.ReferralCommissions.Add(new ReferralCommission
+                {
+                    ReferrerId = referrerId.Value,
+                    ReferrerName = referrerName ?? "Self-Referral",
+                    Modality = s.Modality,
+                    CommissionAmount = s.ReferralCutValue,
+                    AccumulatedTotal = currentTotal,
+                    Status = "UNPAID",
+                    TransactionDate = DateTime.UtcNow,
+                    ServiceDate = serviceDate,
+                    HospitalId = appointment.HospitalId,
+                    AppointmentId = appointment.AppointmentId,
+                    AppointmentServiceId = s.Id,
+                    ReferenceNumber = invoiceDisplayId
+                });
+            }
+        }
     }
 }

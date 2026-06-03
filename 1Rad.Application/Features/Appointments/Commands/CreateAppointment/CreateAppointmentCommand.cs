@@ -363,100 +363,12 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
             createdServices.Add(svc);
         }
 
-        // Fetch Hospital settings to check for auto-billing preference
-        var hospital = await _context.Hospitals.FindAsync(new object[] { appointment.HospitalId }, cancellationToken);
-        bool isAutoBillingEnabled = hospital?.IsAutoBillingEnabled ?? false;
-
-        // Aggregate totals across the whole visit — what hits the Invoice.
-        decimal totalAmount        = serviceLines.Sum(l => l.Amount);
-        decimal totalReferralCut   = serviceLines.Sum(l => l.ReferralCutValue);
-
-        string? invoiceDisplayId = null;
-
-        // Auto-bill: one Invoice for the whole visit, one InvoiceItem per
-        // service line so the bill itemises each scan with its own price.
-        if (totalAmount > 0 && isAutoBillingEnabled)
-        {
-            invoiceDisplayId = $"INV-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString().Substring(0, 8).ToUpper()}";
-            var invoice = new Invoice
-            {
-                AppointmentId = appointment.AppointmentId,
-                PatientId = request.PatientId,
-                PatientName = patient.FullName ?? "Unknown",
-                HospitalId = appointment.HospitalId,
-                InvoiceId = invoiceDisplayId,
-                GrossAmount = totalAmount,
-                DiscountAmount = 0,
-                TotalAmount = totalAmount,
-                PaidAmount = 0,
-                Status = "PENDING",
-                ReferralCutValue = totalReferralCut,
-                CreatedAt = DateTime.UtcNow
-            };
-
-            for (int i = 0; i < serviceLines.Count; i++)
-            {
-                var line = serviceLines[i];
-                invoice.Items.Add(new InvoiceItem
-                {
-                    Description = line.ServiceName,
-                    Amount = line.Amount,
-                    Quantity = 1,
-                    AppointmentServiceId = createdServices[i].Id
-                });
-            }
-
-            _context.Invoices.Add(invoice);
-        }
-
-        // --- REFERRAL COMMISSIONS ---
-        // The referrer was resolved (and any brand-new one committed) up front.
-        // Here we only spawn the per-service commission rows. Each carries the
-        // AppointmentServiceId so the referrer dashboard can break commissions
-        // down by modality / service.
-        if (referrer != null)
-        {
-            // Generate one commission row per service line that carries a
-            // positive cut (or unconditionally when auto-billing is on and
-            // the line has a cut).
-            if (isAutoBillingEnabled || totalReferralCut > 0)
-            {
-                // Payee-first model: the referrer IS the payee, so the commission
-                // simply belongs to the referrer — no separate per-line payee.
-
-                // The accumulated total walks forward across all lines so
-                // the commission ledger remains a monotonic running sum.
-                var currentTotal = await _context.ReferralCommissions
-                    .Where(c => c.ReferrerId == referrer.ReferrerId && c.HospitalId == appointment.HospitalId)
-                    .SumAsync(c => (decimal?)c.CommissionAmount, cancellationToken) ?? 0;
-
-                for (int i = 0; i < serviceLines.Count; i++)
-                {
-                    var line = serviceLines[i];
-                    if (line.ReferralCutValue <= 0 && !isAutoBillingEnabled) continue;
-
-                    currentTotal += line.ReferralCutValue;
-
-                    var commission = new ReferralCommission
-                    {
-                        ReferrerId = referrer.ReferrerId,
-                        ReferrerName = referrer.Name ?? request.ReferredBy ?? "Self-Referral",
-                        Modality = line.Modality,
-                        CommissionAmount = line.ReferralCutValue,
-                        AccumulatedTotal = currentTotal,
-                        Status = "UNPAID",
-                        TransactionDate = DateTime.UtcNow,
-                        HospitalId = appointment.HospitalId,
-                        AppointmentId = appointment.AppointmentId,
-                        AppointmentServiceId = createdServices[i].Id,
-                        ReferenceNumber = invoiceDisplayId
-                    };
-
-                    _context.ReferralCommissions.Add(commission);
-                }
-            }
-        }
-
+        // NOTE: Billing (Invoice) and referral commissions are NO LONGER created
+        // at booking. They are generated when the patient ARRIVES (first time the
+        // appointment is marked CONFIRMED) in UpdateAppointmentStatusCommand — so
+        // a no-show never produces a bill or a referral payout, and the financial
+        // records mirror who actually showed up. Booking persists only the
+        // appointment, its service lines, and the resolved referrer link.
 
         try
         {

@@ -197,7 +197,17 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         // The legacy path (single commission per appointment) is the v1
         // shape. v2 fans out one commission per service line. We keep both
         // working by reconciling against the live service list.
-        await ReconcileReferralCommissionsAsync(appointment, liveServices, request, invoice?.InvoiceId, cancellationToken);
+        //
+        // Billing-on-arrival: commissions only exist once the patient has
+        // arrived (UpdateAppointmentStatus generates them then). Editing a
+        // not-yet-arrived appointment must NOT create commissions — otherwise
+        // a no-show that was edited would still produce a referral payout.
+        // After arrival we reconcile normally so service add/remove/price
+        // edits flow through to the existing commission rows.
+        if (appointment.ArrivedAt != null)
+        {
+            await ReconcileReferralCommissionsAsync(appointment, liveServices, request, invoice?.InvoiceId, cancellationToken);
+        }
 
         await _context.SaveChangesAsync(cancellationToken);
         return true;
