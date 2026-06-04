@@ -471,12 +471,14 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             .Where(c => c.AppointmentId == request.AppointmentId)
             .ToListAsync(cancellationToken);
 
-        // No referrer ⇒ wipe down any existing commissions to zero
-        // (preserves audit trail) and we're done.
+        // No referrer (or a "Self" / walk-in referral) ⇒ wipe any existing
+        // commissions to zero (preserves audit trail) and we're done — Self pays
+        // no commission, the centre keeps the whole fee.
         // effectiveReferredBy is the referrer we're allowed to apply — it equals
         // the edit's value normally, but stays the ORIGINAL when a paid
         // appointment's referrer change was locked (approval-gated, Scenario 05).
-        if (string.IsNullOrEmpty(effectiveReferredBy))
+        if (string.IsNullOrEmpty(effectiveReferredBy) ||
+            string.Equals(effectiveReferredBy.Trim(), "Self", StringComparison.OrdinalIgnoreCase))
         {
             foreach (var c in commissions) c.CommissionAmount = 0;
             return;

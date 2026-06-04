@@ -273,7 +273,11 @@ public class UpdateAppointmentStatusCommandHandler : IRequestHandler<UpdateAppoi
             if (refRec?.Name != null) referrerName = refRec.Name;
         }
 
-        if (referrerId != null && (isAutoBillingEnabled || totalReferralCut > 0))
+        // A "Self" / walk-in referral pays NO commission — the centre keeps the
+        // whole fee. Skip commission generation entirely in that case.
+        var isSelfReferral = string.Equals((appointment.ReferredBy ?? string.Empty).Trim(), "Self", StringComparison.OrdinalIgnoreCase);
+
+        if (referrerId != null && !isSelfReferral && (isAutoBillingEnabled || totalReferralCut > 0))
         {
             var currentTotal = await _context.ReferralCommissions
                 .Where(c => c.ReferrerId == referrerId && c.HospitalId == appointment.HospitalId)
