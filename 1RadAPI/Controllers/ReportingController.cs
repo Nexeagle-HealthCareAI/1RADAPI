@@ -1,4 +1,5 @@
 using _1Rad.Application.Features.Reporting.Commands.GenerateVoiceReport;
+using _1Rad.Application.Features.Reporting.Commands.AiAssist;
 using _1Rad.Application.Features.Reporting.Commands.DeleteKeyword;
 using _1Rad.Application.Features.Reporting.Commands.DeleteTemplate;
 using _1Rad.Application.Features.Reporting.Commands.SaveReport;
@@ -256,6 +257,27 @@ namespace _1RadAPI.Controllers
             catch (Exception ex)
             {
                 return StatusCode(500, new { success = false, error = $"Voice report generation failed: {ex.Message}" });
+            }
+        }
+
+        /// <summary>
+        /// Inline AI co-pilot — improve / proofread / expand / shorten a
+        /// selection, or generate an impression from the findings. Returns
+        /// editor-ready HTML.
+        /// </summary>
+        [HttpPost("ai-assist")]
+        public async Task<IActionResult> AiAssist([FromBody] AiAssistCommand command)
+        {
+            try
+            {
+                var result = await _mediator.Send(command);
+                if (!result.Success)
+                    return BadRequest(new { success = false, error = result.Error ?? "AI request failed." });
+                return Ok(new { success = true, html = result.Html });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, error = $"AI request failed: {ex.Message}" });
             }
         }
     }
