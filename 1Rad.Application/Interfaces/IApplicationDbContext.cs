@@ -42,6 +42,7 @@ public interface IApplicationDbContext
     DbSet<HospitalLeavePolicy> HospitalLeavePolicies { get; }
     DbSet<StaffAttendance> StaffAttendances { get; }
     DbSet<StaffLeaveRequest> StaffLeaveRequests { get; }
+    DbSet<ApprovalRequest> ApprovalRequests { get; }
     IUserContext UserContext { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken);

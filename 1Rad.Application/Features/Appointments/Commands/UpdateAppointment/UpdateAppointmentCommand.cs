@@ -103,11 +103,30 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         // Update Appointment scalar fields. Service/Modality are rewritten
         // below from the resolved "primary" service line so they stay in
         // sync with the child rows.
+        // Scenario 05 — the referrer (who the commission credits) may only be
+        // changed freely while nothing is paid. Once payment exists, the change
+        // must go through admin approval (the dedicated change-referrer flow), so
+        // a bulk edit here must NOT silently re-point it. Detect that case and
+        // keep the existing referrer for every downstream write.
+        var prevReferredBy = appointment.ReferredBy;
+        var referrerChanged = !string.Equals((prevReferredBy ?? string.Empty).Trim(),
+                                              (request.ReferredBy ?? string.Empty).Trim(),
+                                              StringComparison.OrdinalIgnoreCase);
+        var referrerLocked = false;
+        if (referrerChanged)
+        {
+            referrerLocked = await _context.Invoices
+                .AnyAsync(i => i.AppointmentId == request.AppointmentId && (i.PaidAmount > 0 || i.Status == "PAID" || i.Status == "PARTIAL"), cancellationToken)
+                || await _context.Payments
+                .AnyAsync(p => p.Invoice.AppointmentId == request.AppointmentId, cancellationToken);
+        }
+        var effectiveReferredBy = referrerLocked ? (prevReferredBy ?? string.Empty) : (request.ReferredBy ?? string.Empty);
+
         appointment.DateTime = request.DateTime;
         appointment.Doctor = request.Doctor;
         appointment.Notes = request.Notes;
-        appointment.ReferredBy = request.ReferredBy;
-        if (request.ReferredContact != null)
+        appointment.ReferredBy = effectiveReferredBy;
+        if (!referrerLocked && request.ReferredContact != null)
             appointment.ReferredContact = request.ReferredContact;
 
         // Update priority only if the client explicitly sent one. Null leaves
@@ -152,14 +171,16 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             appointment.Modality = primary.Modality;
         }
 
-        // ── Invoice reconciliation ────────────────────────────────────────
-        // One Invoice per visit; one InvoiceItem per live service line. Only a
-        // LIVE (non-deleted) invoice is reconciled.
+        // ── Invoice reconciliation (arrival-gated) ────────────────────────
+        // One Invoice per visit; one InvoiceItem per live service line. A bill is
+        // only created OR modified once the patient has ARRIVED — a not-yet-arrived
+        // edit must touch no bill (no-show protection). After arrival: reconcile the
+        // existing LIVE invoice, or create one when there isn't one yet.
         var invoice = await _context.Invoices
             .Include(i => i.Items)
             .FirstOrDefaultAsync(i => i.AppointmentId == request.AppointmentId && i.DeletedAt == null, cancellationToken);
 
-        if (invoice != null)
+        if (invoice != null && appointment.ArrivedAt != null)
         {
             if (dateChanged)
             {
@@ -192,6 +213,47 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
                     invoice.PaidAt = DateTime.UtcNow;
             }
         }
+        else if (appointment.ArrivedAt != null)
+        {
+            // No live invoice yet, but the patient has ARRIVED — e.g. auto-billing
+            // was off at arrival, or billable services were only added now via this
+            // edit. Generate the bill (PENDING) so it can be settled. We gate on
+            // arrival so a not-yet-arrived (potential no-show) edit still produces
+            // no bill here — that case is billed on arrival as usual. Commissions
+            // are handled by the arrival-gated reconciliation below.
+            decimal gross = liveServices.Sum(s => s.Amount);
+            if (gross > 0)
+            {
+                var newInvoice = new Invoice
+                {
+                    AppointmentId = appointment.AppointmentId,
+                    PatientId = appointment.PatientId,
+                    PatientName = appointment.PatientName ?? "Unknown",
+                    HospitalId = appointment.HospitalId,
+                    InvoiceId = $"INV-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString().Substring(0, 8).ToUpper()}",
+                    GrossAmount = gross,
+                    DiscountAmount = 0,
+                    TotalAmount = gross,
+                    PaidAmount = 0,
+                    Status = "PENDING",
+                    ReferralCutValue = liveServices.Sum(s => s.ReferralCutValue),
+                    CreatedAt = DateTime.UtcNow,
+                    ServiceDate = appointment.DateTime,
+                };
+                foreach (var s in liveServices)
+                {
+                    newInvoice.Items.Add(new InvoiceItem
+                    {
+                        Description = s.ServiceName,
+                        Amount = s.Amount,
+                        Quantity = 1,
+                        AppointmentServiceId = s.Id,
+                    });
+                }
+                _context.Invoices.Add(newInvoice);
+                invoice = newInvoice; // let the commission reconciliation below reference it
+            }
+        }
 
         // ── Referral commission reconciliation ────────────────────────────
         // The legacy path (single commission per appointment) is the v1
@@ -206,7 +268,7 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         // edits flow through to the existing commission rows.
         if (appointment.ArrivedAt != null)
         {
-            await ReconcileReferralCommissionsAsync(appointment, liveServices, request, invoice?.InvoiceId, cancellationToken);
+            await ReconcileReferralCommissionsAsync(appointment, liveServices, request, effectiveReferredBy, invoice?.InvoiceId, cancellationToken);
         }
 
         await _context.SaveChangesAsync(cancellationToken);
@@ -401,6 +463,7 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         Appointment appointment,
         List<AppointmentService> liveServices,
         UpdateAppointmentCommand request,
+        string effectiveReferredBy,
         string? invoiceDisplayId,
         CancellationToken cancellationToken)
     {
@@ -410,14 +473,17 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
 
         // No referrer ⇒ wipe down any existing commissions to zero
         // (preserves audit trail) and we're done.
-        if (string.IsNullOrEmpty(request.ReferredBy))
+        // effectiveReferredBy is the referrer we're allowed to apply — it equals
+        // the edit's value normally, but stays the ORIGINAL when a paid
+        // appointment's referrer change was locked (approval-gated, Scenario 05).
+        if (string.IsNullOrEmpty(effectiveReferredBy))
         {
             foreach (var c in commissions) c.CommissionAmount = 0;
             return;
         }
 
         // Resolve referrer (create on first use).
-        var searchName = request.ReferredBy.Trim();
+        var searchName = effectiveReferredBy.Trim();
         var referrer = await _context.Referrers
             .FirstOrDefaultAsync(r => r.Name.ToLower() == searchName.ToLower() && r.HospitalId == appointment.HospitalId, cancellationToken);
         if (referrer == null)
@@ -508,7 +574,7 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
                 existing.CommissionAmount = finalCut;
                 existing.Modality         = request.Modality;
                 existing.ReferrerId       = referrer.ReferrerId;
-                existing.ReferrerName     = referrer.Name ?? request.ReferredBy;
+                existing.ReferrerName     = referrer.Name ?? effectiveReferredBy;
                 if (appointment.DateTime != existing.TransactionDate)
                 {
                     existing.TransactionDate = request.DateTime;
@@ -522,7 +588,7 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
                 _context.ReferralCommissions.Add(new ReferralCommission
                 {
                     ReferrerId           = referrer.ReferrerId,
-                    ReferrerName         = referrer.Name ?? request.ReferredBy,
+                    ReferrerName         = referrer.Name ?? effectiveReferredBy,
                     Modality             = request.Modality,
                     CommissionAmount     = finalCut,
                     Status               = "UNPAID",
@@ -552,7 +618,7 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
                 existing.CommissionAmount = svc.ReferralCutValue;
                 existing.Modality         = svc.Modality;
                 existing.ReferrerId       = referrer.ReferrerId;
-                existing.ReferrerName     = referrer.Name ?? request.ReferredBy;
+                existing.ReferrerName     = referrer.Name ?? effectiveReferredBy;
                 if (!string.IsNullOrEmpty(invoiceDisplayId)) existing.ReferenceNumber = invoiceDisplayId;
                 keep.Add(existing.Id);
                 continue;
@@ -566,7 +632,7 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
                 orphan.CommissionAmount     = svc.ReferralCutValue;
                 orphan.Modality             = svc.Modality;
                 orphan.ReferrerId           = referrer.ReferrerId;
-                orphan.ReferrerName         = referrer.Name ?? request.ReferredBy;
+                orphan.ReferrerName         = referrer.Name ?? effectiveReferredBy;
                 if (!string.IsNullOrEmpty(invoiceDisplayId)) orphan.ReferenceNumber = invoiceDisplayId;
                 keep.Add(orphan.Id);
                 orphan = null;
@@ -578,7 +644,7 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             var newCommission = new ReferralCommission
             {
                 ReferrerId           = referrer.ReferrerId,
-                ReferrerName         = referrer.Name ?? request.ReferredBy,
+                ReferrerName         = referrer.Name ?? effectiveReferredBy,
                 Modality             = svc.Modality,
                 CommissionAmount     = svc.ReferralCutValue,
                 Status               = "UNPAID",

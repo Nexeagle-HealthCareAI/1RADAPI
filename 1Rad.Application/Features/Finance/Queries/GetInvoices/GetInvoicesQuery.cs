@@ -26,6 +26,9 @@ public class InvoiceDto
     public string? PatientIdentifier { get; set; }
     public decimal GrossAmount { get; set; }
     public decimal DiscountAmount { get; set; }
+    public decimal CentreDiscount { get; set; }
+    public decimal ReferrerDiscount { get; set; }
+    public decimal InstitutionalDeduction { get; set; }
     public decimal TotalAmount { get; set; }
     public decimal PaidAmount { get; set; }
     public decimal BalanceAmount { get; set; }
@@ -134,6 +137,9 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
                     PatientIdentifier = i.Patient.PatientIdentifier,
                     GrossAmount = i.GrossAmount,
                     DiscountAmount = i.DiscountAmount,
+                    CentreDiscount = i.CentreDiscount,
+                    ReferrerDiscount = i.ReferrerDiscount,
+                    InstitutionalDeduction = i.InstitutionalDeduction,
                     TotalAmount = i.TotalAmount,
                     PaidAmount = i.PaidAmount,
                     BalanceAmount = i.TotalAmount - i.PaidAmount,

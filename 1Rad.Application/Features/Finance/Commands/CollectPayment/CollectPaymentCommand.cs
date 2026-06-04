@@ -18,6 +18,12 @@ public record CollectPaymentCommand : IRequest<bool>
     // excess becomes his carried deficit (a negative commission). Audited below.
     public decimal? CommissionDeficit { get; init; }
     public string? DeficitReason { get; init; }
+
+    // Alternative to the deficit: when true, the excess above the doctor's
+    // commission is funded by the CENTRE instead. The commission is floored at
+    // zero and the excess is moved into the centre discount so the centre
+    // absorbs it (no negative commission, nothing recovered from the referrer).
+    public bool AbsorbExcessToCentre { get; init; }
 }
 
 
@@ -81,10 +87,29 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
             if (invoice.ReferrerDiscount != oldReferrerDiscount)
             {
                 var commission = await _context.ReferralCommissions
-                    .FirstOrDefaultAsync(c => 
-                        (c.AppointmentId == invoice.AppointmentId || (c.ReferenceNumber == invoice.InvoiceId && c.ReferenceNumber != null)) && 
+                    .FirstOrDefaultAsync(c =>
+                        (c.AppointmentId == invoice.AppointmentId || (c.ReferenceNumber == invoice.InvoiceId && c.ReferenceNumber != null)) &&
                         c.HospitalId == _context.UserContext.HospitalId, cancellationToken);
-                
+
+                // Eligible commission before any referral concession this cycle.
+                var baseCommission = (commission?.CommissionAmount ?? 0) + oldReferrerDiscount;
+
+                // Over-commission funded by the CENTRE: floor the commission at zero
+                // and shift the excess into the centre discount so the centre — not
+                // the referrer — absorbs it. The patient's total is unchanged (the
+                // excess only moves between the two discount buckets), so just the
+                // split + commission change.
+                if (request.AbsorbExcessToCentre && invoice.ReferrerDiscount > baseCommission)
+                {
+                    var excess = invoice.ReferrerDiscount - baseCommission;
+                    invoice.CentreDiscount += excess;
+                    invoice.ReferrerDiscount = baseCommission;
+                    invoice.DiscountAmount = invoice.CentreDiscount + invoice.ReferrerDiscount + invoice.InstitutionalDeduction;
+                    invoice.TotalAmount = gross - invoice.DiscountAmount;
+                    if (commission != null)
+                        commission.Remarks = (commission.Remarks ?? "") + $" [Excess ₹{excess:0.##} absorbed by centre]";
+                }
+
                 if (commission != null)
                 {
                     commission.CommissionAmount += oldReferrerDiscount; // Revert

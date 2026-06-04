@@ -10,6 +10,10 @@ public class UpdateAppointmentStatusResult
     public bool Success { get; set; }
     public string Message { get; set; } = string.Empty;
     public bool NotAllowed { get; set; }
+    // True when the action is blocked only because admin sign-off is required
+    // (a PAID appointment cancellation) — the UI offers to submit an approval
+    // request rather than showing a dead-end lock.
+    public bool RequiresApproval { get; set; }
 }
 
 public record UpdateAppointmentStatusCommand(Guid AppointmentId, string Status) : IRequest<UpdateAppointmentStatusResult>;
@@ -82,7 +86,8 @@ public class UpdateAppointmentStatusCommandHandler : IRequestHandler<UpdateAppoi
                 {
                     Success = true,
                     NotAllowed = true,
-                    Message = "Payment has already been collected for this appointment. You are not allowed to cancel it at this time."
+                    RequiresApproval = true,
+                    Message = "Payment has already been collected for this appointment. Cancelling it needs admin approval."
                 };
             }
 

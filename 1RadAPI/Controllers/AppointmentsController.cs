@@ -6,6 +6,7 @@ using _1Rad.Application.Features.Appointments.Commands.AddAppointmentComment;
 using _1Rad.Application.Features.Appointments.Commands.CreateAppointment;
 using _1Rad.Application.Features.Appointments.Commands.UpdateAppointment;
 using _1Rad.Application.Features.Appointments.Commands.UpdateAppointmentStatus;
+using _1Rad.Application.Features.Appointments.Commands.ChangeReferrer;
 using _1Rad.Application.Features.Appointments.Commands.UpdateAppointmentServiceStatus;
 using _1Rad.Application.Features.Appointments.Commands.UpdateAppointmentServiceNotes;
 using _1Rad.Application.Features.Appointments.Commands.ImportAppointments;
@@ -65,6 +66,24 @@ public class AppointmentsController : ControllerBase
         {
             return NotFound();
         }
+        return Ok(result);
+    }
+
+    // Scenario 05 — correct the "Referred By" so the commission credits the
+    // right person. Applies immediately when nothing is paid; returns
+    // requiresApproval (and applies nothing) once payment has been collected.
+    public sealed record ChangeReferrerBody(string NewReferrerName, string? NewReferrerContact, bool? NewReferrerIsDoctor);
+
+    [HttpPost("{id:guid}/change-referrer")]
+    public async Task<IActionResult> ChangeReferrer(Guid id, [FromBody] ChangeReferrerBody body)
+    {
+        var result = await _mediator.Send(new ChangeReferrerCommand
+        {
+            AppointmentId = id,
+            NewReferrerName = body?.NewReferrerName ?? string.Empty,
+            NewReferrerContact = body?.NewReferrerContact,
+            NewReferrerIsDoctor = body?.NewReferrerIsDoctor,
+        });
         return Ok(result);
     }
 
