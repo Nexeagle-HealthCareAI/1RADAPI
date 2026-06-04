@@ -31,6 +31,9 @@ internal static class ReferrerReassign
         var name = (newReferrerName ?? string.Empty).Trim();
         if (string.IsNullOrEmpty(name)) return;
 
+        // "Self" / walk-in pays NO commission — the centre keeps the whole fee.
+        var isSelf = string.Equals(name, "Self", StringComparison.OrdinalIgnoreCase);
+
         var appointment = await ctx.Appointments
             .FirstOrDefaultAsync(a => a.AppointmentId == appointmentId && a.HospitalId == hospitalId, ct);
         if (appointment == null) return;
@@ -77,6 +80,8 @@ internal static class ReferrerReassign
             if (c.ReferrerId != Guid.Empty) affected.Add(c.ReferrerId);
             c.ReferrerId = referrer.ReferrerId;
             c.ReferrerName = referrer.Name ?? name;
+            // Re-pointing to Self zeroes the cut (no commission for a walk-in).
+            if (isSelf) c.CommissionAmount = 0;
             c.UpdatedAt = DateTime.UtcNow;
         }
         affected.Add(referrer.ReferrerId);
