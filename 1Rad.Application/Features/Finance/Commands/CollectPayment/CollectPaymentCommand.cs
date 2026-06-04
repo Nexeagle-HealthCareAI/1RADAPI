@@ -13,6 +13,11 @@ public record CollectPaymentCommand : IRequest<bool>
     public decimal? ReferrerDiscount { get; init; }
     public decimal? Deduction { get; init; }
     public string PaymentMethod { get; init; } = "CASH";
+
+    // Set when the referral concession exceeds the doctor's commission: the
+    // excess becomes his carried deficit (a negative commission). Audited below.
+    public decimal? CommissionDeficit { get; init; }
+    public string? DeficitReason { get; init; }
 }
 
 
@@ -85,6 +90,18 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
                     commission.CommissionAmount += oldReferrerDiscount; // Revert
                     commission.CommissionAmount -= invoice.ReferrerDiscount; // Apply New
                     commission.Remarks = (commission.Remarks ?? "") + $" [Adj: ₹{oldReferrerDiscount} -> ₹{invoice.ReferrerDiscount}]";
+
+                    // Over-commission concession → the commission is now negative; the
+                    // doctor carries that deficit, recovered from future referrals. Audit
+                    // the authoriser (the authenticated user) + reason so the credit
+                    // decision is traceable. The amount itself is intentionally NOT
+                    // clamped to zero — the negative is the whole point.
+                    if (commission.CommissionAmount < 0)
+                    {
+                        var deficit = Math.Abs(commission.CommissionAmount);
+                        var reason = string.IsNullOrWhiteSpace(request.DeficitReason) ? "" : $" — {request.DeficitReason.Trim()}";
+                        commission.Remarks += $" [DEFICIT ₹{deficit:0.##} authorised by user {_context.UserContext.UserId}{reason}]";
+                    }
                 }
             }
 
