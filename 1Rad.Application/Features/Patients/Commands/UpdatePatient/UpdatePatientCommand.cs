@@ -1,3 +1,4 @@
+using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
@@ -36,13 +37,13 @@ public class UpdatePatientCommandHandler : IRequestHandler<UpdatePatientCommand,
 
         if (patient == null) return false;
 
-        patient.FullName = request.FullName;
+        patient.FullName = NameNormalizer.Upper(request.FullName);
         patient.Mobile = request.Mobile;
         patient.Age = request.Age;
         patient.Gender = request.Gender;
-        patient.Village = request.Village;
-        patient.District = request.District;
-        patient.Address = request.Address;
+        patient.Village = NameNormalizer.Upper(request.Village);
+        patient.District = NameNormalizer.Upper(request.District);
+        patient.Address = NameNormalizer.Upper(request.Address);
         patient.SourceOfInfo = request.SourceOfInfo;
         patient.ReferrerId = request.ReferrerId;
 

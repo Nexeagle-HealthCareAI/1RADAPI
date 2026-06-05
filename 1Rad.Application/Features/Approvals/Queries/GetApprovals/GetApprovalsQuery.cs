@@ -24,7 +24,9 @@ public class ApprovalRequestDto
     public string Reason { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;
     public Guid RequestedBy { get; set; }
+    public string? RequestedByName { get; set; }
     public Guid? ReviewedBy { get; set; }
+    public string? ReviewedByName { get; set; }
     public string? ReviewNote { get; set; }
     public DateTime? ReviewedAt { get; set; }
     public DateTime CreatedAt { get; set; }
@@ -61,7 +63,15 @@ public class GetApprovalsQueryHandler : IRequestHandler<GetApprovalsQuery, List<
                 Reason = a.Reason,
                 Status = a.Status,
                 RequestedBy = a.RequestedBy,
+                RequestedByName = _context.Users
+                    .Where(u => u.UserId == a.RequestedBy)
+                    .Select(u => u.FullName)
+                    .FirstOrDefault(),
                 ReviewedBy = a.ReviewedBy,
+                ReviewedByName = a.ReviewedBy == null ? null : _context.Users
+                    .Where(u => u.UserId == a.ReviewedBy)
+                    .Select(u => u.FullName)
+                    .FirstOrDefault(),
                 ReviewNote = a.ReviewNote,
                 ReviewedAt = a.ReviewedAt,
                 CreatedAt = a.CreatedAt,

@@ -29,7 +29,7 @@ public class CreateApprovalRequestCommandHandler : IRequestHandler<CreateApprova
         if (_context.UserContext.HospitalId == Guid.Empty)
             throw new UnauthorizedAccessException("Hospital context is required.");
 
-        var allowed = new[] { "EDIT_PAYMENT", "CANCEL_APPOINTMENT", "CHANGE_REFERRER", "MARK_FREE" };
+        var allowed = new[] { "EDIT_PAYMENT", "CANCEL_APPOINTMENT", "CHANGE_REFERRER", "MARK_FREE", "UNPAY_COMMISSION" };
         var type = (request.Type ?? string.Empty).Trim().ToUpperInvariant();
         if (!allowed.Contains(type))
             throw new InvalidOperationException($"Unknown approval type '{request.Type}'.");

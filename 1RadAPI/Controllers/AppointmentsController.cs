@@ -72,7 +72,9 @@ public class AppointmentsController : ControllerBase
     // Scenario 05 — correct the "Referred By" so the commission credits the
     // right person. Applies immediately when nothing is paid; returns
     // requiresApproval (and applies nothing) once payment has been collected.
-    public sealed record ChangeReferrerBody(string NewReferrerName, string? NewReferrerContact, bool? NewReferrerIsDoctor);
+    public sealed record ChangeReferrerBody(string NewReferrerName, string? NewReferrerContact, bool? NewReferrerIsDoctor, string? NewReferrerSupportedByDoctor,
+        string? NewReferrerEmail, string? NewReferrerSpecialty, string? NewReferrerDegree, string? NewReferrerAddress,
+        string? NewReferrerSupportedSpecialty, string? NewReferrerSupportedDegree);
 
     [HttpPost("{id:guid}/change-referrer")]
     public async Task<IActionResult> ChangeReferrer(Guid id, [FromBody] ChangeReferrerBody body)
@@ -83,6 +85,13 @@ public class AppointmentsController : ControllerBase
             NewReferrerName = body?.NewReferrerName ?? string.Empty,
             NewReferrerContact = body?.NewReferrerContact,
             NewReferrerIsDoctor = body?.NewReferrerIsDoctor,
+            NewReferrerSupportedByDoctor = body?.NewReferrerSupportedByDoctor,
+            NewReferrerEmail = body?.NewReferrerEmail,
+            NewReferrerSpecialty = body?.NewReferrerSpecialty,
+            NewReferrerDegree = body?.NewReferrerDegree,
+            NewReferrerAddress = body?.NewReferrerAddress,
+            NewReferrerSupportedSpecialty = body?.NewReferrerSupportedSpecialty,
+            NewReferrerSupportedDegree = body?.NewReferrerSupportedDegree,
         });
         return Ok(result);
     }

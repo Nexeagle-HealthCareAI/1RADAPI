@@ -4,7 +4,10 @@ using _1Rad.Application.Features.Referrers.Queries.GetReferralMatrix;
 using _1Rad.Application.Features.Referrers.Queries.GetReferralCommissions;
 using _1Rad.Application.Features.Referrers.Queries.GetDetailedReferralLedger;
 using _1Rad.Application.Features.Referrers.Commands.CreateReferrer;
+using _1Rad.Application.Features.Referrers.Commands.CreateReferrersBulk;
+using _1Rad.Application.Features.Referrers.Commands.SendReferralLinks;
 using _1Rad.Application.Features.Referrers.Commands.UpdateReferrer;
+using _1Rad.Application.Interfaces;
 using _1Rad.Application.Features.Referrers.Commands.DeleteReferrer;
 using _1Rad.Application.Features.Referrers.Commands.RecordReferralCommission;
 using _1Rad.Application.Features.Referrers.Commands.RecordReferralCommissions;
@@ -22,10 +25,12 @@ namespace _1RadAPI.Controllers;
 public class ReferrersController : ControllerBase
 {
     private readonly IMediator _mediator;
+    private readonly IReferralLinkTokenService _referralTokens;
 
-    public ReferrersController(IMediator mediator)
+    public ReferrersController(IMediator mediator, IReferralLinkTokenService referralTokens)
     {
         _mediator = mediator;
+        _referralTokens = referralTokens;
     }
 
     [HttpGet]
@@ -43,6 +48,38 @@ public class ReferrersController : ControllerBase
     {
         var result = await _mediator.Send(command);
         return Ok(new { referrerId = result });
+    }
+
+    // Bulk-add partners from the inline multi-add grid or an Excel upload.
+    [HttpPost("bulk")]
+    public async Task<IActionResult> CreateBulk([FromBody] CreateReferrersBulkCommand command)
+    {
+        var result = await _mediator.Send(command);
+        return Ok(result);
+    }
+
+    // ── Doctor-portal share links (#3) ─────────────────────────────────────
+    // Mint this referrer's signed portal-link token (for copy / WhatsApp).
+    [HttpGet("{id:guid}/share-link")]
+    public IActionResult ShareLink(Guid id)
+        => Ok(new { success = true, referrerId = id, token = _referralTokens.Issue(id) });
+
+    // Mint tokens for several referrers at once (bulk copy / WhatsApp).
+    public sealed record ShareLinksBody(List<Guid> ReferrerIds);
+    [HttpPost("share-links")]
+    public IActionResult ShareLinks([FromBody] ShareLinksBody body)
+    {
+        var links = (body?.ReferrerIds ?? new List<Guid>()).Distinct()
+            .Select(id => new { referrerId = id, token = _referralTokens.Issue(id) });
+        return Ok(new { success = true, links });
+    }
+
+    // Email each named referrer their personal portal link.
+    [HttpPost("send-links")]
+    public async Task<IActionResult> SendLinks([FromBody] SendReferralLinksCommand command)
+    {
+        var result = await _mediator.Send(command);
+        return Ok(result);
     }
 
     [HttpPut("{id}")]

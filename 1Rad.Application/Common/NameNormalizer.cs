@@ -39,4 +39,27 @@ public static class NameNormalizer
 
         return string.Join(' ', tokens);
     }
+
+    /// <summary>
+    /// Canonical STORED form: trim, collapse inner whitespace, UPPERCASE.
+    /// Applied at the write boundary so names are stored consistently however a
+    /// biller typed them ("aquib", "Aquib", "AQUIB" → "AQUIB"). (#15)
+    /// </summary>
+    public static string Upper(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return string.Empty;
+        var parts = raw.Split((char[]?)null, System.StringSplitOptions.RemoveEmptyEntries);
+        return string.Join(' ', parts).ToUpperInvariant();
+    }
+
+    /// <summary><see cref="Upper"/> but returns null for blank input (optional fields).</summary>
+    public static string? UpperOrNull(string? raw)
+        => string.IsNullOrWhiteSpace(raw) ? null : Upper(raw);
+
+    /// <summary>True when two names refer to the same person (honorific-insensitive).</summary>
+    public static bool SameName(string? a, string? b)
+    {
+        var ka = Normalize(a);
+        return ka.Length > 0 && ka == Normalize(b);
+    }
 }

@@ -148,7 +148,9 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
                 var referrer = await _context.Referrers
                     .FirstOrDefaultAsync(r => r.ReferrerId == request.ReferrerId.Value, cancellationToken);
 
-                if (referrer != null)
+                // Self / walk-in earns no commission — never write a payout row
+                // for it (mirrors the arrival-billing path). (#19)
+                if (referrer != null && !_1Rad.Application.Common.NameNormalizer.SameName(referrer.Name, "Self"))
                 {
                     var currentTotal = await _context.ReferralCommissions
                         .Where(c => c.ReferrerId == request.ReferrerId.Value && c.HospitalId == hospitalId)

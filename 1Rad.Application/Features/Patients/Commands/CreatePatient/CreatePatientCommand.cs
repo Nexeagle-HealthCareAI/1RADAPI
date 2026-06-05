@@ -71,14 +71,14 @@ public class CreatePatientCommandHandler : IRequestHandler<CreatePatientCommand,
             
         var patient = new Patient
         {
-            FullName = request.FullName,
+            FullName = NameNormalizer.Upper(request.FullName),
             Mobile = mobile,
             NameNormalized = normalizedName,
             Age = request.Age,
             Gender = request.Gender,
-            Village = request.Village,
-            District = request.District,
-            Address = request.Address,
+            Village = NameNormalizer.Upper(request.Village),
+            District = NameNormalizer.Upper(request.District),
+            Address = NameNormalizer.Upper(request.Address),
             SourceOfInfo = request.SourceOfInfo,
             ReferrerId = request.ReferrerId,
             PatientIdentifier = $"PTID{(count + 1):D8}",

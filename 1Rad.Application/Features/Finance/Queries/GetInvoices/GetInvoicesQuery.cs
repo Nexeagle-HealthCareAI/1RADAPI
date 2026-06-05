@@ -29,6 +29,7 @@ public class InvoiceDto
     public decimal CentreDiscount { get; set; }
     public decimal ReferrerDiscount { get; set; }
     public decimal InstitutionalDeduction { get; set; }
+    public bool IsFree { get; set; }
     public decimal TotalAmount { get; set; }
     public decimal PaidAmount { get; set; }
     public decimal BalanceAmount { get; set; }
@@ -140,6 +141,7 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
                     CentreDiscount = i.CentreDiscount,
                     ReferrerDiscount = i.ReferrerDiscount,
                     InstitutionalDeduction = i.InstitutionalDeduction,
+                    IsFree = i.IsFree,
                     TotalAmount = i.TotalAmount,
                     PaidAmount = i.PaidAmount,
                     BalanceAmount = i.TotalAmount - i.PaidAmount,

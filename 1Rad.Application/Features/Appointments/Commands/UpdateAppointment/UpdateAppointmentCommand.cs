@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
+using _1Rad.Application.Common;
 using _1Rad.Application.Features.Appointments;
 using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Entities;
@@ -125,7 +126,7 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         appointment.DateTime = request.DateTime;
         appointment.Doctor = request.Doctor;
         appointment.Notes = request.Notes;
-        appointment.ReferredBy = effectiveReferredBy;
+        appointment.ReferredBy = NameNormalizer.Upper(effectiveReferredBy);
         if (!referrerLocked && request.ReferredContact != null)
             appointment.ReferredContact = request.ReferredContact;
 
@@ -140,13 +141,13 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         }
 
         // Update denormalized patient info if provided
-        if (!string.IsNullOrEmpty(request.PatientName)) appointment.PatientName = request.PatientName;
+        if (!string.IsNullOrEmpty(request.PatientName)) appointment.PatientName = NameNormalizer.Upper(request.PatientName);
         if (!string.IsNullOrEmpty(request.Mobile)) appointment.Mobile = request.Mobile;
 
         // Update the underlying Patient entity as well
         if (appointment.Patient != null)
         {
-            if (!string.IsNullOrEmpty(request.PatientName)) appointment.Patient.FullName = request.PatientName;
+            if (!string.IsNullOrEmpty(request.PatientName)) appointment.Patient.FullName = NameNormalizer.Upper(request.PatientName);
             if (!string.IsNullOrEmpty(request.Mobile)) appointment.Patient.Mobile = request.Mobile;
             if (!string.IsNullOrEmpty(request.PatientAge)) appointment.Patient.Age = request.PatientAge;
             if (!string.IsNullOrEmpty(request.PatientGender)) appointment.Patient.Gender = request.PatientGender;

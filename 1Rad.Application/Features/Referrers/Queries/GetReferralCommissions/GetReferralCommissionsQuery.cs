@@ -34,7 +34,8 @@ public record ReferralCommissionDto(
     // doctor, SupportedByDoctor names the doctor they collect on behalf of —
     // that's what the payout list shows as "referred by".
     bool ReferrerIsDoctor = true,
-    string? SupportedByDoctor = null
+    string? SupportedByDoctor = null,
+    Guid? AppointmentId = null
 );
 
 
@@ -114,7 +115,8 @@ public class GetReferralCommissionsQueryHandler : IRequestHandler<GetReferralCom
                 x.Commission.PayeeName,
                 x.Commission.PayeeContact,
                 x.ReferrerIsDoctor,
-                x.SupportedByDoctor
+                x.SupportedByDoctor,
+                x.Commission.AppointmentId
             )).ToList();
     }
 

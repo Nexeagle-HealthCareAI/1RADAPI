@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
@@ -101,10 +102,14 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
             .GroupBy(s => s.AppointmentId)
             .ToDictionary(g => g.Key, g => g.ToList());
 
-        // 5. Aggregate Intelligence by Referrer Node
+        // 5. Aggregate Intelligence by Referrer Node. Self / walk-in is NOT a
+        // partner — collapse every self visit into a SINGLE node (keyed on
+        // Guid.Empty, labelled "Self / Walk-in") so it can be shown as its own
+        // section on the Referrals page instead of polluting the partner list.
         var result = missionData
-            .GroupBy(m => m.ReferrerId)
+            .GroupBy(m => NameNormalizer.SameName(m.ReferrerName, "Self") ? Guid.Empty : m.ReferrerId)
             .Select(g => {
+                var isSelfGroup = NameNormalizer.SameName(g.First().ReferrerName, "Self");
                 var missionsList = g.Select(m =>
                 {
                     // Per-service breakdown for this appointment. Commission
@@ -159,9 +164,9 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
 
                 return new ReferrerIntelligenceDto(
                     g.Key,
-                    g.First().ReferrerName,
-                    g.First().ReferrerContact,
-                    g.First().ReferrerAddress,
+                    isSelfGroup ? "Self / Walk-in" : g.First().ReferrerName,
+                    isSelfGroup ? "" : g.First().ReferrerContact,
+                    isSelfGroup ? "" : g.First().ReferrerAddress,
                     missionsList.Count,
                     missionsList,
                     totalComm,

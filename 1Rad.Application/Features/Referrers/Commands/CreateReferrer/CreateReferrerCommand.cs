@@ -66,16 +66,17 @@ public class CreateReferrerCommandHandler : IRequestHandler<CreateReferrerComman
             if (match != null)
             {
                 // Backfill a missing contact/address from the new submission.
+                match.Name = NameNormalizer.Upper(match.Name); // canonicalise casing (#15)
                 if (string.IsNullOrWhiteSpace(match.Contact) && !string.IsNullOrWhiteSpace(storedContact))
                     match.Contact = storedContact;
                 if (string.IsNullOrWhiteSpace(match.Address) && !string.IsNullOrWhiteSpace(request.Address))
-                    match.Address = request.Address;
+                    match.Address = NameNormalizer.Upper(request.Address);
                 // Fill in any doctor-profile fields this submission supplied.
                 if (!string.IsNullOrWhiteSpace(request.Email))     match.Email     = request.Email.Trim();
-                if (!string.IsNullOrWhiteSpace(request.Specialty)) match.Specialty = request.Specialty.Trim();
-                if (!string.IsNullOrWhiteSpace(request.Degree))    match.Degree    = request.Degree.Trim();
+                if (!string.IsNullOrWhiteSpace(request.Specialty)) match.Specialty = NameNormalizer.Upper(request.Specialty);
+                if (!string.IsNullOrWhiteSpace(request.Degree))    match.Degree    = NameNormalizer.Upper(request.Degree);
                 match.IsDoctor = request.IsDoctor;
-                match.SupportedByDoctor = string.IsNullOrWhiteSpace(request.SupportedByDoctor) ? match.SupportedByDoctor : request.SupportedByDoctor.Trim();
+                match.SupportedByDoctor = string.IsNullOrWhiteSpace(request.SupportedByDoctor) ? match.SupportedByDoctor : NameNormalizer.Upper(request.SupportedByDoctor);
                 await _context.SaveChangesAsync(cancellationToken);
                 return match.ReferrerId;
             }
@@ -83,15 +84,15 @@ public class CreateReferrerCommandHandler : IRequestHandler<CreateReferrerComman
 
         var referrer = new Referrer
         {
-            Name = request.Name,
+            Name = NameNormalizer.Upper(request.Name),
             Contact = storedContact,
-            Address = request.Address,
+            Address = NameNormalizer.Upper(request.Address),
             HospitalId = hospitalId,
             Email     = string.IsNullOrWhiteSpace(request.Email)     ? null : request.Email.Trim(),
-            Specialty = string.IsNullOrWhiteSpace(request.Specialty) ? null : request.Specialty.Trim(),
-            Degree    = string.IsNullOrWhiteSpace(request.Degree)    ? null : request.Degree.Trim(),
+            Specialty = NameNormalizer.UpperOrNull(request.Specialty),
+            Degree    = NameNormalizer.UpperOrNull(request.Degree),
             IsDoctor  = request.IsDoctor,
-            SupportedByDoctor = string.IsNullOrWhiteSpace(request.SupportedByDoctor) ? null : request.SupportedByDoctor.Trim(),
+            SupportedByDoctor = NameNormalizer.UpperOrNull(request.SupportedByDoctor),
         };
 
         _context.Referrers.Add(referrer);

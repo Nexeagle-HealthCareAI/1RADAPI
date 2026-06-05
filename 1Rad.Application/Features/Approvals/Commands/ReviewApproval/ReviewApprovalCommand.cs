@@ -78,6 +78,9 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
             case "MARK_FREE":
                 await ApplyMarkFreeAsync(req, ct);
                 break;
+            case "UNPAY_COMMISSION":
+                await ApplyUnpayCommissionAsync(req, ct);
+                break;
         }
     }
 
@@ -174,9 +177,27 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
             .Where(i => i.AppointmentId == req.AppointmentId && i.HospitalId == hospitalId && i.DeletedAt == null)
             .ToListAsync(ct);
         var invoiceDisplayIds = invoices.Select(i => i.InvoiceId).ToList();
+
+        // Refund: a cancelled PAID appointment means the patient gets their money
+        // back, so any collected payment must be reversed (income nets to zero).
+        // Payments have no tombstone column, so the rows are removed outright
+        // (mirrors Mark-Free). The refunded total is audited onto the commission.
+        var invoiceRowIds = invoices.Select(i => i.Id).ToList();
+        decimal refunded = 0;
+        if (invoiceRowIds.Count > 0)
+        {
+            var payments = await _context.Payments
+                .Where(p => invoiceRowIds.Contains(p.InvoiceId) && p.HospitalId == hospitalId)
+                .ToListAsync(ct);
+            refunded = payments.Sum(p => p.Amount);
+            if (payments.Count > 0) _context.Payments.RemoveRange(payments);
+        }
+
         foreach (var invoice in invoices)
         {
             invoice.Status = "CANCELLED";
+            invoice.PaidAmount = 0;
+            invoice.PaidAt = null;
             invoice.DeletedAt = cancelNow;
             invoice.UpdatedAt = cancelNow;
         }
@@ -194,6 +215,10 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
             c.UpdatedAt = cancelNow;
             c.CommissionAmount = 0;
             c.Status = "Cancelled";
+            c.Remarks = (c.Remarks ?? "") +
+                $" [Appointment cancelled — patient returned; commission set to ₹0." +
+                (refunded > 0 ? $" Refund ₹{refunded:0.##} to patient." : "") +
+                $" Reason: {req.Reason}]";
         }
 
         appointment.Status = "CANCELLED";
@@ -222,6 +247,21 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
     /// </summary>
     private async Task ApplyMarkFreeAsync(ApprovalRequest req, CancellationToken ct)
     {
+        // Who bears the free test decides the referrer's commission:
+        //  CENTRE   → centre absorbs everything; referrer keeps the FULL cut.
+        //  BOTH     → centre + referrer share; referrer gets NO commission.
+        //  REFERRER → referrer alone bears it; gets NO commission.
+        // Self referrals earn nothing regardless of this choice.
+        var bearer = "CENTRE";
+        try
+        {
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(req.Payload) ? "{}" : req.Payload);
+            var b = GetString(doc.RootElement, "bearer");
+            if (!string.IsNullOrWhiteSpace(b)) bearer = b.Trim().ToUpperInvariant();
+        }
+        catch { }
+        if (bearer != "REFERRER" && bearer != "BOTH") bearer = "CENTRE";
+
         var invoice = req.InvoiceId != null
             ? await _context.Invoices.FirstOrDefaultAsync(i => i.Id == req.InvoiceId && i.HospitalId == req.HospitalId && i.DeletedAt == null, ct)
             : null;
@@ -239,6 +279,7 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
             invoice.InstitutionalDeduction = 0;
             invoice.DiscountAmount = gross;
             invoice.TotalAmount = 0;
+            invoice.IsFree = true; // distinguishes a free test from a 100% discount in reports
 
             // Reverse any collected money so there is no income (Payment has no
             // tombstone column, so the rows are removed outright).
@@ -261,9 +302,13 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
             var affected = commissions.Select(c => c.ReferrerId).Distinct().ToList();
             foreach (var c in commissions)
             {
-                c.CommissionAmount = 0;
-                c.Status = "Cancelled";
-                c.Remarks = (c.Remarks ?? "") + $" [Free test via approval {req.Id}]";
+                var isSelfCut = string.Equals(c.ReferrerName, "Self", StringComparison.OrdinalIgnoreCase);
+                // CENTRE → referrer keeps the full cut (centre absorbs the whole fee).
+                // BOTH / REFERRER → referrer gets no commission.
+                if (isSelfCut || bearer == "REFERRER" || bearer == "BOTH") c.CommissionAmount = 0;
+
+                if (c.CommissionAmount == 0) c.Status = "Cancelled";
+                c.Remarks = (c.Remarks ?? "") + $" [Free test — {bearer.ToLowerInvariant()}-borne via approval {req.Id}]";
                 c.UpdatedAt = DateTime.UtcNow;
             }
 
@@ -284,6 +329,31 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
     }
 
     /// <summary>
+    /// Reverts a PAID referral commission back to UNPAID after admin sign-off.
+    /// Payload: { commissionId }.
+    /// </summary>
+    private async Task ApplyUnpayCommissionAsync(ApprovalRequest req, CancellationToken ct)
+    {
+        Guid commissionId = Guid.Empty;
+        try
+        {
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(req.Payload) ? "{}" : req.Payload);
+            Guid.TryParse(GetString(doc.RootElement, "commissionId"), out commissionId);
+        }
+        catch { return; }
+        if (commissionId == Guid.Empty) return;
+
+        var commission = await _context.ReferralCommissions
+            .FirstOrDefaultAsync(c => c.Id == commissionId && c.HospitalId == req.HospitalId && c.DeletedAt == null, ct);
+        if (commission == null) return;
+
+        commission.Status = "UNPAID";
+        commission.PaymentDate = null;
+        commission.Remarks = (commission.Remarks ?? "") + $" [Reverted to UNPAID via approval {req.Id} — {req.Reason}]";
+        commission.UpdatedAt = DateTime.UtcNow;
+    }
+
+    /// <summary>
     /// Re-points the appointment's referrer after admin sign-off. Payload keys:
     /// newReferrerName (required), newReferrerContact, newReferrerIsDoctor.
     /// </summary>
@@ -291,7 +361,9 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
     {
         if (req.AppointmentId == null) return;
 
-        string name; string? contact; bool? isDoctor;
+        string name; string? contact; bool? isDoctor; string? supportedByDoctor;
+        string? email; string? specialty; string? degree; string? address;
+        string? supportedSpecialty; string? supportedDegree;
         try
         {
             using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(req.Payload) ? "{}" : req.Payload);
@@ -299,13 +371,24 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
             name = GetString(root, "newReferrerName") ?? string.Empty;
             contact = GetString(root, "newReferrerContact");
             isDoctor = GetBool(root, "newReferrerIsDoctor");
+            supportedByDoctor = GetString(root, "newReferrerSupportedByDoctor");
+            email = GetString(root, "newReferrerEmail");
+            specialty = GetString(root, "newReferrerSpecialty");
+            degree = GetString(root, "newReferrerDegree");
+            address = GetString(root, "newReferrerAddress");
+            supportedSpecialty = GetString(root, "newReferrerSupportedSpecialty");
+            supportedDegree = GetString(root, "newReferrerSupportedDegree");
         }
         catch { return; }
 
         if (string.IsNullOrWhiteSpace(name)) return;
 
+        // Paid path → preserve history with double-entry (reversal + new entry).
         await _1Rad.Application.Features.Approvals.ReferrerReassign.ApplyAsync(
-            _context, req.AppointmentId.Value, req.HospitalId, name, contact, isDoctor, ct);
+            _context, req.AppointmentId.Value, req.HospitalId, name, contact, isDoctor, ct,
+            preserveHistory: true, supportedByDoctor: supportedByDoctor,
+            email: email, specialty: specialty, degree: degree, address: address,
+            supportedSpecialty: supportedSpecialty, supportedDegree: supportedDegree);
     }
 
     private static string? GetString(JsonElement el, string name)

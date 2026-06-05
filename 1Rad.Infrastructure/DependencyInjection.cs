@@ -33,6 +33,7 @@ public static class DependencyInjection
         services.AddScoped<IEmailService, EmailService>();
         services.AddScoped<IJwtProvider, JwtProvider>();
         services.AddSingleton<ITrackingTokenService, TrackingTokenService>();
+        services.AddSingleton<IReferralLinkTokenService, ReferralLinkTokenService>();
 
         // Session management — the active-session cache is process-local;
         // when we scale to multi-instance, swap the IActiveSessionCache

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
+using _1Rad.Application.Common;
 using _1Rad.Application.Features.Appointments;
 using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Entities;
@@ -209,9 +210,22 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
         Referrer? referrer = null;
         if (!string.IsNullOrEmpty(request.ReferredBy))
         {
-            var searchName = request.ReferredBy.Trim();
+            // Canonical stored form + honorific-insensitive match key (#13/#15):
+            // "aquib", "Aquib" and "Md Aquib" all resolve to the SAME referrer
+            // instead of spawning duplicates, and the name is stored UPPERCASE.
+            var searchName = NameNormalizer.Upper(request.ReferredBy);
+            var nameKey = NameNormalizer.Normalize(request.ReferredBy);
             referrer = await _context.Referrers
-                .FirstOrDefaultAsync(r => r.Name!.ToLower() == searchName.ToLower() && r.HospitalId == hospitalId, cancellationToken);
+                .FirstOrDefaultAsync(r => r.Name == searchName && r.HospitalId == hospitalId, cancellationToken);
+
+            if (referrer == null)
+            {
+                // Honorific-insensitive fallback so "AQUIB" reuses "MD AQUIB".
+                var hospRefs = await _context.Referrers
+                    .Where(r => r.HospitalId == hospitalId)
+                    .ToListAsync(cancellationToken);
+                referrer = hospRefs.FirstOrDefault(r => NameNormalizer.Normalize(r.Name) == nameKey);
+            }
 
             if (referrer == null)
             {
@@ -232,7 +246,7 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
                     Address = string.Empty,
                     HospitalId = hospitalId,
                     IsDoctor  = request.ReferrerIsDoctor,
-                    SupportedByDoctor = request.ReferrerIsDoctor ? null : NullIfBlank(request.ReferrerSupportedByDoctor),
+                    SupportedByDoctor = request.ReferrerIsDoctor ? null : NameNormalizer.UpperOrNull(request.ReferrerSupportedByDoctor),
                     Email     = NullIfBlank(request.ReferrerEmail),
                     Specialty = NullIfBlank(request.ReferrerSpecialty),
                     Degree    = NullIfBlank(request.ReferrerDegree),
@@ -260,7 +274,7 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
             referrer.IsDoctor  = request.ReferrerIsDoctor;
             referrer.SupportedByDoctor = request.ReferrerIsDoctor
                 ? null
-                : (NullIfBlank(request.ReferrerSupportedByDoctor) ?? referrer.SupportedByDoctor);
+                : (NameNormalizer.UpperOrNull(request.ReferrerSupportedByDoctor) ?? referrer.SupportedByDoctor);
             referrer.Email     = NullIfBlank(request.ReferrerEmail)     ?? referrer.Email;
             referrer.Specialty = NullIfBlank(request.ReferrerSpecialty) ?? referrer.Specialty;
             referrer.Degree    = NullIfBlank(request.ReferrerDegree)    ?? referrer.Degree;
@@ -273,7 +287,7 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
             // is stored once and they become auto-selectable on the next booking.
             if (!request.ReferrerIsDoctor)
             {
-                var supportName = NullIfBlank(request.ReferrerSupportedByDoctor);
+                var supportName = NameNormalizer.UpperOrNull(request.ReferrerSupportedByDoctor);
                 if (supportName != null)
                 {
                     var supportDoc = await _context.Referrers
@@ -324,7 +338,7 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
         {
             DisplayId = $"APP-{displaySeq}",
             PatientId = request.PatientId,
-            PatientName = patient.FullName ?? "Unknown",
+            PatientName = NameNormalizer.UpperOrNull(patient.FullName) ?? "UNKNOWN",
             Mobile = patient.Mobile,
             Service = primary.ServiceName,
             Modality = primary.Modality,
@@ -333,10 +347,10 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
             Priority = NormalizePriority(request.Priority),
             Doctor = request.Doctor,
             Status = "scheduled",
-            ReferredBy = request.ReferredBy,
+            ReferredBy = referrer?.Name ?? NameNormalizer.Upper(request.ReferredBy),
             ReferredContact = request.ReferredContact,
             // Per-appointment supporting doctor — only for an agent referral.
-            SupportedByDoctor = request.ReferrerIsDoctor ? null : NullIfBlank(request.ReferrerSupportedByDoctor),
+            SupportedByDoctor = request.ReferrerIsDoctor ? null : NameNormalizer.UpperOrNull(request.ReferrerSupportedByDoctor),
             Notes = request.Notes,
             // Token assigned on arrival, not at booking (see status handler).
             DailyTokenNumber = null,

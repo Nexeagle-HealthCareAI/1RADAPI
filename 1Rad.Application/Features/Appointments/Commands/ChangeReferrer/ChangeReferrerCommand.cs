@@ -25,6 +25,17 @@ public record ChangeReferrerCommand : IRequest<ChangeReferrerResult>
     public string NewReferrerName { get; init; } = string.Empty;
     public string? NewReferrerContact { get; init; }
     public bool? NewReferrerIsDoctor { get; init; }
+    // When the new referrer is an "Other person" (agent), the doctor they collect
+    // for — mirrors booking's supporting-doctor field.
+    public string? NewReferrerSupportedByDoctor { get; init; }
+    // Full referrer profile (parity with booking).
+    public string? NewReferrerEmail { get; init; }
+    public string? NewReferrerSpecialty { get; init; }
+    public string? NewReferrerDegree { get; init; }
+    public string? NewReferrerAddress { get; init; }
+    // The supporting doctor's own profile (when the referrer is an Other person).
+    public string? NewReferrerSupportedSpecialty { get; init; }
+    public string? NewReferrerSupportedDegree { get; init; }
 }
 
 public class ChangeReferrerCommandHandler : IRequestHandler<ChangeReferrerCommand, ChangeReferrerResult>
@@ -62,7 +73,12 @@ public class ChangeReferrerCommandHandler : IRequestHandler<ChangeReferrerComman
 
         await ReferrerReassign.ApplyAsync(
             _context, request.AppointmentId, hospitalId,
-            request.NewReferrerName, request.NewReferrerContact, request.NewReferrerIsDoctor, ct);
+            request.NewReferrerName, request.NewReferrerContact, request.NewReferrerIsDoctor, ct,
+            supportedByDoctor: request.NewReferrerSupportedByDoctor,
+            email: request.NewReferrerEmail, specialty: request.NewReferrerSpecialty,
+            degree: request.NewReferrerDegree, address: request.NewReferrerAddress,
+            supportedSpecialty: request.NewReferrerSupportedSpecialty,
+            supportedDegree: request.NewReferrerSupportedDegree);
 
         await _context.SaveChangesAsync(ct);
 

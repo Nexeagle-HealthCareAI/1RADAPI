@@ -38,6 +38,11 @@ public class Invoice : BaseEntity, IHospitalContext
     public decimal ReferrerDiscount { get; set; } = 0;
     public decimal InstitutionalDeduction { get; set; } = 0;
 
+    // Free test (Scenario 07): the bill is kept (gross recorded) but payable,
+    // income and commission are all zeroed. This flag lets reports tell a genuine
+    // free test apart from an ordinary 100% centre discount.
+    public bool IsFree { get; set; } = false;
+
 
     
     public Guid HospitalId { get; set; }
