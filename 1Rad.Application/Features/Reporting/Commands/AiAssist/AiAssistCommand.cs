@@ -1,6 +1,10 @@
+using System;
+using System.Collections.Generic;
 using System.Text;
 using System.Text.RegularExpressions;
 using MediatR;
+using Microsoft.EntityFrameworkCore;
+using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 
 namespace _1Rad.Application.Features.Reporting.Commands.AiAssist;
@@ -18,17 +22,22 @@ public record AiAssistCommand : IRequest<AiAssistResult>
     public string Text { get; init; } = string.Empty;
     // Optional free-text context (e.g. study + modality) to steer the model.
     public string? Context { get; init; }
+    // When present, the appointment's patient identifiers (name / PTID / phone)
+    // are de-identified before the text is sent to the AI provider.
+    public Guid? AppointmentId { get; init; }
 }
 
 public record AiAssistResult(bool Success, string? Html, string? Error);
 
 public class AiAssistCommandHandler : IRequestHandler<AiAssistCommand, AiAssistResult>
 {
-    private readonly IAnthropicService _ai;
+    private readonly IReportAiService _ai;
+    private readonly IApplicationDbContext _context;
 
-    public AiAssistCommandHandler(IAnthropicService ai)
+    public AiAssistCommandHandler(IReportAiService ai, IApplicationDbContext context)
     {
         _ai = ai;
+        _context = context;
     }
 
     public async Task<AiAssistResult> Handle(AiAssistCommand request, CancellationToken cancellationToken)
@@ -41,6 +50,25 @@ public class AiAssistCommandHandler : IRequestHandler<AiAssistCommand, AiAssistR
         if (system == null)
             return new AiAssistResult(false, null, $"Unknown AI action '{request.Action}'.");
 
+        // De-identify before the text leaves our server (rule: no PHI to the
+        // provider). Mask the patient's name / PTID / phone, then re-insert them
+        // into the model's response so the radiologist still sees real names.
+        var phi = new List<string?>();
+        if (request.AppointmentId is Guid aid && aid != Guid.Empty)
+        {
+            var info = await _context.Appointments
+                .Where(a => a.AppointmentId == aid)
+                .Select(a => new
+                {
+                    Name = a.PatientName,
+                    Ptid = a.Patient.PatientIdentifier,
+                    Phone = a.Mobile,
+                })
+                .FirstOrDefaultAsync(cancellationToken);
+            if (info != null) { phi.Add(info.Name); phi.Add(info.Ptid); phi.Add(info.Phone); }
+        }
+        var (safeText, phiMap) = PhiRedactor.Redact(request.Text.Trim(), phi);
+
         var user = new StringBuilder();
         if (!string.IsNullOrWhiteSpace(request.Context))
         {
@@ -49,7 +77,7 @@ public class AiAssistCommandHandler : IRequestHandler<AiAssistCommand, AiAssistR
             user.AppendLine();
         }
         user.AppendLine("=== INPUT ===");
-        user.AppendLine(request.Text.Trim());
+        user.AppendLine(safeText);
         user.AppendLine();
         user.AppendLine(task);
 
@@ -60,10 +88,12 @@ public class AiAssistCommandHandler : IRequestHandler<AiAssistCommand, AiAssistR
         }
         catch (Exception ex)
         {
+            // Fallback: never block report delivery on a third-party API — the
+            // caller keeps the raw text and can format manually.
             return new AiAssistResult(false, null, ex.Message);
         }
 
-        var html = Clean(aiText);
+        var html = PhiRedactor.Restore(Clean(aiText), phiMap);
         if (string.IsNullOrWhiteSpace(html))
             return new AiAssistResult(false, null, "The AI response was empty.");
 
@@ -99,6 +129,14 @@ public class AiAssistCommandHandler : IRequestHandler<AiAssistCommand, AiAssistR
                 baseRules + " Make the input more concise while keeping every clinical fact, " +
                 "measurement and laterality.",
                 "Return the shortened version of the INPUT."),
+            "restructure" => (
+                baseRules + " The input is a full radiology report draft — possibly unstructured dictation or " +
+                "loose notes. Reorganise it into a clean, professional report: a TECHNIQUE/PROTOCOL section only if " +
+                "the input mentions one, a FINDINGS section organised by organ/system (one finding per paragraph), " +
+                "and a concise numbered IMPRESSION that summarises only the clinically significant findings. Use " +
+                "<p><strong>SECTION</strong></p> for each heading. Keep every clinical fact, measurement and " +
+                "laterality exactly; never invent findings or an impression unsupported by the findings.",
+                "Return the fully restructured report as clean HTML."),
             "impression" => (
                 baseRules + " The input is the FINDINGS section of a radiology report. Write a concise, " +
                 "numbered IMPRESSION that summarises the clinically significant findings and any " +
