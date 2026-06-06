@@ -37,6 +37,10 @@ public static class DependencyInjection
         // RadAI report formatter knowledge pack (templates + lexicon + examples),
         // loaded once from Resources/Radiology. Singleton — pure in-memory data.
         services.AddSingleton<IRadiologyPack, RadiologyPack>();
+        // RadLex + curated radiology term corpus (whitelist + wrong→correct map),
+        // loaded once from Resources/Radiology. Powers the Layer-1 spell pass,
+        // autocomplete, and spell-check. Singleton — pure in-memory data.
+        services.AddSingleton<IRadiologyCorpus, RadiologyCorpus>();
         // RadAI help-desk knowledge pack (system prompt + app_knowledge.json),
         // loaded once from Resources/RadAI. Singleton — pure in-memory data.
         services.AddSingleton<IRadAiKnowledge, RadAiKnowledge>();

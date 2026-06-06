@@ -11,6 +11,11 @@ using _1Rad.Application.Features.Reporting.Queries.GetReport;
 using _1Rad.Application.Features.Reporting.Queries.GetReportsDelta;
 using _1Rad.Application.Common.Exceptions;
 using _1Rad.Application.Features.Reporting.Queries.GetTemplates;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text.RegularExpressions;
+using _1Rad.Application.Interfaces;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
@@ -21,10 +26,12 @@ namespace _1RadAPI.Controllers
     public class ReportingController : ControllerBase
     {
         private readonly IMediator _mediator;
+        private readonly IRadiologyCorpus _corpus;
 
-        public ReportingController(IMediator mediator)
+        public ReportingController(IMediator mediator, IRadiologyCorpus corpus)
         {
             _mediator = mediator;
+            _corpus = corpus;
         }
 
         // --- TEMPLATE QUERIES & COMMANDS ---
@@ -280,6 +287,51 @@ namespace _1RadAPI.Controllers
             {
                 return StatusCode(500, new { success = false, error = $"AI request failed: {ex.Message}" });
             }
+        }
+
+        // ── RadLex term services (autocomplete + spell-check) ──────────────────
+
+        /// <summary>Autocomplete: radiology terms starting with the prefix.</summary>
+        [HttpGet("terms/suggest")]
+        public IActionResult SuggestTerms([FromQuery] string? q, [FromQuery] int limit = 8)
+        {
+            var items = _corpus.Suggest(q ?? string.Empty, Math.Clamp(limit, 1, 20));
+            return Ok(new { success = true, items });
+        }
+
+        public sealed record SpellCheckBody(string? Text);
+        public sealed record SpellIssue(string Word, List<string> Suggestions);
+
+        /// <summary>
+        /// Spell-check: words that are NOT a known radiology term AND have a likely
+        /// fix (a known correction or a near term). Only fixable words are flagged,
+        /// so plain English words — which have no close radiology term — aren't.
+        /// </summary>
+        [HttpPost("terms/check")]
+        public IActionResult CheckSpelling([FromBody] SpellCheckBody body)
+        {
+            var text = body?.Text ?? string.Empty;
+            var issues = new List<SpellIssue>();
+            if (_corpus.IsAvailable && text.Length > 0)
+            {
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (Match m in Regex.Matches(text, "[A-Za-z][A-Za-z-]{2,}"))
+                {
+                    var word = m.Value;
+                    if (!seen.Add(word.ToLowerInvariant())) continue;          // unique words
+                    if (string.Equals(word, "PHI", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (_corpus.IsProtected(word) || _corpus.IsTerm(word)) continue;
+
+                    var sugg = new List<string>();
+                    var known = _corpus.Correction(word);
+                    if (known != null) sugg.Add(known);
+                    var near = _corpus.NearestTerm(word, 2);
+                    if (near != null && !sugg.Contains(near, StringComparer.OrdinalIgnoreCase)) sugg.Add(near);
+
+                    if (sugg.Count > 0) issues.Add(new SpellIssue(word, sugg));  // only flag fixable typos
+                }
+            }
+            return Ok(new { success = true, issues });
         }
 
         /// <summary>

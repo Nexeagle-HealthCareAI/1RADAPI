@@ -52,12 +52,14 @@ public class FormatReportCommandHandler : IRequestHandler<FormatReportCommand, F
     // structured JSON, no audio — rather than Gemini Flash.
     private readonly IAnthropicService _ai;
     private readonly IRadiologyPack _pack;
+    private readonly IRadiologyCorpus _corpus;
     private readonly IApplicationDbContext _context;
 
-    public FormatReportCommandHandler(IAnthropicService ai, IRadiologyPack pack, IApplicationDbContext context)
+    public FormatReportCommandHandler(IAnthropicService ai, IRadiologyPack pack, IRadiologyCorpus corpus, IApplicationDbContext context)
     {
         _ai = ai;
         _pack = pack;
+        _corpus = corpus;
         _context = context;
     }
 
@@ -83,6 +85,11 @@ public class FormatReportCommandHandler : IRequestHandler<FormatReportCommand, F
         }
         var (safeText, phiMap) = PhiRedactor.Redact(raw, phi);
 
+        // Layer 1 — deterministic spell pass (no AI): fix known typos and obvious
+        // misspellings of real radiology terms BEFORE the model runs. Protected
+        // tokens (numbers, units, laterality, negations) are never touched.
+        var (cleanText, preCorrections) = SpellPass(safeText);
+
         var system = _pack.SystemPrompt + "\n\n=== CONTEXT ===\n" + _pack.BuildContext(request.Modality, request.TestCode);
         var userPayload = JsonSerializer.Serialize(new
         {
@@ -90,7 +97,7 @@ public class FormatReportCommandHandler : IRequestHandler<FormatReportCommand, F
             test_code = request.TestCode,
             house_spelling = string.IsNullOrWhiteSpace(request.HouseSpelling) ? "UK" : request.HouseSpelling,
             assume_unmentioned_normal = request.AssumeUnmentionedNormal,
-            raw_text = safeText,
+            raw_text = cleanText,
         });
 
         string modelJson;
@@ -126,7 +133,13 @@ public class FormatReportCommandHandler : IRequestHandler<FormatReportCommand, F
             .Select(c => new FormatReportCorrection(
                 PhiRedactor.Restore(c.From, phiMap), PhiRedactor.Restore(c.To, phiMap), c.Type ?? ""))
             .ToList();
+        // Surface the Layer-1 fixes too, so the radiologist reviews every change.
+        corrections.InsertRange(0, preCorrections);
+        // Layer 2 — whitelist validation: flag any vocabulary "fix" the model made
+        // toward a word that isn't a recognised radiology term (a possible
+        // hallucination), so the radiologist verifies it before signing.
         var flags = (parsed.Flags ?? new List<RawFlag>())
+            .Concat(WhitelistFlags(parsed.Corrections))
             .Select(f => new FormatReportFlag(
                 PhiRedactor.Restore(f.Text, phiMap), PhiRedactor.Restore(f.Issue, phiMap)))
             .ToList();
@@ -162,6 +175,81 @@ public class FormatReportCommandHandler : IRequestHandler<FormatReportCommand, F
 
     // ---- helpers ----
 
+    // Layer 1 — deterministic spell pass over the de-identified text. Fixes known
+    // typos (corrections map) and obvious misspellings of real radiology terms
+    // (fuzzy match, edit distance <= 2), skipping protected tokens and the PHI
+    // placeholder. Every change is recorded so the radiologist can review it.
+    private (string cleaned, List<FormatReportCorrection> corrections) SpellPass(string text)
+    {
+        var fixes = new List<FormatReportCorrection>();
+        if (!_corpus.IsAvailable || string.IsNullOrWhiteSpace(text)) return (text, fixes);
+
+        var cleaned = Regex.Replace(text, "[A-Za-z][A-Za-z-]{2,}", m =>
+        {
+            var word = m.Value;
+            if (string.Equals(word, "PHI", StringComparison.OrdinalIgnoreCase)) return word; // [[PHI0]] redaction
+            if (_corpus.IsProtected(word)) return word;
+
+            var known = _corpus.Correction(word);
+            if (known != null && !string.Equals(known, word, StringComparison.OrdinalIgnoreCase))
+            {
+                var to = MatchCase(word, known);
+                fixes.Add(new FormatReportCorrection(word, to, "spelling"));
+                return to;
+            }
+
+            if (!_corpus.IsTerm(word))
+            {
+                var near = _corpus.NearestTerm(word, 2);
+                if (near != null && !string.Equals(near, word, StringComparison.OrdinalIgnoreCase))
+                {
+                    var to = MatchCase(word, near);
+                    fixes.Add(new FormatReportCorrection(word, to, "spelling"));
+                    return to;
+                }
+            }
+            return word;
+        });
+        return (cleaned, fixes);
+    }
+
+    // Carry the original word's leading capital onto the replacement.
+    private static string MatchCase(string original, string replacement)
+    {
+        if (original.Length == 0 || replacement.Length == 0) return replacement;
+        return char.IsUpper(original[0])
+            ? char.ToUpperInvariant(replacement[0]) + replacement.Substring(1)
+            : replacement;
+    }
+
+    // Layer 2 — whitelist validation. Returns a flag for each vocabulary fix the
+    // model reported whose RESULT isn't a recognised radiology term, but whose
+    // ORIGINAL clearly was one (a near term). That combination is a likely
+    // hallucinated/garbled term — surfaced for review, never silently trusted.
+    // General-English fixes (where the original isn't near any radiology term)
+    // are deliberately not flagged, so legitimate edits aren't second-guessed.
+    private List<RawFlag> WhitelistFlags(List<RawCorrection>? corrections)
+    {
+        var flags = new List<RawFlag>();
+        if (!_corpus.IsAvailable || corrections == null) return flags;
+        foreach (var c in corrections)
+        {
+            var to = (c.To ?? string.Empty).Trim();
+            var from = (c.From ?? string.Empty).Trim();
+            var type = (c.Type ?? string.Empty).Trim().ToLowerInvariant();
+            if (type is not ("spelling" or "abbreviation")) continue;                  // only vocabulary fixes
+            if (!Regex.IsMatch(to, "^[A-Za-z][A-Za-z-]+$") || to.Length < 5) continue;  // a single clinical-length word
+            if (_corpus.IsTerm(to) || _corpus.IsProtected(to)) continue;                // a real term → trust it
+            if (_corpus.NearestTerm(from, 2) == null) continue;                         // original wasn't a radiology word → skip
+            flags.Add(new RawFlag
+            {
+                Text = to,
+                Issue = $"AI changed \"{from}\" to \"{to}\", which is not a recognised radiology term — please verify."
+            });
+        }
+        return flags;
+    }
+
     // Strip a ```json fence the model may wrap the JSON in.
     private static string StripFence(string s)
     {
@@ -193,15 +281,44 @@ public class FormatReportCommandHandler : IRequestHandler<FormatReportCommand, F
     {
         if (string.IsNullOrWhiteSpace(text)) return string.Empty;
         var sb = new StringBuilder();
+        var inImpression = false;
+        var ulOpen = false;
+        void CloseList() { if (ulOpen) { sb.Append("</ul>"); ulOpen = false; } }
+
         foreach (var rawLine in text.Replace("\r\n", "\n").Split('\n'))
         {
             var line = rawLine.Trim();
             if (line.Length == 0) continue;
-            var enc = WebUtility.HtmlEncode(line);
-            // Heading: short, mostly uppercase, optionally ending with a colon.
+
+            // Section heading: short, mostly uppercase, optionally ending with a colon.
             var isHeading = Regex.IsMatch(line, "^[A-Z0-9][A-Z0-9 /&()\\-]{1,40}:?$") && Regex.IsMatch(line, "[A-Z]");
-            sb.Append(isHeading ? $"<p><strong>{enc}</strong></p>" : $"<p>{enc}</p>");
+            if (isHeading)
+            {
+                CloseList();
+                inImpression = line.TrimEnd(':').Trim().StartsWith("IMPRESSION", StringComparison.OrdinalIgnoreCase);
+                sb.Append($"<p><strong>{WebUtility.HtmlEncode(line)}</strong></p>");
+                continue;
+            }
+
+            // IMPRESSION: one clinical point per bullet (strip any leading "1." / "-" / "•").
+            if (inImpression)
+            {
+                var point = Regex.Replace(line, "^\\s*(?:\\d+[.)]|[-*•])\\s*", "").Trim();
+                if (point.Length == 0) continue;
+                if (!ulOpen) { sb.Append("<ul>"); ulOpen = true; }
+                sb.Append($"<li>{WebUtility.HtmlEncode(point)}</li>");
+                continue;
+            }
+
+            // FINDINGS / other: bold an "Organ: finding" label so each organ/region
+            // is visually separated from its finding.
+            var m = Regex.Match(line, "^([A-Za-z][A-Za-z0-9 /()\\-]{1,38}?):\\s+(.+)$");
+            if (m.Success)
+                sb.Append($"<p><strong>{WebUtility.HtmlEncode(m.Groups[1].Value)}:</strong> {WebUtility.HtmlEncode(m.Groups[2].Value)}</p>");
+            else
+                sb.Append($"<p>{WebUtility.HtmlEncode(line)}</p>");
         }
+        CloseList();
         return sb.ToString();
     }
 }

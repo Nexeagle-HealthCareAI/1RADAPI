@@ -1,0 +1,214 @@
+{
+  "_meta": {
+    "purpose": "A categorized corpus of real radiology vocabulary. Use it two ways: (1) as a DICTIONARY for a fast, deterministic spell-check pass that fixes/whitelists known terms before any model runs, and (2) as CONTEXT given to Haiku so it corrects within real radiology vocabulary instead of guessing. You do NOT train Haiku via API; you equip it with this list. See INGESTION_AND_HAIKU_GUIDE.md.",
+    "version": "1.0",
+    "coverage": "High-frequency, broadly useful terms across modalities and body systems. For near-complete coverage, ingest the full RSNA RadLex lexicon (7,400+ terms, free) into the 'anatomy' and 'pathology' buckets — see the guide.",
+    "grounding": "Term selection follows RSNA RadLex categories and the Fleischner Society thoracic glossary, plus standard anatomical/pathological terminology.",
+    "spelling_style": "US (see radiology_corrections.json to flip to UK).",
+    "usage_note": "All terms are lowercase canonical forms. Match case-insensitively; preserve the source's capitalization when correcting."
+  },
+
+  "modalities_and_techniques": [
+    "radiography", "x-ray", "plain film", "fluoroscopy", "ultrasonography", "ultrasound", "sonography",
+    "doppler", "color doppler", "power doppler", "spectral doppler", "duplex", "elastography",
+    "computed tomography", "ct", "non-contrast ct", "contrast-enhanced ct", "ct angiography", "cta",
+    "high-resolution ct", "hrct", "ct urography", "ct enterography", "dual-energy ct", "cone-beam ct",
+    "magnetic resonance imaging", "mri", "mr angiography", "mra", "mr venography", "mrv",
+    "mr cholangiopancreatography", "mrcp", "functional mri", "diffusion-weighted imaging", "perfusion imaging",
+    "magnetic resonance spectroscopy", "mammography", "tomosynthesis", "digital breast tomosynthesis",
+    "bone densitometry", "dexa", "dxa", "positron emission tomography", "pet", "pet-ct", "spect",
+    "scintigraphy", "nuclear medicine", "interventional radiology", "angiography", "venography",
+    "myelography", "arthrography", "hysterosalpingography", "intravenous urography", "ivu", "barium swallow",
+    "barium meal", "barium enema", "voiding cystourethrography", "vcug", "sialography", "dacryocystography"
+  ],
+
+  "mri_sequences_and_terms": [
+    "t1-weighted", "t1w", "t2-weighted", "t2w", "proton density", "pd", "flair",
+    "fluid-attenuated inversion recovery", "stir", "short tau inversion recovery", "dwi", "adc",
+    "apparent diffusion coefficient", "gradient echo", "gre", "spin echo", "fast spin echo", "fse",
+    "turbo spin echo", "tse", "fat saturation", "fat-suppressed", "in-phase", "out-of-phase", "swi",
+    "susceptibility-weighted imaging", "time-of-flight", "tof", "post-contrast", "post-gadolinium",
+    "dynamic contrast-enhanced", "restricted diffusion", "diffusion restriction", "blooming artifact",
+    "signal intensity", "hyperintense", "hypointense", "isointense", "flow void", "chemical shift"
+  ],
+
+  "ct_terms": [
+    "attenuation", "hounsfield units", "hu", "density", "hyperdense", "hypodense", "isodense",
+    "ground-glass opacity", "ground-glass attenuation", "soft-tissue window", "lung window", "bone window",
+    "axial", "coronal", "sagittal", "multiplanar reconstruction", "mpr", "maximum intensity projection",
+    "mip", "volume rendering", "windowing", "beam hardening", "partial volume", "streak artifact",
+    "contrast enhancement", "arterial phase", "venous phase", "portal venous phase", "delayed phase",
+    "washout", "calcification", "calcified", "fat density", "fluid density"
+  ],
+
+  "ultrasound_terms": [
+    "echogenicity", "echotexture", "echogenic", "hyperechoic", "hypoechoic", "anechoic", "isoechoic",
+    "heterogeneous", "homogeneous", "acoustic shadowing", "posterior acoustic shadowing",
+    "posterior acoustic enhancement", "comet-tail artifact", "ring-down artifact", "twinkle artifact",
+    "reverberation", "vascularity", "avascular", "hypervascular", "resistive index", "peak systolic velocity",
+    "end-diastolic velocity", "color flow", "spectral waveform", "echogenic focus", "snowstorm appearance",
+    "cystic", "solid", "complex cyst", "septation", "septations", "mural nodule", "debris", "sludge"
+  ],
+
+  "descriptors_morphology": [
+    "focal", "diffuse", "multifocal", "well-defined", "ill-defined", "well-circumscribed", "irregular",
+    "lobulated", "smooth", "spiculated", "infiltrative", "expansile", "lytic", "sclerotic", "permeative",
+    "moth-eaten", "geographic", "rounded", "ovoid", "wedge-shaped", "linear", "nodular", "reticular",
+    "reticulonodular", "confluent", "patchy", "scattered", "discrete", "coalescent", "heterogeneous",
+    "homogeneous", "enhancing", "non-enhancing", "rim-enhancing", "peripherally enhancing", "necrotic",
+    "cystic", "solid", "calcified", "ossified", "fat-containing", "hemorrhagic", "infiltrating",
+    "encapsulated", "exophytic", "endophytic", "pedunculated", "sessile", "trabeculated", "septated"
+  ],
+
+  "size_and_measurement": [
+    "millimeter", "mm", "centimeter", "cm", "milliliter", "ml", "cubic centimeter", "cc",
+    "anteroposterior", "ap diameter", "transverse", "craniocaudal", "longitudinal", "caliber",
+    "diameter", "dimension", "volume", "thickness", "wall thickness", "interval increase",
+    "interval decrease", "stable in size", "enlarged", "enlargement", "atrophy", "hypertrophy",
+    "dilated", "dilatation", "dilation", "narrowed", "narrowing", "effaced", "effacement"
+  ],
+
+  "laterality_position_planes": [
+    "left", "right", "bilateral", "unilateral", "ipsilateral", "contralateral", "midline",
+    "medial", "lateral", "anterior", "posterior", "superior", "inferior", "proximal", "distal",
+    "cranial", "caudal", "ventral", "dorsal", "rostral", "central", "peripheral", "superficial", "deep",
+    "axial", "coronal", "sagittal", "oblique", "transverse", "supine", "prone", "erect", "decubitus",
+    "antegrade", "retrograde", "dependent", "non-dependent", "perihilar", "subpleural", "periventricular",
+    "subcortical", "cortical", "medullary", "corticomedullary", "juxta-articular", "intra-articular",
+    "extra-axial", "intra-axial", "extra-axial collection", "supratentorial", "infratentorial"
+  ],
+
+  "anatomy_neuro": [
+    "cerebrum", "cerebral hemisphere", "frontal lobe", "parietal lobe", "temporal lobe", "occipital lobe",
+    "insula", "cerebellum", "cerebellar hemisphere", "vermis", "brainstem", "midbrain", "pons", "medulla",
+    "basal ganglia", "caudate nucleus", "putamen", "globus pallidus", "thalamus", "hypothalamus",
+    "internal capsule", "corpus callosum", "fornix", "hippocampus", "amygdala", "white matter", "gray matter",
+    "cortex", "subcortical white matter", "centrum semiovale", "corona radiata", "lateral ventricle",
+    "third ventricle", "fourth ventricle", "cerebral aqueduct", "foramen of monro", "choroid plexus",
+    "subarachnoid space", "cisterns", "sella turcica", "pituitary gland", "infundibulum", "optic chiasm",
+    "cavernous sinus", "circle of willis", "middle cerebral artery", "anterior cerebral artery",
+    "posterior cerebral artery", "basilar artery", "vertebral artery", "internal carotid artery",
+    "dural venous sinus", "superior sagittal sinus", "transverse sinus", "sigmoid sinus", "meninges",
+    "dura mater", "pia mater", "falx cerebri", "tentorium cerebelli", "gyrus", "sulcus", "ventricular system"
+  ],
+
+  "anatomy_spine": [
+    "vertebral body", "vertebra", "vertebrae", "cervical spine", "thoracic spine", "lumbar spine",
+    "lumbosacral spine", "sacrum", "coccyx", "intervertebral disc", "nucleus pulposus", "annulus fibrosus",
+    "endplate", "vertebral endplate", "pedicle", "lamina", "spinous process", "transverse process",
+    "facet joint", "zygapophyseal joint", "ligamentum flavum", "posterior longitudinal ligament",
+    "anterior longitudinal ligament", "spinal cord", "conus medullaris", "cauda equina", "thecal sac",
+    "dural sac", "nerve root", "neural foramen", "neural foramina", "spinal canal", "lateral recess",
+    "paraspinal", "prevertebral", "filum terminale", "epidural space", "subligamentous"
+  ],
+
+  "anatomy_chest": [
+    "lung", "lung parenchyma", "right upper lobe", "right middle lobe", "right lower lobe",
+    "left upper lobe", "left lower lobe", "lingula", "bronchus", "bronchi", "bronchiole", "trachea",
+    "carina", "hilum", "hila", "pleura", "visceral pleura", "parietal pleura", "pleural space",
+    "fissure", "major fissure", "minor fissure", "mediastinum", "anterior mediastinum",
+    "middle mediastinum", "posterior mediastinum", "heart", "pericardium", "aorta", "ascending aorta",
+    "aortic arch", "descending aorta", "pulmonary artery", "pulmonary vein", "superior vena cava",
+    "inferior vena cava", "azygos vein", "thymus", "esophagus", "diaphragm", "costophrenic angle",
+    "cardiophrenic angle", "chest wall", "rib", "ribs", "sternum", "clavicle", "thoracic inlet", "apex"
+  ],
+
+  "anatomy_abdomen_pelvis": [
+    "liver", "hepatic lobe", "right hepatic lobe", "left hepatic lobe", "caudate lobe", "porta hepatis",
+    "portal vein", "hepatic vein", "hepatic artery", "intrahepatic biliary radicles", "common bile duct",
+    "common hepatic duct", "cystic duct", "gallbladder", "gallbladder fossa", "pancreas", "pancreatic duct",
+    "pancreatic head", "uncinate process", "pancreatic body", "pancreatic tail", "spleen", "splenic hilum",
+    "adrenal gland", "kidney", "renal cortex", "renal medulla", "renal pelvis", "renal sinus", "calyx",
+    "calyces", "ureter", "urinary bladder", "prostate", "seminal vesicle", "testis", "epididymis",
+    "spermatic cord", "scrotum", "uterus", "endometrium", "myometrium", "cervix", "ovary", "adnexa",
+    "fallopian tube", "pouch of douglas", "rectouterine pouch", "peritoneum", "retroperitoneum",
+    "mesentery", "omentum", "stomach", "duodenum", "jejunum", "ileum", "small bowel", "colon", "cecum",
+    "appendix", "sigmoid colon", "rectum", "abdominal aorta", "celiac axis", "superior mesenteric artery",
+    "inferior mesenteric artery", "inferior vena cava", "psoas muscle"
+  ],
+
+  "anatomy_musculoskeletal": [
+    "humerus", "radius", "ulna", "carpus", "carpal bones", "scaphoid", "lunate", "metacarpal", "phalanx",
+    "phalanges", "femur", "femoral head", "femoral neck", "patella", "tibia", "fibula", "tarsus",
+    "calcaneus", "talus", "metatarsal", "acetabulum", "pelvis", "iliac bone", "ischium", "pubis",
+    "sacroiliac joint", "glenohumeral joint", "rotator cuff", "supraspinatus", "infraspinatus",
+    "subscapularis", "teres minor", "labrum", "acromion", "acromioclavicular joint", "meniscus", "menisci",
+    "medial meniscus", "lateral meniscus", "anterior cruciate ligament", "posterior cruciate ligament",
+    "medial collateral ligament", "lateral collateral ligament", "articular cartilage", "joint space",
+    "bone marrow", "cortex", "medullary cavity", "periosteum", "epiphysis", "metaphysis", "diaphysis",
+    "physis", "growth plate", "tendon", "ligament", "bursa", "synovium", "soft tissue"
+  ],
+
+  "findings_chest": [
+    "consolidation", "ground-glass opacity", "air bronchogram", "atelectasis", "collapse",
+    "pleural effusion", "pneumothorax", "hydropneumothorax", "pulmonary nodule", "pulmonary mass",
+    "cavitation", "cavity", "bronchiectasis", "bronchial wall thickening", "emphysema", "bulla",
+    "bleb", "honeycombing", "interlobular septal thickening", "reticulation", "tree-in-bud",
+    "centrilobular nodules", "miliary nodules", "mosaic attenuation", "air trapping", "crazy paving",
+    "lymphadenopathy", "mediastinal widening", "cardiomegaly", "pericardial effusion", "pulmonary edema",
+    "fibrosis", "scarring", "calcified granuloma", "hilar prominence", "subpleural reticulation",
+    "traction bronchiectasis", "pleural thickening", "pleural plaque", "rib fracture"
+  ],
+
+  "findings_neuro": [
+    "infarct", "acute infarct", "chronic infarct", "ischemia", "hemorrhage", "intracerebral hemorrhage",
+    "subarachnoid hemorrhage", "subdural hematoma", "epidural hematoma", "intraventricular hemorrhage",
+    "edema", "vasogenic edema", "cytotoxic edema", "mass effect", "midline shift", "herniation",
+    "hydrocephalus", "ventriculomegaly", "encephalomalacia", "gliosis", "demyelination", "white matter lesion",
+    "microangiopathy", "small vessel ischemic change", "lacunar infarct", "diffusion restriction",
+    "ring enhancement", "leptomeningeal enhancement", "extra-axial collection", "pneumocephalus",
+    "calcification", "atrophy", "volume loss", "space-occupying lesion", "aneurysm", "arteriovenous malformation"
+  ],
+
+  "findings_abdomen": [
+    "hepatomegaly", "splenomegaly", "fatty liver", "hepatic steatosis", "cirrhosis", "hepatic lesion",
+    "hemangioma", "hepatic cyst", "cholelithiasis", "gallstone", "cholecystitis", "gallbladder wall thickening",
+    "pericholecystic fluid", "biliary dilatation", "choledocholithiasis", "pancreatitis", "pseudocyst",
+    "nephrolithiasis", "renal calculus", "hydronephrosis", "hydroureteronephrosis", "renal cyst",
+    "simple cyst", "complex cyst", "angiomyolipoma", "ascites", "free fluid", "free air", "pneumoperitoneum",
+    "bowel obstruction", "bowel wall thickening", "ileus", "diverticulosis", "diverticulitis", "appendicitis",
+    "lymphadenopathy", "mass", "abscess", "collection", "fistula", "wall thickening", "stranding",
+    "fat stranding", "perinephric stranding"
+  ],
+
+  "findings_msk": [
+    "fracture", "comminuted fracture", "displaced fracture", "nondisplaced fracture", "avulsion fracture",
+    "stress fracture", "pathological fracture", "dislocation", "subluxation", "osteoarthritis", "osteophyte",
+    "joint effusion", "joint space narrowing", "subchondral cyst", "subchondral sclerosis", "erosion",
+    "osteopenia", "osteoporosis", "osteomyelitis", "osteonecrosis", "avascular necrosis", "bone marrow edema",
+    "lytic lesion", "sclerotic lesion", "periosteal reaction", "soft-tissue swelling", "soft-tissue mass",
+    "meniscal tear", "ligament tear", "tendon tear", "tendinopathy", "tenosynovitis", "bursitis",
+    "rotator cuff tear", "labral tear", "chondral defect", "loose body", "enthesophyte"
+  ],
+
+  "pathology_general": [
+    "neoplasm", "tumor", "benign", "malignant", "metastasis", "metastases", "metastatic", "carcinoma",
+    "adenocarcinoma", "squamous cell carcinoma", "sarcoma", "lymphoma", "leukemia", "cyst", "abscess",
+    "granuloma", "hematoma", "edema", "inflammation", "infection", "ischemia", "infarction", "necrosis",
+    "fibrosis", "calcification", "ossification", "hemorrhage", "thrombosis", "embolism", "aneurysm",
+    "stenosis", "occlusion", "atrophy", "hypertrophy", "hyperplasia", "dysplasia", "atelectasis",
+    "consolidation", "effusion", "ascites", "lymphadenopathy", "adenopathy", "mass", "lesion", "nodule"
+  ],
+
+  "contrast_agents": [
+    "iodinated contrast", "nonionic contrast", "gadolinium", "gadolinium-based contrast agent",
+    "intravenous contrast", "oral contrast", "rectal contrast", "barium", "barium sulfate", "iodine",
+    "microbubble contrast", "contrast-enhanced", "post-contrast", "delayed enhancement", "extravasation"
+  ],
+
+  "impression_and_report_phrases": [
+    "no significant abnormality detected", "within normal limits", "unremarkable", "no acute abnormality",
+    "no evidence of", "suggestive of", "consistent with", "compatible with", "cannot be excluded",
+    "differential diagnosis", "clinical correlation recommended", "recommend follow-up",
+    "interval change", "no interval change", "stable", "stable appearance", "progression", "regression",
+    "favor", "likely represents", "indeterminate", "incidental finding", "correlate clinically",
+    "as above", "see findings", "comparison is made with", "redemonstrated", "newly seen", "resolved"
+  ],
+
+  "common_abbreviations": [
+    "ap", "pa", "lat", "ct", "mri", "usg", "us", "cxr", "kub", "ivp", "hrct", "cta", "mra", "mrcp",
+    "dwi", "adc", "flair", "stir", "ggo", "copd", "ild", "pe", "dvt", "avn", "acl", "pcl", "mcl", "lcl",
+    "ihbr", "cbd", "gb", "rk", "lk", "ub", "pod", "cmd", "efw", "ga", "edd", "fhr", "bpd", "hc", "ac",
+    "fl", "hu", "ncct", "cect", "nad", "nsa", "wnl", "s/o", "c/w", "f/u"
+  ]
+}
