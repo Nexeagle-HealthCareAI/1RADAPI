@@ -31,10 +31,13 @@ public record AiAssistResult(bool Success, string? Html, string? Error);
 
 public class AiAssistCommandHandler : IRequestHandler<AiAssistCommand, AiAssistResult>
 {
-    private readonly IReportAiService _ai;
+    // The report-editor co-pilot runs on Claude Haiku (IAnthropicService) — the
+    // same model the voice reporter uses — rather than Gemini Flash, which was
+    // hitting free-tier rate limits.
+    private readonly IAnthropicService _ai;
     private readonly IApplicationDbContext _context;
 
-    public AiAssistCommandHandler(IReportAiService ai, IApplicationDbContext context)
+    public AiAssistCommandHandler(IAnthropicService ai, IApplicationDbContext context)
     {
         _ai = ai;
         _context = context;
@@ -89,10 +92,11 @@ public class AiAssistCommandHandler : IRequestHandler<AiAssistCommand, AiAssistR
         catch (Exception ex)
         {
             // Fallback: never block report delivery on a third-party API — the
-            // caller keeps the raw text and can format manually. Turn the raw
-            // provider rate-limit (429) into a clear, actionable message.
-            var message = ex.Message.Contains("429")
-                ? "The AI assistant is busy right now (rate limit). Please wait a few seconds and try again."
+            // caller keeps the raw text and can format manually. Turn a transient
+            // provider rate-limit / overload into a clear, actionable message.
+            var busy = ex.Message.Contains("429") || ex.Message.Contains("529") || ex.Message.Contains("503");
+            var message = busy
+                ? "The AI assistant is busy right now. Please wait a few seconds and try again."
                 : ex.Message;
             return new AiAssistResult(false, null, message);
         }

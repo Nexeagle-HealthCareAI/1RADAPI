@@ -42,12 +42,16 @@ public record RadAiResult(
 
 public class RadAiCommandHandler : IRequestHandler<RadAiCommand, RadAiResult>
 {
-    private readonly IReportAiService _ai;
+    // Typed questions run on Claude Haiku; spoken questions need Gemini's inline
+    // audio transcription (Claude's API can't take audio).
+    private readonly IReportAiService _gemini;
+    private readonly IAnthropicService _claude;
     private readonly IRadAiKnowledge _knowledge;
 
-    public RadAiCommandHandler(IReportAiService ai, IRadAiKnowledge knowledge)
+    public RadAiCommandHandler(IReportAiService gemini, IAnthropicService claude, IRadAiKnowledge knowledge)
     {
-        _ai = ai;
+        _gemini = gemini;
+        _claude = claude;
         _knowledge = knowledge;
     }
 
@@ -57,7 +61,9 @@ public class RadAiCommandHandler : IRequestHandler<RadAiCommand, RadAiResult>
         if (!hasAudio && string.IsNullOrWhiteSpace(request.Question))
             return Fail("Ask me something — type or use the mic.");
 
-        if (!_ai.IsConfigured || !_knowledge.IsAvailable)
+        // Each path needs its own provider configured (audio → Gemini, text → Claude).
+        var aiReady = hasAudio ? _gemini.IsConfigured : _claude.IsConfigured;
+        if (!aiReady || !_knowledge.IsAvailable)
             return Fail("RadAI isn't switched on yet. Please contact your admin.");
 
         var system = _knowledge.BuildSystemPrompt(request.Page);
@@ -85,11 +91,13 @@ public class RadAiCommandHandler : IRequestHandler<RadAiCommand, RadAiResult>
                 byte[] bytes;
                 try { bytes = Convert.FromBase64String(StripDataUrl(request.AudioBase64!)); }
                 catch { return Fail("Couldn't read the audio. Please try again or type your question."); }
-                json = await _ai.GenerateJsonAsync(system, user.ToString(), bytes, request.AudioMimeType, schema, cancellationToken);
+                // Spoken → Gemini (inline audio transcription + answer in one call).
+                json = await _gemini.GenerateJsonAsync(system, user.ToString(), bytes, request.AudioMimeType, schema, cancellationToken);
             }
             else
             {
-                json = await _ai.GenerateJsonAsync(system, user.ToString(), schema, cancellationToken);
+                // Typed → Claude Haiku.
+                json = await _claude.GenerateJsonAsync(system, user.ToString(), schema, cancellationToken);
             }
         }
         catch

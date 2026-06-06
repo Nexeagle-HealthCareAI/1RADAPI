@@ -37,7 +37,28 @@ public class AnthropicService : IAnthropicService
         _model = (section["Model"] ?? "claude-haiku-4-5").Trim();
     }
 
-    public async Task<string> GenerateAsync(string systemPrompt, string userPrompt, CancellationToken cancellationToken = default)
+    public bool IsConfigured => !string.IsNullOrWhiteSpace(_apiKey) && _apiKey != Placeholder;
+
+    public Task<string> GenerateAsync(string systemPrompt, string userPrompt, CancellationToken cancellationToken = default)
+        => SendAsync(systemPrompt, userPrompt, cancellationToken);
+
+    public Task<string> GenerateJsonAsync(string systemPrompt, string userPrompt, object? responseSchema, CancellationToken cancellationToken = default)
+    {
+        // Claude has no Gemini-style "JSON mode" flag, so steer it via the prompt:
+        // demand a single JSON object (callers strip fences + parse leniently).
+        var sys = new StringBuilder(systemPrompt);
+        sys.AppendLine();
+        sys.AppendLine();
+        sys.AppendLine("OUTPUT FORMAT: Respond with a SINGLE valid JSON object and NOTHING else — no prose, no explanation, no markdown code fences.");
+        if (responseSchema is not null)
+        {
+            sys.AppendLine("The JSON must conform to this schema:");
+            sys.AppendLine(JsonSerializer.Serialize(responseSchema));
+        }
+        return SendAsync(sys.ToString(), userPrompt, cancellationToken);
+    }
+
+    private async Task<string> SendAsync(string systemPrompt, string userPrompt, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(_apiKey))
             throw new InvalidOperationException("Anthropic API key is not configured (set Anthropic__ApiKey).");
@@ -63,18 +84,36 @@ public class AnthropicService : IAnthropicService
             }
         };
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, MessagesUrl);
-        request.Headers.Add("x-api-key", _apiKey);
-        request.Headers.Add("anthropic-version", AnthropicVersion);
-        request.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+        var json = JsonSerializer.Serialize(payload);
 
-        using var response = await _http.SendAsync(request, cancellationToken);
-        var body = await response.Content.ReadAsStringAsync(cancellationToken);
-
-        if (!response.IsSuccessStatusCode)
+        // Retry transient throttling (429) / overload (529) / availability blips
+        // (503/500) with backoff (honouring a Retry-After header when present) so
+        // a short burst doesn't surface as a hard failure mid-edit.
+        const int maxAttempts = 3;
+        string body = string.Empty;
+        for (var attempt = 1; ; attempt++)
         {
-            _logger.LogError("[Anthropic] {Status}: {Body}", (int)response.StatusCode, body);
-            throw new InvalidOperationException($"Anthropic API returned {(int)response.StatusCode}.");
+            using var request = new HttpRequestMessage(HttpMethod.Post, MessagesUrl);
+            request.Headers.Add("x-api-key", _apiKey);
+            request.Headers.Add("anthropic-version", AnthropicVersion);
+            request.Content = new StringContent(json, Encoding.UTF8, "application/json");
+
+            using var response = await _http.SendAsync(request, cancellationToken);
+            body = await response.Content.ReadAsStringAsync(cancellationToken);
+
+            if (response.IsSuccessStatusCode) break;
+
+            var status = (int)response.StatusCode;
+            var transient = status is 429 or 529 or 503 or 500;
+            if (!transient || attempt >= maxAttempts)
+            {
+                _logger.LogError("[Anthropic] {Status} (attempt {Attempt}/{Max}): {Body}", status, attempt, maxAttempts, body);
+                throw new InvalidOperationException($"Anthropic API returned {status}.");
+            }
+
+            var delay = response.Headers.RetryAfter?.Delta ?? TimeSpan.FromSeconds(Math.Pow(2, attempt - 1));
+            _logger.LogWarning("[Anthropic] {Status} (attempt {Attempt}/{Max}) — retrying in {Delay}s", status, attempt, maxAttempts, delay.TotalSeconds);
+            await Task.Delay(delay, cancellationToken);
         }
 
         // Response shape: { "content": [ { "type": "text", "text": "..." }, ... ], ... }

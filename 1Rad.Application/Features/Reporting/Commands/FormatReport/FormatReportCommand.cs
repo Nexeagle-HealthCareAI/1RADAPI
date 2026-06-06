@@ -48,11 +48,13 @@ public record FormatReportResult(
 
 public class FormatReportCommandHandler : IRequestHandler<FormatReportCommand, FormatReportResult>
 {
-    private readonly IReportAiService _ai;
+    // The report formatter runs on Claude Haiku (IAnthropicService) — text-only
+    // structured JSON, no audio — rather than Gemini Flash.
+    private readonly IAnthropicService _ai;
     private readonly IRadiologyPack _pack;
     private readonly IApplicationDbContext _context;
 
-    public FormatReportCommandHandler(IReportAiService ai, IRadiologyPack pack, IApplicationDbContext context)
+    public FormatReportCommandHandler(IAnthropicService ai, IRadiologyPack pack, IApplicationDbContext context)
     {
         _ai = ai;
         _pack = pack;
@@ -98,8 +100,12 @@ public class FormatReportCommandHandler : IRequestHandler<FormatReportCommand, F
         }
         catch (Exception ex)
         {
-            // Fallback: never block report delivery on a third-party API.
-            return Fail(ex.Message);
+            // Fallback: never block report delivery on a third-party API. Turn a
+            // transient rate-limit / overload into a clear, actionable message.
+            var busy = ex.Message.Contains("429") || ex.Message.Contains("529") || ex.Message.Contains("503");
+            return Fail(busy
+                ? "The AI formatter is busy right now. Please wait a few seconds and try again."
+                : ex.Message);
         }
 
         FormatterPayload? parsed;
