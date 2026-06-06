@@ -34,6 +34,12 @@ public static class DependencyInjection
         // provider can never hang report delivery (the handler falls back to the
         // raw text and the radiologist formats manually).
         services.AddHttpClient<IReportAiService, GeminiService>(c => c.Timeout = TimeSpan.FromSeconds(20));
+        // RadAI report formatter knowledge pack (templates + lexicon + examples),
+        // loaded once from Resources/Radiology. Singleton — pure in-memory data.
+        services.AddSingleton<IRadiologyPack, RadiologyPack>();
+        // RadAI help-desk knowledge pack (system prompt + app_knowledge.json),
+        // loaded once from Resources/RadAI. Singleton — pure in-memory data.
+        services.AddSingleton<IRadAiKnowledge, RadAiKnowledge>();
         services.AddScoped<IEmailService, EmailService>();
         services.AddScoped<IJwtProvider, JwtProvider>();
         services.AddSingleton<ITrackingTokenService, TrackingTokenService>();

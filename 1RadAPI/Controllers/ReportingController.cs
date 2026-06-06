@@ -1,5 +1,6 @@
 using _1Rad.Application.Features.Reporting.Commands.GenerateVoiceReport;
 using _1Rad.Application.Features.Reporting.Commands.AiAssist;
+using _1Rad.Application.Features.Reporting.Commands.FormatReport;
 using _1Rad.Application.Features.Reporting.Commands.DeleteKeyword;
 using _1Rad.Application.Features.Reporting.Commands.DeleteTemplate;
 using _1Rad.Application.Features.Reporting.Commands.SaveReport;
@@ -278,6 +279,39 @@ namespace _1RadAPI.Controllers
             catch (Exception ex)
             {
                 return StatusCode(500, new { success = false, error = $"AI request failed: {ex.Message}" });
+            }
+        }
+
+        /// <summary>
+        /// RadAI report formatter — structured cleanup for a known modality/test
+        /// using the knowledge pack. Returns the formatted report as editor HTML
+        /// plus corrections + flags + preserved items for the review UI. Falls back
+        /// (success=false) when the study has no template or the AI is unavailable.
+        /// </summary>
+        [HttpPost("format")]
+        public async Task<IActionResult> Format([FromBody] FormatReportCommand command)
+        {
+            try
+            {
+                var result = await _mediator.Send(command);
+                if (!result.Success)
+                    return BadRequest(new { success = false, error = result.Error ?? "Formatting failed." });
+                return Ok(new
+                {
+                    success = true,
+                    html = result.Html,
+                    data = new
+                    {
+                        formattedText = result.FormattedText,
+                        corrections = result.Corrections,
+                        flags = result.Flags,
+                        unchangedProtected = result.UnchangedProtected,
+                    },
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, error = $"Formatting failed: {ex.Message}" });
             }
         }
     }

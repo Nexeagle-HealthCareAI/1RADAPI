@@ -1,0 +1,268 @@
+{
+  "_meta": {
+    "purpose": "Grounding knowledge base for RadAI, the in-app help assistant in the 1rad application. RadAI answers user questions about HOW TO USE the app, using ONLY the content in this file. It must never invent features, buttons, or steps not described here. When a question is not covered, RadAI says it is not sure and points the user to support.",
+    "how_to_use": "Inject the relevant parts of this file into the Flash system prompt (see assistant_system_prompt.md). For a small app the whole file fits in the prompt (cache it). As it grows, switch to retrieval: embed each entry in 'modules' and 'faqs' and fetch the top matches per question.",
+    "version": "1.0",
+    "maintenance": "GROW THIS FILE from real questions. Whenever a user asks something RadAI could not answer, add an entry. Whenever the app changes, update the affected module. Keep step numbers accurate to the live UI.",
+    "language_note": "Content is written in English. RadAI translates its answer into the user's language (Hindi or English) at response time; you do NOT need a separate Hindi copy of this file."
+  },
+
+  "app": {
+    "name": "1rad",
+    "type": "Diagnostic centre management application (appointments + billing + radiology reporting)",
+    "one_line": "1rad runs the front desk and finance of a diagnostic/radiology centre: booking appointments, billing patients, tracking referral commissions, and producing radiology reports.",
+    "primary_users": ["Front-desk / reception staff", "Centre admin", "Admin doctor (can approve)", "Radiologist"],
+    "design_principle": "Front-desk staff never decide sensitive money matters - they only record a reason. Admin approves everything sensitive from one queue. One popup style, one 'pending approval' badge, one approvals page."
+  },
+
+  "glossary": [
+    { "term": "Referred by / Referrer", "meaning": "The doctor who referred the patient to the centre. Mandatory on every booking. Drives referral commission." },
+    { "term": "Supported doctor", "meaning": "The centre's own doctor associated with the case. For self-referred patients this defaults to the current centre doctor." },
+    { "term": "Self (referral)", "meaning": "Used when the patient is not referred by an outside doctor. One click sets Referred-by = Self and supported doctor = current centre doctor (editable)." },
+    { "term": "Referral Hub", "meaning": "The page that tracks each referring doctor, their referred patients, and the commission owed to them - including any reason notes recorded against an entry." },
+    { "term": "Assigned discount limit", "meaning": "The maximum discount a staff member is allowed to give without admin approval. Exceeding it triggers a confirmation popup and a mandatory reason." },
+    { "term": "Commission", "meaning": "The amount payable to a referring doctor for a referred test. Recalculated whenever the bill or discount changes." },
+    { "term": "Centre commission", "meaning": "Amount retained by the centre. When a discount exceeds the referrer's commission, the user may push the excess here instead." },
+    { "term": "Free test", "meaning": "A test marked free: payable = 0, income = 0, referral commission = 0. Requires admin approval." },
+    { "term": "Concession", "meaning": "A discount applied AFTER payment is recorded. Requires admin approval." },
+    { "term": "Approval / Pending approval", "meaning": "A sensitive change (after payment) that an admin must approve before it takes effect. Shown as a 'Pending approval' badge until decided." },
+    { "term": "Modality", "meaning": "The imaging method/equipment type - e.g. X-ray, Ultrasound (USG), CT, MRI. Used as a filter on the admin board." },
+    { "term": "Token", "meaning": "The queue number issued to a patient on booking." }
+  ],
+
+  "roles": {
+    "front_desk": {
+      "label": "Front-desk / Reception",
+      "can": ["Book appointments", "Record payments", "Apply discounts up to the assigned limit", "Request sensitive changes (which create an approval for admin)", "Search the board"],
+      "cannot": ["Approve their own or others' sensitive changes", "Edit a payment after it is recorded without admin approval", "Mark a test free without admin approval", "Cancel a paid appointment without admin approval"]
+    },
+    "admin": {
+      "label": "Centre Admin",
+      "can": ["Everything front-desk can", "Open Admin Approval and approve/reject any request", "Set assigned discount limits", "View all reports and ledgers"]
+    },
+    "admin_doctor": {
+      "label": "Admin Doctor",
+      "can": ["Approve edits and sensitive changes from the approvals page, same as admin"]
+    },
+    "radiologist": {
+      "label": "Radiologist",
+      "can": ["Review and sign radiology report drafts produced by the report formatter", "Edit findings before signing"]
+    }
+  },
+
+  "modules": [
+    {
+      "id": "booking",
+      "label": "Book an Appointment",
+      "summary": "Create a new appointment for a patient, choosing the test(s), slot, and referring doctor.",
+      "where": "Appointment page, New Appointment / Quick-book.",
+      "how_to": [
+        "Open the Appointment page and click New Appointment (or use Quick-book for speed at peak hours).",
+        "Enter the patient's phone number first - if the patient is returning, their name, age and history auto-fill.",
+        "Enter or confirm patient name and age.",
+        "Choose the test(s). Frequently-used tests appear as one-tap chips; or search by test name.",
+        "Set the Referred-by doctor. This is MANDATORY. Either click 'Self' (for non-referred patients) or start typing the doctor's name and pick from the suggestions.",
+        "Pick a time slot. If a slot is full for that modality, the system suggests the nearest available slot.",
+        "Save. A token is issued to the patient."
+      ],
+      "fields": {
+        "Phone number": "Used to look up returning patients and to send the token.",
+        "Referred by": "Mandatory. Use Self or the typeahead.",
+        "Supported doctor": "Auto-set to the current centre doctor when Self is used; can be overridden.",
+        "Test / Modality": "Pick from chips or search."
+      },
+      "rules": [
+        "Referred-by is mandatory - you cannot save a booking without it.",
+        "Slots are capped per 30-minute window per modality to flatten the 10:30 AM to 1 PM rush; when full, the system offers another slot."
+      ],
+      "tips": ["Always type the phone number first - it auto-fills returning patients and saves time.", "Use the test chips instead of searching for the common tests."]
+    },
+    {
+      "id": "referred_by",
+      "label": "Setting 'Referred By' (Self button and typeahead)",
+      "summary": "How to fill the mandatory referring-doctor field quickly.",
+      "where": "Inside the booking form, 'Referred by' field.",
+      "how_to": [
+        "If the patient came on their own (no outside doctor), click the 'Self' button. This sets Referred-by = Self and the supported doctor to the current centre doctor.",
+        "To override the supported doctor, open its dropdown and pick a different centre doctor.",
+        "If the patient was referred by a doctor, start typing the doctor's name. After 2 to 3 letters, suggestions appear; the centre's most-used doctors show at the top. Pick one.",
+        "If the doctor is new, use 'Add new doctor' so booking is never blocked."
+      ],
+      "rules": ["This field cannot be left empty.", "Getting the referrer right matters because commission is paid to this doctor."],
+      "faq_refs": ["how_change_referrer"]
+    },
+    {
+      "id": "billing",
+      "label": "Billing and Discounts",
+      "summary": "Record charges, apply discounts, and take payment for an appointment.",
+      "where": "Billing page (opened from an appointment).",
+      "how_to": [
+        "Open the appointment and go to Billing.",
+        "Confirm the tests and amounts.",
+        "Enter a discount if applicable.",
+        "Record the payment (cash/UPI/card). The appointment status updates to paid.",
+        "You can also save an appointment as 'payment pending' if the patient will pay later, so the desk is not blocked."
+      ],
+      "discount_rules": [
+        "If the discount is within your assigned limit, it applies normally.",
+        "If the discount EXCEEDS your assigned limit, a popup appears asking you to confirm and to enter a REASON. The reason is mandatory; it is stored and shown in the Referral Hub against the referred doctor.",
+        "If the discount also EXCEEDS the referrer's total commission, the popup gives a choice: (a) Continue anyway - the referrer's commission becomes 0; or (b) Add to centre - the referrer's commission becomes 0 and the leftover excess is added to the centre's commission."
+      ],
+      "faq_refs": ["why_discount_popup", "what_is_add_to_centre"]
+    },
+    {
+      "id": "approvals",
+      "label": "Approvals (Admin Approval)",
+      "summary": "Sensitive changes made AFTER payment need admin approval. They wait in one queue until an admin or admin doctor approves them.",
+      "where": "Admin Approval page (admins and admin doctors only).",
+      "what_needs_approval": [
+        "Editing a payment after it is recorded",
+        "Cancelling an appointment after payment (patient left without the test)",
+        "Changing the referred-by after payment",
+        "Marking a test free",
+        "Applying a concession (discount after payment)"
+      ],
+      "how_to_request": [
+        "Attempt the action as normal (e.g. edit the payment).",
+        "A popup says it needs admin approval and asks for a mandatory reason.",
+        "Submit. A 'Pending approval' badge appears on the appointment. Nothing changes yet - you can move on to the next patient.",
+        "An admin reviews it later from Admin Approval."
+      ],
+      "how_to_approve": [
+        "Open Admin Approval.",
+        "Filter by type if needed (payment edit, cancel, referrer change, free test, concession).",
+        "Each request shows old vs new values and the reason.",
+        "Click Approve to apply the change automatically, or Reject to leave things unchanged."
+      ],
+      "rules": [
+        "Front-desk staff cannot approve - only admin or admin doctor.",
+        "Records are never deleted; a cancelled paid appointment is voided/refunded and the commission reversed, keeping the audit trail."
+      ],
+      "faq_refs": ["who_can_approve", "where_is_approvals", "how_long_approval"]
+    },
+    {
+      "id": "cancel_paid",
+      "label": "Cancel an appointment after payment",
+      "summary": "When a patient pays but leaves without the test, the appointment is cancelled with admin approval.",
+      "where": "Appointment, Cancel.",
+      "how_to": [
+        "Open the appointment and click Cancel.",
+        "Enter the mandatory reason (e.g. 'patient left without test').",
+        "Submit - this creates an approval request; the appointment shows 'Pending approval'.",
+        "After an admin approves, the appointment is cancelled, the payment is refunded/voided, and the referral commission is reversed. The record is kept, not deleted."
+      ]
+    },
+    {
+      "id": "change_referrer",
+      "label": "Change the Referred-by doctor",
+      "summary": "Update who referred the patient so commission goes to the correct doctor.",
+      "where": "Appointment, edit Referred-by.",
+      "how_to": [
+        "Open the appointment and edit the Referred-by field.",
+        "If payment is NOT yet done, the change applies immediately.",
+        "If payment IS already done, it creates an approval request with a mandatory reason; after admin approval the commission moves from the old doctor to the new one (a reversal plus a new entry, so history stays accurate)."
+      ],
+      "faq_refs": ["how_change_referrer"]
+    },
+    {
+      "id": "free_test",
+      "label": "Mark a test as Free",
+      "summary": "Make a test free - no payable, no income, no referral commission.",
+      "where": "Billing, Mark Free.",
+      "how_to": [
+        "Open the bill and choose Mark Free.",
+        "Enter the mandatory reason.",
+        "Submit - this needs admin approval.",
+        "After approval, payable, income and commission are all set to 0, but the bill is kept and still appears in reports as a free test."
+      ]
+    },
+    {
+      "id": "concession",
+      "label": "Concession (discount after payment)",
+      "summary": "Reduce the patient's charge after payment is already recorded.",
+      "where": "Billing, Concession.",
+      "how_to": [
+        "Open the paid bill and choose Concession.",
+        "Enter the new discount and the mandatory reason.",
+        "Submit - needs admin approval.",
+        "After approval the discount applies, the difference is refunded, and commission is recalculated (which may itself trigger the discount-vs-commission choice)."
+      ]
+    },
+    {
+      "id": "referral_hub",
+      "label": "Referral Hub",
+      "summary": "See each referring doctor, their referred patients, and the commission owed - plus any reason notes recorded on a booking.",
+      "where": "Referral Hub page.",
+      "how_to": [
+        "Open the Referral Hub.",
+        "Browse or search by doctor name to see that doctor's referred patients and total commission.",
+        "Reasons captured during over-limit discounts appear against the referred patient's entry."
+      ]
+    },
+    {
+      "id": "admin_board",
+      "label": "Admin Board and Search",
+      "summary": "Overview board for admins with search and filters.",
+      "where": "Admin board.",
+      "how_to": [
+        "Open the Admin board.",
+        "Use the filter bar to search by referred-doctor name, by test name, and by modality (dropdown). Filters combine together.",
+        "Use 'Clear filters' to reset."
+      ]
+    },
+    {
+      "id": "report_formatter",
+      "label": "Radiology Report Formatting (AI)",
+      "summary": "The radiologist's rough findings are auto-organized, spell-checked and styled into a clean report draft for review.",
+      "where": "Report screen for a completed test.",
+      "how_to": [
+        "Open the report screen and enter or dictate the findings.",
+        "Run the formatter - it returns a structured draft with corrections highlighted in yellow and anything uncertain flagged in red.",
+        "The radiologist reviews the highlights, edits if needed, and signs. Nothing is finalized without the radiologist's sign-off."
+      ],
+      "rules": ["The AI only reorganizes and corrects wording - it never adds, removes, or changes clinical findings or measurements."]
+    },
+    {
+      "id": "radai",
+      "label": "RadAI (this assistant)",
+      "summary": "The floating help assistant. Ask it how to do anything in 1rad by voice, by tapping a suggested question, or by typing.",
+      "where": "Floating button, available on every screen.",
+      "how_to": [
+        "Tap the floating RadAI button.",
+        "Speak your question (in Hindi or English), tap a suggested question, or type it.",
+        "RadAI answers in text and reads it aloud in the language you used. Tap stop to silence it, or replay to hear again."
+      ]
+    }
+  ],
+
+  "faqs": [
+    { "id": "why_discount_popup", "q": "Why did a popup appear when I gave a discount?", "a": "Because the discount was higher than your assigned limit. The popup asks you to confirm and give a reason. The reason is saved and shown in the Referral Hub against the referred doctor." },
+    { "id": "what_is_add_to_centre", "q": "What does 'Add to centre' mean in the discount popup?", "a": "It appears when the discount is larger than the referring doctor's total commission. Choosing 'Add to centre' sets the doctor's commission to 0 and adds the leftover excess to the centre's commission instead." },
+    { "id": "who_can_approve", "q": "Who can approve a change?", "a": "Only an admin or an admin doctor. Front-desk staff can request a change (with a reason) but cannot approve it." },
+    { "id": "where_is_approvals", "q": "Where do I approve pending changes?", "a": "Open the Admin Approval page. All pending requests appear there; you can filter by type." },
+    { "id": "how_long_approval", "q": "I submitted a change but nothing happened. Why?", "a": "Sensitive changes after payment need admin approval. Your request shows a 'Pending approval' badge and takes effect only after an admin approves it from Admin Approval. You can continue serving the next patient meanwhile." },
+    { "id": "how_change_referrer", "q": "How do I change who referred the patient?", "a": "Edit the Referred-by field on the appointment. Before payment it changes immediately. After payment it needs admin approval, and once approved the commission moves to the correct doctor." },
+    { "id": "referrer_mandatory", "q": "Why won't it let me book without a referrer?", "a": "Referred-by is mandatory on every booking. If the patient came on their own, click 'Self'. Otherwise type the referring doctor's name and pick from the list." },
+    { "id": "make_free", "q": "How do I make a test free?", "a": "Open the bill, choose Mark Free, and give a reason. It needs admin approval. After approval, payable, income and commission all become 0, and it still appears in reports as a free test." },
+    { "id": "edit_payment", "q": "Can I edit a payment after recording it?", "a": "Yes, but it needs admin approval. Make the edit, give a reason, and it waits as 'Pending approval' until an admin approves it from Admin Approval." },
+    { "id": "slot_full", "q": "The time slot I wanted is full. What do I do?", "a": "Slots are limited per modality to manage the rush. The system suggests the nearest available slot - pick one of those." },
+    { "id": "returning_patient", "q": "How do I book faster for a patient who has visited before?", "a": "Type their phone number first. The app fills in their name, age and history automatically." }
+  ],
+
+  "support_fallback": {
+    "when": "Use this when the user's question is not answered by anything above, or is about a problem rather than how-to (errors, bugs, account access, billing disputes).",
+    "message": "I'm not sure about that one. For this, please contact your centre admin or the 1rad support team so they can help you directly.",
+    "never": "Never invent a feature, button, menu, or step that is not described in this file. If unsure, use the support fallback."
+  },
+
+  "suggested_chips": [
+    "How do I book an appointment?",
+    "How do I add a discount?",
+    "Why did a discount popup appear?",
+    "How do I cancel an appointment after payment?",
+    "How do I change who referred the patient?",
+    "How do I mark a test as free?",
+    "Where do I approve pending changes?",
+    "How do I search by doctor or modality?"
+  ]
+}

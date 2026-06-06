@@ -63,6 +63,58 @@ public class GeminiService : IReportAiService
             generationConfig = new { temperature = 0.2, maxOutputTokens = 4096 }
         };
 
+        return await PostAsync(payload, cancellationToken);
+    }
+
+    public async Task<string> GenerateJsonAsync(string systemPrompt, string userPrompt, object? responseSchema, CancellationToken cancellationToken = default)
+    {
+        if (!IsConfigured)
+            throw new InvalidOperationException("Gemini API key is not configured (set Gemini__ApiKey).");
+
+        // Structured output: force JSON, low temperature for deterministic
+        // formatting, and (when supplied) constrain the shape with responseSchema.
+        object generationConfig = responseSchema is null
+            ? new { temperature = 0.1, maxOutputTokens = 8192, responseMimeType = "application/json" }
+            : new { temperature = 0.1, maxOutputTokens = 8192, responseMimeType = "application/json", responseSchema };
+
+        var payload = new
+        {
+            system_instruction = new { parts = new[] { new { text = systemPrompt } } },
+            contents = new[] { new { role = "user", parts = new[] { new { text = userPrompt } } } },
+            generationConfig
+        };
+
+        _logger.LogInformation("[Gemini] structured call: model={Model}, schema={HasSchema}", _model, responseSchema is not null);
+        return await PostAsync(payload, cancellationToken);
+    }
+
+    public async Task<string> GenerateJsonAsync(string systemPrompt, string userPrompt, byte[]? audio, string? audioMimeType, object? responseSchema, CancellationToken cancellationToken = default)
+    {
+        if (!IsConfigured)
+            throw new InvalidOperationException("Gemini API key is not configured (set Gemini__ApiKey).");
+
+        var parts = new List<object> { new { text = userPrompt } };
+        var hasAudio = audio is { Length: > 0 };
+        if (hasAudio)
+            parts.Add(new { inline_data = new { mime_type = string.IsNullOrWhiteSpace(audioMimeType) ? "audio/webm" : audioMimeType, data = Convert.ToBase64String(audio!) } });
+
+        object generationConfig = responseSchema is null
+            ? new { temperature = 0.2, maxOutputTokens = 4096, responseMimeType = "application/json" }
+            : new { temperature = 0.2, maxOutputTokens = 4096, responseMimeType = "application/json", responseSchema };
+
+        var payload = new
+        {
+            system_instruction = new { parts = new[] { new { text = systemPrompt } } },
+            contents = new[] { new { role = "user", parts = parts.ToArray() } },
+            generationConfig
+        };
+
+        _logger.LogInformation("[Gemini] structured+audio call: model={Model}, audio={Audio}, schema={HasSchema}", _model, hasAudio, responseSchema is not null);
+        return await PostAsync(payload, cancellationToken);
+    }
+
+    private async Task<string> PostAsync(object payload, CancellationToken cancellationToken)
+    {
         // Key in the query string (Google's scheme). Never logged.
         var url = $"{Base}/{_model}:generateContent?key={_apiKey}";
         using var request = new HttpRequestMessage(HttpMethod.Post, url)

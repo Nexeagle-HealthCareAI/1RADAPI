@@ -129,6 +129,22 @@ public class AiAssistCommandHandler : IRequestHandler<AiAssistCommand, AiAssistR
                 baseRules + " Make the input more concise while keeping every clinical fact, " +
                 "measurement and laterality.",
                 "Return the shortened version of the INPUT."),
+            "polish" => (
+                baseRules + " The input is a FULL radiology report draft. Clean it up with a LIGHT touch — do not " +
+                "rewrite the radiologist's style:\n" +
+                "1. SPELLING & GRAMMAR: correct spelling, grammar and punctuation throughout. Use BRITISH English " +
+                "(en-GB) spelling — e.g. haemorrhage, oedema, calibre, visualised, grey, tumour, foetal. Never " +
+                "Americanise.\n" +
+                "2. STRUCTURE: if the report ALREADY has sections (headings like TECHNIQUE / FINDINGS / IMPRESSION, or " +
+                "organ labels such as 'LIVER:', 'KIDNEYS:'), KEEP that exact structure and section order — only tidy the " +
+                "wording inside each section and make the EXISTING headings consistent (uppercase, bold, ending with a " +
+                "colon). If the report is FREEFORM with no headings, DO NOT add sections or reorder anything — just fix " +
+                "the spelling and grammar and leave the radiologist's flow intact.\n" +
+                "3. SPACING: single line spacing — one statement per paragraph, and NO empty/blank paragraphs between " +
+                "lines.\n" +
+                "Keep every clinical fact, measurement, unit and laterality (left/right) exactly as written. Never add, " +
+                "remove, or infer findings, and never write or alter an IMPRESSION the radiologist did not write.",
+                "Return only the cleaned report as clean HTML using <p> and <strong> (no markdown, no commentary)."),
             "restructure" => (
                 baseRules + " The input is a full radiology report draft — possibly unstructured dictation or " +
                 "loose notes. Reorganise it into a clean, professional report: a TECHNIQUE/PROTOCOL section only if " +
@@ -154,6 +170,9 @@ public class AiAssistCommandHandler : IRequestHandler<AiAssistCommand, AiAssistR
         var text = aiText.Trim();
         var fence = Regex.Match(text, "^```(?:[a-zA-Z]+)?\\s*\\n([\\s\\S]*?)\\n```\\s*$");
         if (fence.Success) text = fence.Groups[1].Value.Trim();
-        return text;
+        // Single line spacing: drop empty / whitespace-only paragraphs so the
+        // report doesn't come back double-spaced with blank rows between lines.
+        text = Regex.Replace(text, @"<p[^>]*>(?:\s|&nbsp;|<br\s*/?>)*</p>", string.Empty, RegexOptions.IgnoreCase);
+        return text.Trim();
     }
 }

@@ -1,0 +1,280 @@
+{
+  "_meta": {
+    "purpose": "Per-modality structured report skeletons. The AI's job is to FILL this known structure with the radiologist's dictated findings, not invent a structure. Each template lists the ordered sections, the organ/region order within FINDINGS, and the standard 'normal' default line for each region. When the radiologist's input says a region is normal (or is silent on it and your workflow defaults to normal), use the provided normal_default line verbatim. Never auto-insert a normal line for a region the radiologist did not address unless your workflow explicitly opts in.",
+    "version": "1.0",
+    "grounding": "Structure follows RSNA RadReport conventions (Clinical history / Technique / Comparison / Findings / Impression) and standard organ-order conventions for each modality.",
+    "house_style": "see radiology_lexicon.json -> spelling_style. House style is UK (British) spelling; the 'spelling' key below is 'UK'."
+  },
+
+  "spelling": "UK",
+
+  "modalities": {
+
+    "XRAY": {
+      "label": "X-ray (plain radiograph)",
+      "sections": ["CLINICAL HISTORY", "TECHNIQUE", "COMPARISON", "FINDINGS", "IMPRESSION"],
+      "tests": {
+        "XRAY_CHEST_PA": {
+          "label": "X-ray Chest PA view",
+          "technique_default": "Frontal (PA) view of the chest.",
+          "findings_order": ["Lungs", "Pleura", "Heart and mediastinum", "Hila", "Bones (thoracic cage)", "Soft tissues", "Diaphragm and costophrenic angles"],
+          "normal_defaults": {
+            "Lungs": "Both lung fields are clear. No focal consolidation, mass, or cavitation.",
+            "Pleura": "No pleural effusion or pneumothorax.",
+            "Heart and mediastinum": "Cardiac size is within normal limits. Mediastinal contours are normal.",
+            "Hila": "Both hila are normal in size, density, and position.",
+            "Bones (thoracic cage)": "The visualised bony thoracic cage is normal.",
+            "Soft tissues": "Soft tissues are unremarkable.",
+            "Diaphragm and costophrenic angles": "Both domes of the diaphragm are normal. Costophrenic angles are clear."
+          },
+          "normal_impression": "No significant abnormality detected in the chest."
+        },
+        "XRAY_KUB": {
+          "label": "X-ray KUB (plain abdomen)",
+          "technique_default": "Supine plain radiograph of the abdomen (KUB).",
+          "findings_order": ["Bowel gas pattern", "Abnormal calcification / calculi", "Renal and psoas outlines", "Bones (lumbar spine, pelvis)", "Soft tissues"],
+          "normal_defaults": {
+            "Bowel gas pattern": "Normal bowel gas pattern. No dilated bowel loops or air-fluid levels to suggest obstruction.",
+            "Abnormal calcification / calculi": "No abnormal calcification or radiopaque calculus seen along the renal or ureteric tract.",
+            "Renal and psoas outlines": "Renal and psoas outlines are preserved.",
+            "Bones (lumbar spine, pelvis)": "Visualised bones are normal.",
+            "Soft tissues": "Soft tissues are unremarkable."
+          },
+          "normal_impression": "No significant abnormality detected on the plain abdominal radiograph."
+        },
+        "XRAY_SPINE": {
+          "label": "X-ray Spine (AP and lateral)",
+          "technique_default": "AP and lateral views of the {{REGION}} spine.",
+          "findings_order": ["Alignment", "Vertebral bodies", "Intervertebral disc spaces", "Posterior elements", "Soft tissues"],
+          "normal_defaults": {
+            "Alignment": "Normal alignment and curvature. No listhesis.",
+            "Vertebral bodies": "Vertebral bodies are normal in height and density. No fracture or destructive lesion.",
+            "Intervertebral disc spaces": "Intervertebral disc spaces are maintained.",
+            "Posterior elements": "Posterior elements are intact.",
+            "Soft tissues": "Paravertebral soft tissues are unremarkable."
+          },
+          "normal_impression": "No significant abnormality detected in the {{REGION}} spine."
+        },
+        "XRAY_BONE_JOINT": {
+          "label": "X-ray Bone / Joint",
+          "technique_default": "AP and lateral views of the {{PART}}.",
+          "findings_order": ["Bones", "Joint", "Soft tissues"],
+          "normal_defaults": {
+            "Bones": "No fracture, dislocation, or destructive bony lesion.",
+            "Joint": "Joint space is maintained. Articular surfaces are normal.",
+            "Soft tissues": "Soft tissues are unremarkable."
+          },
+          "normal_impression": "No significant bony abnormality detected."
+        }
+      }
+    },
+
+    "USG": {
+      "label": "Ultrasound",
+      "sections": ["CLINICAL HISTORY", "TECHNIQUE", "FINDINGS", "IMPRESSION"],
+      "tests": {
+        "USG_ABDOMEN": {
+          "label": "USG Whole Abdomen",
+          "technique_default": "Real-time grey-scale ultrasonography of the abdomen was performed using a curvilinear transducer.",
+          "findings_order": ["Liver", "Gallbladder", "Common bile duct", "Pancreas", "Spleen", "Right kidney", "Left kidney", "Urinary bladder", "Aorta and IVC", "Free fluid"],
+          "normal_defaults": {
+            "Liver": "Liver is normal in size and echotexture. No focal lesion. Intrahepatic biliary radicles are not dilated. Portal vein is normal.",
+            "Gallbladder": "Gallbladder is well distended with normal wall thickness. No calculus or sludge.",
+            "Common bile duct": "Common bile duct is normal in calibre.",
+            "Pancreas": "Pancreas is normal in size and echotexture. No focal lesion or ductal dilatation. (Note if obscured by bowel gas.)",
+            "Spleen": "Spleen is normal in size and echotexture. No focal lesion.",
+            "Right kidney": "Right kidney is normal in size, position, and echotexture with maintained corticomedullary differentiation. No calculus or hydronephrosis.",
+            "Left kidney": "Left kidney is normal in size, position, and echotexture with maintained corticomedullary differentiation. No calculus or hydronephrosis.",
+            "Urinary bladder": "Urinary bladder is partially distended with normal wall. No calculus or mass.",
+            "Aorta and IVC": "Abdominal aorta and IVC are normal in calibre.",
+            "Free fluid": "No free fluid in the abdomen."
+          },
+          "normal_impression": "No significant abnormality detected on abdominal ultrasound."
+        },
+        "USG_ABDOMEN_PELVIS_F": {
+          "label": "USG Abdomen and Pelvis (Female)",
+          "technique_default": "Real-time grey-scale ultrasonography of the abdomen and pelvis was performed.",
+          "findings_order": ["Liver", "Gallbladder", "Common bile duct", "Pancreas", "Spleen", "Right kidney", "Left kidney", "Urinary bladder", "Uterus", "Endometrium", "Right ovary", "Left ovary", "Pouch of Douglas", "Free fluid"],
+          "normal_defaults": {
+            "Liver": "Liver is normal in size and echotexture. No focal lesion. IHBR not dilated.",
+            "Gallbladder": "Gallbladder is well distended. No calculus or sludge.",
+            "Common bile duct": "CBD is normal in calibre.",
+            "Pancreas": "Pancreas is normal in echotexture.",
+            "Spleen": "Spleen is normal in size and echotexture.",
+            "Right kidney": "Right kidney is normal. No calculus or hydronephrosis.",
+            "Left kidney": "Left kidney is normal. No calculus or hydronephrosis.",
+            "Urinary bladder": "Urinary bladder is normally distended with no mass or calculus.",
+            "Uterus": "Uterus is normal in size, shape, and echotexture. No focal myometrial lesion.",
+            "Endometrium": "Endometrial thickness is normal for the menstrual phase. Endometrial echo is central.",
+            "Right ovary": "Right ovary is normal in size and echotexture.",
+            "Left ovary": "Left ovary is normal in size and echotexture.",
+            "Pouch of Douglas": "No collection in the Pouch of Douglas.",
+            "Free fluid": "No free fluid."
+          },
+          "normal_impression": "No significant abnormality detected on ultrasound of the abdomen and pelvis."
+        },
+        "USG_OBSTETRIC": {
+          "label": "USG Obstetric",
+          "technique_default": "Obstetric ultrasonography was performed transabdominally.",
+          "findings_order": ["Gestational sac / foetus", "Foetal cardiac activity", "Foetal biometry", "Liquor (amniotic fluid)", "Placenta", "Cord", "Maternal adnexa", "Estimated foetal weight and gestational age"],
+          "normal_defaults": {
+            "Gestational sac / foetus": "Single live intrauterine gestation in cephalic/variable presentation.",
+            "Foetal cardiac activity": "Foetal cardiac activity is present and regular. FHR is normal.",
+            "Foetal biometry": "BPD, HC, AC, and FL are recorded.",
+            "Liquor (amniotic fluid)": "Liquor volume is adequate.",
+            "Placenta": "Placenta is {{POSITION}}, Grade {{GRADE}}, not low-lying.",
+            "Cord": "Cord shows three vessels.",
+            "Maternal adnexa": "No adnexal mass.",
+            "Estimated foetal weight and gestational age": "EFW and gestational age are recorded with the corresponding EDD."
+          },
+          "normal_impression": "Single live intrauterine gestation of {{GA}} weeks. Normal study for gestational age."
+        },
+        "USG_KUB": {
+          "label": "USG KUB (Kidneys, Ureters, Bladder)",
+          "technique_default": "Real-time grey-scale ultrasonography of the kidneys, ureters, and bladder was performed.",
+          "findings_order": ["Right kidney", "Left kidney", "Ureters", "Urinary bladder", "Prostate (if male)", "Post-void residual"],
+          "normal_defaults": {
+            "Right kidney": "Right kidney is normal in size and echotexture. No calculus or hydronephrosis.",
+            "Left kidney": "Left kidney is normal in size and echotexture. No calculus or hydronephrosis.",
+            "Ureters": "Ureters are not dilated.",
+            "Urinary bladder": "Urinary bladder is normally distended with normal wall. No calculus or mass.",
+            "Prostate (if male)": "Prostate is normal in size and echotexture.",
+            "Post-void residual": "Post-void residual urine is insignificant."
+          },
+          "normal_impression": "No significant abnormality detected in the KUB region."
+        },
+        "USG_THYROID": {
+          "label": "USG Thyroid / Neck",
+          "technique_default": "High-resolution ultrasonography of the thyroid and neck was performed using a linear transducer.",
+          "findings_order": ["Right lobe", "Left lobe", "Isthmus", "Vascularity", "Cervical lymph nodes"],
+          "normal_defaults": {
+            "Right lobe": "Right lobe of the thyroid is normal in size and echotexture. No focal nodule.",
+            "Left lobe": "Left lobe of the thyroid is normal in size and echotexture. No focal nodule.",
+            "Isthmus": "Isthmus is normal in thickness.",
+            "Vascularity": "Normal parenchymal vascularity on colour Doppler.",
+            "Cervical lymph nodes": "No significantly enlarged cervical lymph node."
+          },
+          "normal_impression": "Normal thyroid ultrasound. No focal lesion."
+        }
+      }
+    },
+
+    "CT": {
+      "label": "Computed Tomography",
+      "sections": ["CLINICAL HISTORY", "TECHNIQUE", "COMPARISON", "FINDINGS", "IMPRESSION"],
+      "tests": {
+        "CT_BRAIN_PLAIN": {
+          "label": "CT Brain (plain / non-contrast)",
+          "technique_default": "Axial non-contrast CT sections of the brain were obtained from the skull base to the vertex.",
+          "findings_order": ["Brain parenchyma", "Ventricular system", "Extra-axial spaces", "Midline / mass effect", "Grey-white differentiation", "Posterior fossa", "Bones (skull)", "Paranasal sinuses and mastoids"],
+          "normal_defaults": {
+            "Brain parenchyma": "Normal attenuation of the cerebral and cerebellar parenchyma. No focal area of altered attenuation, infarct, or haemorrhage.",
+            "Ventricular system": "Ventricular system is normal in size and configuration.",
+            "Extra-axial spaces": "No extra-axial collection.",
+            "Midline / mass effect": "Midline structures are central. No mass effect.",
+            "Grey-white differentiation": "Grey-white matter differentiation is preserved.",
+            "Posterior fossa": "Posterior fossa structures are normal.",
+            "Bones (skull)": "Visualised calvarium and skull base are normal. No fracture.",
+            "Paranasal sinuses and mastoids": "Visualised paranasal sinuses and mastoid air cells are clear."
+          },
+          "normal_impression": "No significant abnormality detected on plain CT of the brain."
+        },
+        "CT_ABDOMEN": {
+          "label": "CT Abdomen and Pelvis",
+          "technique_default": "Axial CT sections of the abdomen and pelvis were obtained {{WITH_OR_WITHOUT}} intravenous contrast.",
+          "findings_order": ["Liver", "Gallbladder and biliary tree", "Pancreas", "Spleen", "Adrenals", "Kidneys and ureters", "Urinary bladder", "Bowel", "Peritoneum / free fluid", "Lymph nodes", "Vessels", "Bones"],
+          "normal_defaults": {
+            "Liver": "Liver is normal in size and attenuation. No focal lesion. No intrahepatic biliary dilatation.",
+            "Gallbladder and biliary tree": "Gallbladder is normal. No calculus. Biliary tree is not dilated.",
+            "Pancreas": "Pancreas is normal in size and attenuation. No focal lesion or ductal dilatation.",
+            "Spleen": "Spleen is normal in size and attenuation. No focal lesion.",
+            "Adrenals": "Both adrenal glands are normal.",
+            "Kidneys and ureters": "Both kidneys are normal in size, position, and enhancement. No calculus or hydronephrosis.",
+            "Urinary bladder": "Urinary bladder is normal.",
+            "Bowel": "Visualised bowel loops are normal in calibre and wall thickness.",
+            "Peritoneum / free fluid": "No free fluid or free air.",
+            "Lymph nodes": "No significantly enlarged abdominal or pelvic lymph node.",
+            "Vessels": "Abdominal aorta and major vessels are normal.",
+            "Bones": "No suspicious bony lesion."
+          },
+          "normal_impression": "No significant abnormality detected on CT of the abdomen and pelvis."
+        },
+        "CT_CHEST": {
+          "label": "CT Chest / Thorax",
+          "technique_default": "Axial CT sections of the thorax were obtained {{WITH_OR_WITHOUT}} intravenous contrast.",
+          "findings_order": ["Lung parenchyma", "Airways", "Pleura", "Mediastinum", "Heart and pericardium", "Hila and lymph nodes", "Chest wall and bones", "Upper abdomen (visualised)"],
+          "normal_defaults": {
+            "Lung parenchyma": "Both lungs are normally expanded and clear. No focal consolidation, nodule, or mass.",
+            "Airways": "Trachea and major bronchi are normal.",
+            "Pleura": "No pleural effusion or pneumothorax.",
+            "Mediastinum": "Mediastinum is normal. No mass.",
+            "Heart and pericardium": "Heart size is normal. No pericardial effusion.",
+            "Hila and lymph nodes": "No hilar or mediastinal lymphadenopathy.",
+            "Chest wall and bones": "Chest wall and visualised bones are normal.",
+            "Upper abdomen (visualised)": "Visualised upper abdomen is unremarkable."
+          },
+          "normal_impression": "No significant abnormality detected on CT of the thorax."
+        }
+      }
+    },
+
+    "MRI": {
+      "label": "Magnetic Resonance Imaging",
+      "sections": ["CLINICAL HISTORY", "TECHNIQUE", "COMPARISON", "FINDINGS", "IMPRESSION"],
+      "tests": {
+        "MRI_BRAIN_PLAIN": {
+          "label": "MRI Brain (plain)",
+          "technique_default": "Multiplanar, multisequence MRI of the brain was performed (T1W, T2W, FLAIR, DWI, and GRE sequences).",
+          "findings_order": ["Brain parenchyma", "Grey-white differentiation", "Ventricular system", "Extra-axial spaces", "Midline structures", "Posterior fossa and brainstem", "Sella and parasellar region", "Vascular flow voids", "Orbits, paranasal sinuses, mastoids"],
+          "normal_defaults": {
+            "Brain parenchyma": "Normal signal intensity of the cerebral and cerebellar parenchyma on all sequences. No focal signal abnormality, restricted diffusion, or abnormal enhancement.",
+            "Grey-white differentiation": "Grey-white matter differentiation is preserved.",
+            "Ventricular system": "Ventricular system is normal in size and configuration.",
+            "Extra-axial spaces": "No extra-axial collection.",
+            "Midline structures": "Midline structures are central.",
+            "Posterior fossa and brainstem": "Posterior fossa, brainstem, and cerebellum are normal.",
+            "Sella and parasellar region": "Sella and parasellar region are normal.",
+            "Vascular flow voids": "Major intracranial vascular flow voids are preserved.",
+            "Orbits, paranasal sinuses, mastoids": "Visualised orbits, paranasal sinuses, and mastoids are normal."
+          },
+          "normal_impression": "No significant abnormality detected on MRI of the brain."
+        },
+        "MRI_LUMBAR_SPINE": {
+          "label": "MRI Lumbar Spine",
+          "technique_default": "Multiplanar T1W, T2W, and STIR sequences of the lumbosacral spine were obtained in sagittal and axial planes.",
+          "findings_order": ["Alignment", "Vertebral bodies and marrow", "Intervertebral discs (level-wise)", "Spinal cord and conus", "Thecal sac and canal", "Neural foramina", "Posterior elements / facet joints", "Paraspinal soft tissues"],
+          "normal_defaults": {
+            "Alignment": "Normal lumbar lordosis and vertebral alignment. No listhesis.",
+            "Vertebral bodies and marrow": "Vertebral bodies are normal in height and marrow signal. No collapse or marrow lesion.",
+            "Intervertebral discs (level-wise)": "Intervertebral discs show normal height and signal. No disc bulge, protrusion, or herniation at any level.",
+            "Spinal cord and conus": "Visualised spinal cord and conus medullaris are normal in signal. Conus terminates at the normal level.",
+            "Thecal sac and canal": "Thecal sac and spinal canal are normal in calibre. No canal stenosis.",
+            "Neural foramina": "Neural foramina are normal bilaterally. No nerve root compression.",
+            "Posterior elements / facet joints": "Facet joints and posterior elements are normal.",
+            "Paraspinal soft tissues": "Paraspinal soft tissues are unremarkable."
+          },
+          "normal_impression": "No significant abnormality detected on MRI of the lumbosacral spine."
+        },
+        "MRI_KNEE": {
+          "label": "MRI Knee",
+          "technique_default": "Multiplanar, multisequence MRI of the knee was performed (PD, T1W, T2W, and fat-saturated sequences).",
+          "findings_order": ["Medial meniscus", "Lateral meniscus", "Anterior cruciate ligament", "Posterior cruciate ligament", "Medial collateral ligament", "Lateral collateral ligament", "Articular cartilage", "Bones and marrow", "Joint effusion", "Extensor mechanism", "Soft tissues"],
+          "normal_defaults": {
+            "Medial meniscus": "Medial meniscus is normal in morphology and signal. No tear.",
+            "Lateral meniscus": "Lateral meniscus is normal in morphology and signal. No tear.",
+            "Anterior cruciate ligament": "ACL is intact.",
+            "Posterior cruciate ligament": "PCL is intact.",
+            "Medial collateral ligament": "MCL is intact.",
+            "Lateral collateral ligament": "LCL is intact.",
+            "Articular cartilage": "Articular cartilage is preserved.",
+            "Bones and marrow": "No marrow oedema or fracture.",
+            "Joint effusion": "No significant joint effusion.",
+            "Extensor mechanism": "Quadriceps and patellar tendons are intact.",
+            "Soft tissues": "Periarticular soft tissues are unremarkable."
+          },
+          "normal_impression": "No significant abnormality detected on MRI of the knee."
+        }
+      }
+    }
+  }
+}

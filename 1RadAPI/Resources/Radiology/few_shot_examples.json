@@ -1,0 +1,141 @@
+{
+  "_meta": {
+    "purpose": "Worked raw->formatted examples. Include 1-2 examples for the relevant modality in each prompt. These teach house style and the corrections/flags behavior far better than instructions alone. REPLACE the 'output' side of these with your own centre's actual finalized reports once you have them — your radiologist's real wording is the best teacher. Keep examples de-identified.",
+    "how_to_use": "For a given request, select examples whose modality matches. 1 matching example is usually enough with Gemini; 2 for trickier modalities. Put them after the system prompt and before the live raw_text.",
+    "version": "1.0"
+  },
+
+  "examples": [
+    {
+      "modality": "USG",
+      "test_code": "USG_ABDOMEN",
+      "input": {
+        "house_spelling": "UK",
+        "assume_unmentioned_normal": false,
+        "raw_text": "liver normal size echotexure no focal lesion ihbr not dilated. gb shows a 8 mm calculus, wall normal. cbd normal. pancreas normal. spleen normal. rt kidney 9.2 cm normal, no calculas no hydronephrosis. lt kidney mild hydronephrosis with a 6mm calculas at pelvis. no free fluid"
+      },
+      "output": {
+        "formatted_report": "TECHNIQUE:\nReal-time grey-scale ultrasonography of the abdomen was performed using a curvilinear transducer.\n\nFINDINGS:\nLiver is normal in size and echotexture. No focal lesion. Intrahepatic biliary radicles (IHBR) are not dilated.\nGallbladder shows an 8 mm calculus. Wall thickness is normal.\nCommon bile duct (CBD) is normal in calibre.\nPancreas is normal in size and echotexture.\nSpleen is normal in size and echotexture.\nRight kidney measures 9.2 cm, normal in echotexture. No calculus or hydronephrosis.\nLeft kidney shows mild hydronephrosis with a 6 mm calculus at the renal pelvis.\nNo free fluid in the abdomen.\n\nIMPRESSION:\n1. Cholelithiasis (8 mm gallbladder calculus).\n2. Left renal pelvic calculus (6 mm) with mild left hydronephrosis.",
+        "sections": {
+          "TECHNIQUE": "Real-time grey-scale ultrasonography of the abdomen was performed using a curvilinear transducer.",
+          "FINDINGS": "Liver is normal in size and echotexture. No focal lesion. Intrahepatic biliary radicles (IHBR) are not dilated.\nGallbladder shows an 8 mm calculus. Wall thickness is normal.\nCommon bile duct (CBD) is normal in calibre.\nPancreas is normal in size and echotexture.\nSpleen is normal in size and echotexture.\nRight kidney measures 9.2 cm, normal in echotexture. No calculus or hydronephrosis.\nLeft kidney shows mild hydronephrosis with a 6 mm calculus at the renal pelvis.\nNo free fluid in the abdomen.",
+          "IMPRESSION": "1. Cholelithiasis (8 mm gallbladder calculus).\n2. Left renal pelvic calculus (6 mm) with mild left hydronephrosis."
+        },
+        "corrections": [
+          { "from": "echotexure", "to": "echotexture", "type": "spelling" },
+          { "from": "calculas", "to": "calculus", "type": "spelling" },
+          { "from": "pancreas", "to": "pancreas", "type": "spelling" },
+          { "from": "ihbr", "to": "intrahepatic biliary radicles (IHBR)", "type": "abbreviation" },
+          { "from": "gb", "to": "Gallbladder", "type": "abbreviation" },
+          { "from": "cbd", "to": "Common bile duct (CBD)", "type": "abbreviation" },
+          { "from": "rt kidney", "to": "Right kidney", "type": "style" },
+          { "from": "lt kidney", "to": "Left kidney", "type": "style" },
+          { "from": "8 mm calculus, wall normal", "to": "complete sentences", "type": "grammar" }
+        ],
+        "flags": [],
+        "unchanged_protected": [
+          "8 mm (gallbladder calculus)",
+          "9.2 cm (right kidney)",
+          "6 mm (left renal pelvic calculus)",
+          "left / right laterality preserved",
+          "negations 'no calculus', 'no hydronephrosis', 'no free fluid' preserved"
+        ]
+      }
+    },
+
+    {
+      "modality": "XRAY",
+      "test_code": "XRAY_CHEST_PA",
+      "input": {
+        "house_spelling": "UK",
+        "assume_unmentioned_normal": true,
+        "raw_text": "lungs clear no consolidaton. there is mild cardiomegaly. cp angles clear. no effussion. bones nad"
+      },
+      "output": {
+        "formatted_report": "TECHNIQUE:\nFrontal (PA) view of the chest.\n\nFINDINGS:\nBoth lung fields are clear. No focal consolidation, mass, or cavitation.\nNo pleural effusion or pneumothorax.\nMild cardiomegaly. Mediastinal contours are normal.\nBoth hila are normal in size, density, and position.\nThe visualised bony thoracic cage is normal.\nBoth domes of the diaphragm are normal. Costophrenic angles are clear.\n\nIMPRESSION:\n1. Mild cardiomegaly.\n2. No active lung parenchymal lesion.",
+        "sections": {
+          "TECHNIQUE": "Frontal (PA) view of the chest.",
+          "FINDINGS": "Both lung fields are clear. No focal consolidation, mass, or cavitation.\nNo pleural effusion or pneumothorax.\nMild cardiomegaly. Mediastinal contours are normal.\nBoth hila are normal in size, density, and position.\nThe visualised bony thoracic cage is normal.\nBoth domes of the diaphragm are normal. Costophrenic angles are clear.",
+          "IMPRESSION": "1. Mild cardiomegaly.\n2. No active lung parenchymal lesion."
+        },
+        "corrections": [
+          { "from": "consolidaton", "to": "consolidation", "type": "spelling" },
+          { "from": "effussion", "to": "effusion", "type": "spelling" },
+          { "from": "cp angles", "to": "Costophrenic angles", "type": "abbreviation" },
+          { "from": "bones nad", "to": "The visualised bony thoracic cage is normal.", "type": "grammar" }
+        ],
+        "flags": [
+          { "text": "mild cardiomegaly", "issue": "Cardiomegaly cannot be definitively assessed on a PA chest film without cardiothoracic ratio; radiologist to confirm the degree." }
+        ],
+        "unchanged_protected": [
+          "negations 'no consolidation', 'no effusion' preserved",
+          "'mild' qualifier preserved as dictated"
+        ]
+      }
+    },
+
+    {
+      "modality": "CT",
+      "test_code": "CT_BRAIN_PLAIN",
+      "input": {
+        "house_spelling": "UK",
+        "assume_unmentioned_normal": true,
+        "raw_text": "ncct brain. small hyperdense focus rt basal ganglia ~ 12 x 9 mm s/o acute hemorage. mild perilesional oedema. no midline shift. ventricles normal. rest parenchyma normal."
+      },
+      "output": {
+        "formatted_report": "TECHNIQUE:\nAxial non-contrast CT (NCCT) sections of the brain were obtained from the skull base to the vertex.\n\nFINDINGS:\nA small hyperdense focus is noted in the right basal ganglia, measuring approximately 12 x 9 mm, suggestive of an acute haemorrhage. Mild perilesional oedema is present.\nNo midline shift.\nVentricular system is normal in size and configuration.\nThe rest of the cerebral and cerebellar parenchyma shows normal attenuation. No other focal lesion.\nGrey-white matter differentiation is preserved.\nVisualised calvarium and skull base are normal.\n\nIMPRESSION:\n1. Small acute haemorrhage (approximately 12 x 9 mm) in the right basal ganglia with mild perilesional oedema.\n2. No mass effect or midline shift.",
+        "sections": {
+          "TECHNIQUE": "Axial non-contrast CT (NCCT) sections of the brain were obtained from the skull base to the vertex.",
+          "FINDINGS": "A small hyperdense focus is noted in the right basal ganglia, measuring approximately 12 x 9 mm, suggestive of an acute haemorrhage. Mild perilesional oedema is present.\nNo midline shift.\nVentricular system is normal in size and configuration.\nThe rest of the cerebral and cerebellar parenchyma shows normal attenuation. No other focal lesion.\nGrey-white matter differentiation is preserved.\nVisualised calvarium and skull base are normal.",
+          "IMPRESSION": "1. Small acute haemorrhage (approximately 12 x 9 mm) in the right basal ganglia with mild perilesional oedema.\n2. No mass effect or midline shift."
+        },
+        "corrections": [
+          { "from": "hemorage", "to": "haemorrhage", "type": "spelling" },
+          { "from": "ncct", "to": "non-contrast CT (NCCT)", "type": "abbreviation" },
+          { "from": "rt", "to": "right", "type": "abbreviation" },
+          { "from": "s/o", "to": "suggestive of", "type": "abbreviation" },
+          { "from": "rest parenchyma normal", "to": "complete sentence", "type": "grammar" }
+        ],
+        "flags": [],
+        "unchanged_protected": [
+          "12 x 9 mm dimensions preserved exactly",
+          "'acute' descriptor preserved",
+          "right laterality preserved",
+          "negation 'no midline shift' preserved",
+          "hyperdense preserved (not changed to hypodense)"
+        ]
+      }
+    },
+
+    {
+      "modality": "MRI",
+      "test_code": "MRI_LUMBAR_SPINE",
+      "input": {
+        "house_spelling": "UK",
+        "assume_unmentioned_normal": false,
+        "raw_text": "lumbar lordosis normal. l4-l5 diffuse disc bulge with mild thecal sac indentation and bilateral neural foraminal narowing. l5-s1 posterocentral protruison indenting the thecal sac, no significant canal stenosis. other levels normal. conus normal."
+      },
+      "output": {
+        "formatted_report": "TECHNIQUE:\nMultiplanar T1W, T2W, and STIR sequences of the lumbosacral spine were obtained in sagittal and axial planes.\n\nFINDINGS:\nNormal lumbar lordosis. No listhesis.\nAt L4-L5, there is a diffuse disc bulge causing mild indentation of the thecal sac, with bilateral neural foraminal narrowing.\nAt L5-S1, there is a posterocentral disc protrusion indenting the thecal sac. No significant canal stenosis.\nThe remaining intervertebral disc levels are normal.\nVisualised spinal cord and conus medullaris are normal in signal, with the conus terminating at the normal level.\n\nIMPRESSION:\n1. L4-L5 diffuse disc bulge with mild thecal sac indentation and bilateral neural foraminal narrowing.\n2. L5-S1 posterocentral disc protrusion indenting the thecal sac, without significant canal stenosis.",
+        "sections": {
+          "TECHNIQUE": "Multiplanar T1W, T2W, and STIR sequences of the lumbosacral spine were obtained in sagittal and axial planes.",
+          "FINDINGS": "Normal lumbar lordosis. No listhesis.\nAt L4-L5, there is a diffuse disc bulge causing mild indentation of the thecal sac, with bilateral neural foraminal narrowing.\nAt L5-S1, there is a posterocentral disc protrusion indenting the thecal sac. No significant canal stenosis.\nThe remaining intervertebral disc levels are normal.\nVisualised spinal cord and conus medullaris are normal in signal, with the conus terminating at the normal level.",
+          "IMPRESSION": "1. L4-L5 diffuse disc bulge with mild thecal sac indentation and bilateral neural foraminal narrowing.\n2. L5-S1 posterocentral disc protrusion indenting the thecal sac, without significant canal stenosis."
+        },
+        "corrections": [
+          { "from": "narowing", "to": "narrowing", "type": "spelling" },
+          { "from": "protruison", "to": "protrusion", "type": "spelling" },
+          { "from": "l4-l5", "to": "L4-L5", "type": "style" },
+          { "from": "l5-s1", "to": "L5-S1", "type": "style" }
+        ],
+        "flags": [],
+        "unchanged_protected": [
+          "Vertebral levels L4-L5 and L5-S1 preserved exactly",
+          "'bilateral' laterality preserved",
+          "negation 'no significant canal stenosis' preserved",
+          "'posterocentral' descriptor preserved"
+        ]
+      }
+    }
+  ]
+}

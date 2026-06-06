@@ -1,0 +1,58 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RadiologyFormatterOutput",
+  "description": "Schema the model must return. Use this as the responseSchema / structured-output constraint when calling Gemini so the response is always valid JSON your code can parse.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["formatted_report", "sections", "corrections", "flags", "unchanged_protected"],
+  "properties": {
+    "formatted_report": {
+      "type": "string",
+      "description": "Full display-ready report text with section headers."
+    },
+    "sections": {
+      "type": "object",
+      "description": "Section name -> content, for field-wise rendering/storage.",
+      "properties": {
+        "CLINICAL_HISTORY": { "type": "string" },
+        "TECHNIQUE": { "type": "string" },
+        "COMPARISON": { "type": "string" },
+        "FINDINGS": { "type": "string" },
+        "IMPRESSION": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "corrections": {
+      "type": "array",
+      "description": "Every change the model made, for radiologist review. Empty array if none.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["from", "to", "type"],
+        "properties": {
+          "from": { "type": "string" },
+          "to": { "type": "string" },
+          "type": { "type": "string", "enum": ["spelling", "grammar", "style", "abbreviation"] }
+        }
+      }
+    },
+    "flags": {
+      "type": "array",
+      "description": "Ambiguous or unsafe-to-fix items needing radiologist attention. Empty array if none.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["text", "issue"],
+        "properties": {
+          "text": { "type": "string" },
+          "issue": { "type": "string" }
+        }
+      }
+    },
+    "unchanged_protected": {
+      "type": "array",
+      "description": "Measurements, laterality, and negations preserved verbatim, for reviewer trust.",
+      "items": { "type": "string" }
+    }
+  }
+}

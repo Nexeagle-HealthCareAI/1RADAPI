@@ -25,6 +25,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Knowledge pack for the RadiologyFormatter (RadAI report cleanup).
+         Copied beside the app so RadiologyPack loads it from AppContext.BaseDirectory. -->
+    <None Update="Resources\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\1Rad.Domain\1Rad.Domain.csproj" />
     <ProjectReference Include="..\1Rad.Application\1Rad.Application.csproj" />
     <ProjectReference Include="..\1Rad.Infrastructure\1Rad.Infrastructure.csproj" />
