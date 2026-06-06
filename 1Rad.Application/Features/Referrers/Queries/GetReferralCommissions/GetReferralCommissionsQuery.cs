@@ -20,6 +20,9 @@ public record ReferralCommissionDto(
     decimal Amount,
     decimal AccumulatedTotal,
     DateTime TransactionDate,
+    // The appointment/service date — drives the Referral Hub's "upcoming vs
+    // earned" split (a future date means the cut isn't earned yet).
+    DateTime ServiceDate,
     string Status,
     string? ReferenceNumber,
     string? Remarks,
@@ -105,6 +108,8 @@ public class GetReferralCommissionsQueryHandler : IRequestHandler<GetReferralCom
                 x.Commission.CommissionAmount,
                 x.Commission.AccumulatedTotal,
                 x.Commission.TransactionDate,
+                // Unset ServiceDate (legacy rows) falls back to the transaction date.
+                x.Commission.ServiceDate == default ? x.Commission.TransactionDate : x.Commission.ServiceDate,
                 x.Commission.Status ?? "UNPAID",
                 x.Commission.ReferenceNumber,
                 x.Commission.Remarks,

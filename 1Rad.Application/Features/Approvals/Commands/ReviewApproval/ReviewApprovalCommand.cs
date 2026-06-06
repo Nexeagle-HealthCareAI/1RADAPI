@@ -99,12 +99,36 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
         if (invoice == null || invoice.Status == "CANCELLED") return;
 
         var (centre, referrer, deduction) = ReadDiscounts(req.Payload);
+        // Over-commission funding choice: when true, the excess above the referrer's
+        // eligible commission is absorbed by the CENTRE (commission floored at 0)
+        // instead of carried as the referrer's deficit. Mirrors CollectPayment.
+        bool absorbToCentre = false;
+        try { using var pd = JsonDocument.Parse(string.IsNullOrWhiteSpace(req.Payload) ? "{}" : req.Payload); absorbToCentre = GetBool(pd.RootElement, "absorbExcessToCentre") ?? false; } catch { }
 
         var oldReferrerDiscount = invoice.ReferrerDiscount;
 
         invoice.CentreDiscount = centre ?? invoice.CentreDiscount;
         invoice.ReferrerDiscount = referrer ?? invoice.ReferrerDiscount;
         invoice.InstitutionalDeduction = deduction ?? invoice.InstitutionalDeduction;
+
+        // Resolve the commission up-front (needed for both the absorb math and the
+        // differential below).
+        var commission = invoice.ReferrerDiscount != oldReferrerDiscount
+            ? await _context.ReferralCommissions.FirstOrDefaultAsync(c =>
+                (c.AppointmentId == invoice.AppointmentId || (c.ReferenceNumber == invoice.InvoiceId && c.ReferenceNumber != null)) &&
+                c.HospitalId == req.HospitalId, ct)
+            : null;
+        var baseCommission = (commission?.CommissionAmount ?? 0) + oldReferrerDiscount;
+
+        // Centre absorbs the over-commission excess → floor the commission at its
+        // eligible base and shift the surplus into the centre discount. The patient's
+        // total is unchanged (the excess only moves between the two discount buckets).
+        if (absorbToCentre && invoice.ReferrerDiscount > baseCommission)
+        {
+            var excess = invoice.ReferrerDiscount - baseCommission;
+            invoice.CentreDiscount += excess;
+            invoice.ReferrerDiscount = baseCommission;
+        }
 
         var totalDiscount = invoice.CentreDiscount + invoice.ReferrerDiscount + invoice.InstitutionalDeduction;
         var gross = invoice.GrossAmount > 0 ? invoice.GrossAmount : invoice.TotalAmount + invoice.DiscountAmount;
@@ -113,26 +137,19 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
         invoice.TotalAmount = gross - totalDiscount;
 
         // Referrer-side commission differential (revert old, apply new).
-        if (invoice.ReferrerDiscount != oldReferrerDiscount)
+        if (commission != null)
         {
-            var commission = await _context.ReferralCommissions
-                .FirstOrDefaultAsync(c =>
-                    (c.AppointmentId == invoice.AppointmentId || (c.ReferenceNumber == invoice.InvoiceId && c.ReferenceNumber != null)) &&
-                    c.HospitalId == req.HospitalId, ct);
+            commission.CommissionAmount += oldReferrerDiscount; // Revert
+            commission.CommissionAmount -= invoice.ReferrerDiscount; // Apply New
+            commission.Remarks = (commission.Remarks ?? "") + $" [Edit-approved: ₹{oldReferrerDiscount} -> ₹{invoice.ReferrerDiscount}]";
 
-            if (commission != null)
+            // Over-commission concession kept as a deficit → carried as a negative
+            // (recovered from the doctor's future referrals). Audit the approval.
+            // (If the centre absorbed the excess above, the commission is now 0.)
+            if (commission.CommissionAmount < 0)
             {
-                commission.CommissionAmount += oldReferrerDiscount; // Revert
-                commission.CommissionAmount -= invoice.ReferrerDiscount; // Apply New
-                commission.Remarks = (commission.Remarks ?? "") + $" [Edit-approved: ₹{oldReferrerDiscount} -> ₹{invoice.ReferrerDiscount}]";
-
-                // Over-commission concession → carried as a negative (deficit),
-                // recovered from the doctor's future referrals. Audit the approval.
-                if (commission.CommissionAmount < 0)
-                {
-                    var deficit = Math.Abs(commission.CommissionAmount);
-                    commission.Remarks += $" [DEFICIT ₹{deficit:0.##} via approval {req.Id} — {req.Reason}]";
-                }
+                var deficit = Math.Abs(commission.CommissionAmount);
+                commission.Remarks += $" [DEFICIT ₹{deficit:0.##} via approval {req.Id} — {req.Reason}]";
             }
         }
 
@@ -193,16 +210,23 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
             if (payments.Count > 0) _context.Payments.RemoveRange(payments);
         }
 
+        // Keep the bill VISIBLE as a cancelled record (do NOT tombstone it) so the
+        // Revenue Hub shows what happened instead of the row silently vanishing —
+        // marked fully to ₹0 (refunded). The CANCELLED status drives the read-only
+        // "refunded · net ₹0" UI; GrossAmount is kept as the original-value record.
         foreach (var invoice in invoices)
         {
             invoice.Status = "CANCELLED";
             invoice.PaidAmount = 0;
             invoice.PaidAt = null;
-            invoice.DeletedAt = cancelNow;
+            invoice.DiscountAmount = invoice.GrossAmount; // fully voided → net 0
+            invoice.TotalAmount = 0;
             invoice.UpdatedAt = cancelNow;
         }
 
-        // Soft-delete + zero the referral commissions.
+        // Zero the referral commissions but keep them VISIBLE (do NOT tombstone)
+        // so the Referral Hub shows the cancelled ₹0 row with the reason, mirroring
+        // the Revenue Hub, instead of the payout silently disappearing.
         var commissions = await _context.ReferralCommissions
             .Where(c => (c.AppointmentId == req.AppointmentId ||
                          (c.ReferenceNumber != null && invoiceDisplayIds.Contains(c.ReferenceNumber))) &&
@@ -211,7 +235,6 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
         var referrersToRecalculate = commissions.Select(c => c.ReferrerId).Distinct().ToList();
         foreach (var c in commissions)
         {
-            c.DeletedAt = cancelNow;
             c.UpdatedAt = cancelNow;
             c.CommissionAmount = 0;
             c.Status = "Cancelled";
@@ -224,10 +247,12 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
         appointment.Status = "CANCELLED";
         appointment.UpdatedAt = cancelNow;
 
-        // Persist the tombstones so the re-base query below excludes them.
+        // Persist the zeroed commissions so the re-base query below re-reads them.
         await _context.SaveChangesAsync(ct);
 
         // Re-base accumulated totals for affected referrers over their LIVE rows.
+        // The cancelled rows are still live (kept visible) but contribute ₹0, so
+        // they don't change anyone's running total.
         foreach (var referrerId in referrersToRecalculate)
         {
             var remaining = await _context.ReferralCommissions
@@ -300,14 +325,38 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
                 .Where(c => c.AppointmentId == apptId && c.HospitalId == req.HospitalId && c.DeletedAt == null)
                 .ToListAsync(ct);
             var affected = commissions.Select(c => c.ReferrerId).Distinct().ToList();
+
+            // For a REFERRER-borne free test the referrer doesn't just forfeit their
+            // cut — they carry the deficit (fee − commission), recovered from future
+            // referrals. Spread proportionally to each row's original commission so a
+            // single referrer lands exactly on −(fee − commission).
+            var freeGross = invoice?.GrossAmount ?? 0m;
+            var sumOrigCommission = commissions
+                .Where(c => !string.Equals(c.ReferrerName, "Self", StringComparison.OrdinalIgnoreCase))
+                .Sum(c => c.CommissionAmount);
+
             foreach (var c in commissions)
             {
                 var isSelfCut = string.Equals(c.ReferrerName, "Self", StringComparison.OrdinalIgnoreCase);
+                var origCommission = c.CommissionAmount;
+                if (isSelfCut || bearer == "BOTH")
+                {
+                    // Self / shared → no commission and no deficit.
+                    c.CommissionAmount = 0;
+                }
+                else if (bearer == "REFERRER")
+                {
+                    // finalCommission = orig − (orig ÷ Σorig) × freeGross.
+                    // Single referrer → orig − freeGross = −(freeGross − orig) deficit.
+                    c.CommissionAmount = sumOrigCommission > 0
+                        ? Math.Round(origCommission - (origCommission / sumOrigCommission) * freeGross, 2)
+                        : 0;
+                }
                 // CENTRE → referrer keeps the full cut (centre absorbs the whole fee).
-                // BOTH / REFERRER → referrer gets no commission.
-                if (isSelfCut || bearer == "REFERRER" || bearer == "BOTH") c.CommissionAmount = 0;
 
                 if (c.CommissionAmount == 0) c.Status = "Cancelled";
+                // A negative balance is an active deficit — keep it live so it nets
+                // against the referrer's future commissions (don't cancel it).
                 c.Remarks = (c.Remarks ?? "") + $" [Free test — {bearer.ToLowerInvariant()}-borne via approval {req.Id}]";
                 c.UpdatedAt = DateTime.UtcNow;
             }

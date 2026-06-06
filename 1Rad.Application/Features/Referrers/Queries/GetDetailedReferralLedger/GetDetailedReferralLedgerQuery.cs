@@ -7,6 +7,7 @@ namespace _1Rad.Application.Features.Referrers.Queries.GetDetailedReferralLedger
 public record DetailedReferralLedgerDto(
     Guid CommissionId,
     DateTime PayoutDate,
+    DateTime ServiceDate,
     string PartnerName,
     string PatientName,
     string StudyAndServices,
@@ -59,6 +60,9 @@ public class GetDetailedReferralLedgerQueryHandler : IRequestHandler<GetDetailed
             .Select(c => new {
                 CommissionId = c.Id,
                 PayoutDate = c.TransactionDate,
+                // The actual appointment/service date — drives the "upcoming vs
+                // earned" split in the Referral Hub (a future date = not yet earned).
+                ServiceDate = c.ServiceDate,
                 PartnerName = c.Referrer.Name ?? c.ReferrerName,
                 PayoutAmount = c.CommissionAmount,
                 CommissionStatus = c.Status ?? "UNPAID",
@@ -99,6 +103,8 @@ public class GetDetailedReferralLedgerQueryHandler : IRequestHandler<GetDetailed
         var result = rawData.Select(x => new DetailedReferralLedgerDto(
             x.CommissionId,
             x.PayoutDate,
+            // Unset ServiceDate (legacy rows) falls back to the transaction date.
+            x.ServiceDate == default ? x.PayoutDate : x.ServiceDate,
             x.PartnerName ?? "Unknown Referrer",
             x.InvoiceDetails?.PatientName ?? x.FallbackPatientName ?? "Unknown Patient",
             x.InvoiceDetails != null && x.InvoiceDetails.ItemDescriptions.Any()

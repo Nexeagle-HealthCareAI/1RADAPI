@@ -83,12 +83,19 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
 
         bool dateChanged = appointment.DateTime.Date != request.DateTime.Date;
 
-        // If the date has changed, hand out a token for the NEW date. Use the
-        // atomic counter seeded from the current MAX token (not count+1, which
-        // can collide when tokens have gaps) so the new number is always unique
-        // — otherwise the unique index UX_Appointments_Hospital_Date_Token would
-        // reject the save with a 500 on a date-change edit.
-        if (dateChanged)
+        // Re-token on a date change — but ONLY for a visit that already HAS a token,
+        // i.e. one that's been marked arrived (CONFIRMED) or beyond. Tokens are
+        // minted at arrival and keyed by the day, so:
+        //   • Arrived-or-above moved to another day → re-issue the token for the
+        //     DESTINATION day so it queues correctly there and can't collide with
+        //     that day's existing numbers (the unique index UX_Appointments_Hospital
+        //     _Date_Token would otherwise reject the save with a 500).
+        //   • Not-yet-arrived booking (no token) → leave it null. It gets its number
+        //     when it's marked arrived on its new day; a reschedule must not mint one
+        //     early (and a null token never collides on the destination day).
+        // The atomic counter is seeded from the current MAX token (not count+1,
+        // which can collide when tokens have gaps) so the new number is unique.
+        if (dateChanged && appointment.DailyTokenNumber.HasValue)
         {
             var appointmentDate = request.DateTime.Date;
             var maxToken = await _context.Appointments
@@ -272,7 +279,34 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             await ReconcileReferralCommissionsAsync(appointment, liveServices, request, effectiveReferredBy, invoice?.InvoiceId, cancellationToken);
         }
 
-        await _context.SaveChangesAsync(cancellationToken);
+        // Persist. Everything above was read fresh in THIS handler, so any
+        // concurrency conflict here is spurious rather than a real lost-update:
+        // it's a concurrent save of the same visit (a double-submit) or a
+        // transient-retry that re-ran SaveChanges after the first attempt had
+        // already committed (the RowVersion is then stale). The editing user's
+        // change should win — the rest of this handler is already last-writer-wins
+        // — so refresh the conflicting rows' concurrency tokens and re-save instead
+        // of bubbling a 409 the user can do nothing about. Bounded to avoid a loop.
+        const int maxConcurrencyAttempts = 3;
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                await _context.SaveChangesAsync(cancellationToken);
+                break;
+            }
+            catch (DbUpdateConcurrencyException ex) when (attempt < maxConcurrencyAttempts)
+            {
+                foreach (var entry in ex.Entries)
+                {
+                    var dbValues = await entry.GetDatabaseValuesAsync(cancellationToken);
+                    if (dbValues == null)
+                        entry.State = EntityState.Detached;          // row was deleted — drop just this change
+                    else
+                        entry.OriginalValues.SetValues(dbValues);     // refresh token; our edited values still win
+                }
+            }
+        }
         return true;
     }
 
