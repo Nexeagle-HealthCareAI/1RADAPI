@@ -42,7 +42,23 @@ namespace _1RadAPI.Controllers
                     .Include(p => p.Doctor)
                     .FirstOrDefaultAsync(p => p.DoctorId == doctorId && p.HospitalId == hospitalId);
 
-                if (protocol == null) 
+                // Fall back to the centre's default letterhead/margins when this
+                // doctor has no protocol of their own — any protocol configured for
+                // this hospital (preferring one that actually has a letterhead, then
+                // the earliest-configured = the centre's original setup). Without
+                // this, reports by doctors who never set up a protocol print on a
+                // plain page with no header margin reserved.
+                if (protocol == null)
+                {
+                    protocol = await _context.PrescriptionProtocols
+                        .Include(p => p.Doctor)
+                        .Where(p => p.HospitalId == hospitalId)
+                        .OrderByDescending(p => p.LetterheadBlobUrl != null)
+                        .ThenBy(p => p.CreatedAt)
+                        .FirstOrDefaultAsync();
+                }
+
+                if (protocol == null)
                 {
                     return Ok(new { success = true, data = (object?)null, message = "No custom branding profile found. Using system defaults." });
                 }

@@ -89,8 +89,12 @@ public class AiAssistCommandHandler : IRequestHandler<AiAssistCommand, AiAssistR
         catch (Exception ex)
         {
             // Fallback: never block report delivery on a third-party API — the
-            // caller keeps the raw text and can format manually.
-            return new AiAssistResult(false, null, ex.Message);
+            // caller keeps the raw text and can format manually. Turn the raw
+            // provider rate-limit (429) into a clear, actionable message.
+            var message = ex.Message.Contains("429")
+                ? "The AI assistant is busy right now (rate limit). Please wait a few seconds and try again."
+                : ex.Message;
+            return new AiAssistResult(false, null, message);
         }
 
         var html = PhiRedactor.Restore(Clean(aiText), phiMap);

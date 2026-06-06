@@ -117,18 +117,36 @@ public class GeminiService : IReportAiService
     {
         // Key in the query string (Google's scheme). Never logged.
         var url = $"{Base}/{_model}:generateContent?key={_apiKey}";
-        using var request = new HttpRequestMessage(HttpMethod.Post, url)
-        {
-            Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json")
-        };
+        var json = JsonSerializer.Serialize(payload);
 
-        using var response = await _http.SendAsync(request, cancellationToken);
-        var body = await response.Content.ReadAsStringAsync(cancellationToken);
-
-        if (!response.IsSuccessStatusCode)
+        // Gemini's free tier throttles per-minute and occasionally returns a
+        // transient 503/500. Retry those a few times with backoff (honouring a
+        // Retry-After header when present) so a short burst doesn't surface as a
+        // hard failure to the radiologist mid-edit.
+        const int maxAttempts = 3;
+        string body = string.Empty;
+        for (var attempt = 1; ; attempt++)
         {
-            _logger.LogError("[Gemini] {Status}: {Body}", (int)response.StatusCode, body);
-            throw new InvalidOperationException($"Gemini API returned {(int)response.StatusCode}.");
+            using var request = new HttpRequestMessage(HttpMethod.Post, url)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json")
+            };
+            using var response = await _http.SendAsync(request, cancellationToken);
+            body = await response.Content.ReadAsStringAsync(cancellationToken);
+
+            if (response.IsSuccessStatusCode) break;
+
+            var status = (int)response.StatusCode;
+            var transient = status is 429 or 503 or 500;
+            if (!transient || attempt >= maxAttempts)
+            {
+                _logger.LogError("[Gemini] {Status} (attempt {Attempt}/{Max}): {Body}", status, attempt, maxAttempts, body);
+                throw new InvalidOperationException($"Gemini API returned {status}.");
+            }
+
+            var delay = response.Headers.RetryAfter?.Delta ?? TimeSpan.FromSeconds(Math.Pow(2, attempt - 1));
+            _logger.LogWarning("[Gemini] {Status} (attempt {Attempt}/{Max}) — retrying in {Delay}s", status, attempt, maxAttempts, delay.TotalSeconds);
+            await Task.Delay(delay, cancellationToken);
         }
 
         // Response: { "candidates": [ { "content": { "parts": [ { "text": "..." } ] } } ] }
