@@ -81,6 +81,9 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
             case "UNPAY_COMMISSION":
                 await ApplyUnpayCommissionAsync(req, ct);
                 break;
+            case "EDIT_COMMISSION":
+                await ApplyEditCommissionAsync(req, ct);
+                break;
         }
     }
 
@@ -233,16 +236,47 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
                         c.HospitalId == hospitalId && c.DeletedAt == null)
             .ToListAsync(ct);
         var referrersToRecalculate = commissions.Select(c => c.ReferrerId).Distinct().ToList();
+        var clawbacks = new List<ReferralCommission>();
         foreach (var c in commissions)
         {
             c.UpdatedAt = cancelNow;
+
+            // If the commission was already PAID, the centre has disbursed money the
+            // referrer must now return. Book a clawback (negative, UNPAID) so the
+            // balance sheet shows the deficit — recoverable from future referrals —
+            // instead of the payout silently vanishing to ₹0. Mirrors the
+            // ReferrerReassign paid-path reversal. (item 2)
+            var wasPaid = string.Equals(c.Status, "PAID", StringComparison.OrdinalIgnoreCase) && c.CommissionAmount > 0;
+            var paidAmount = c.CommissionAmount;
+            if (wasPaid)
+            {
+                clawbacks.Add(new ReferralCommission
+                {
+                    HospitalId = hospitalId,
+                    ReferrerId = c.ReferrerId,
+                    ReferrerName = c.ReferrerName,
+                    Modality = c.Modality,
+                    PatientName = c.PatientName,
+                    AppointmentId = c.AppointmentId,
+                    AppointmentServiceId = c.AppointmentServiceId,
+                    ReferenceNumber = c.ReferenceNumber,
+                    CommissionAmount = -paidAmount,
+                    Status = "UNPAID",
+                    TransactionDate = cancelNow,
+                    ServiceDate = c.ServiceDate,
+                    Remarks = $"[Clawback — appointment cancelled; ₹{paidAmount:0.##} was already paid to {c.ReferrerName}. Recoverable from future referrals. Reason: {req.Reason}]",
+                });
+            }
+
             c.CommissionAmount = 0;
             c.Status = "Cancelled";
             c.Remarks = (c.Remarks ?? "") +
                 $" [Appointment cancelled — patient returned; commission set to ₹0." +
                 (refunded > 0 ? $" Refund ₹{refunded:0.##} to patient." : "") +
+                (wasPaid ? $" ₹{paidAmount:0.##} already paid → booked as a clawback deficit against {c.ReferrerName}." : "") +
                 $" Reason: {req.Reason}]";
         }
+        if (clawbacks.Count > 0) _context.ReferralCommissions.AddRange(clawbacks);
 
         appointment.Status = "CANCELLED";
         appointment.UpdatedAt = cancelNow;
@@ -399,6 +433,46 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
         commission.Status = "UNPAID";
         commission.PaymentDate = null;
         commission.Remarks = (commission.Remarks ?? "") + $" [Reverted to UNPAID via approval {req.Id} — {req.Reason}]";
+        commission.UpdatedAt = DateTime.UtcNow;
+    }
+
+    /// <summary>
+    /// Applies an approved edit to a recorded referral commission (amount /
+    /// modality / status / remarks). Payload keys: commissionId (required),
+    /// amount, modality, status, remarks. Mirrors the direct PUT it replaces,
+    /// but only takes effect after admin sign-off.
+    /// </summary>
+    private async Task ApplyEditCommissionAsync(ApprovalRequest req, CancellationToken ct)
+    {
+        Guid commissionId = Guid.Empty;
+        decimal? amount = null; string? modality = null; string? status = null; string? remarks = null;
+        try
+        {
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(req.Payload) ? "{}" : req.Payload);
+            var root = doc.RootElement;
+            Guid.TryParse(GetString(root, "commissionId"), out commissionId);
+            amount = GetDecimal(root, "amount");
+            modality = GetString(root, "modality");
+            status = GetString(root, "status");
+            remarks = GetString(root, "remarks");
+        }
+        catch { return; }
+        if (commissionId == Guid.Empty) return;
+
+        var commission = await _context.ReferralCommissions
+            .FirstOrDefaultAsync(c => c.Id == commissionId && c.HospitalId == req.HospitalId && c.DeletedAt == null, ct);
+        if (commission == null) return;
+
+        if (amount.HasValue) commission.CommissionAmount = amount.Value;
+        if (!string.IsNullOrWhiteSpace(modality)) commission.Modality = modality;
+        if (remarks != null) commission.Remarks = remarks;
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            var s = status.ToUpperInvariant();
+            commission.Status = s;
+            commission.PaymentDate = s == "PAID" ? (commission.PaymentDate ?? DateTime.UtcNow) : null;
+        }
+        commission.Remarks = (commission.Remarks ?? "") + $" [Edited via approval {req.Id} — {req.Reason}]";
         commission.UpdatedAt = DateTime.UtcNow;
     }
 

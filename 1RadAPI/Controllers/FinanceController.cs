@@ -195,10 +195,13 @@ public class FinanceController : ControllerBase
 
     public async Task<IActionResult> ApplyDiscount(Guid id, [FromBody] ApplyDiscountRequest request)
     {
-        var result = await _mediator.Send(new _1Rad.Application.Features.Finance.Commands.ApplyInvoiceDiscount.ApplyInvoiceDiscountCommand 
-        { 
-            InvoiceId = id, 
-            DiscountAmount = request.DiscountAmount 
+        var result = await _mediator.Send(new _1Rad.Application.Features.Finance.Commands.ApplyInvoiceDiscount.ApplyInvoiceDiscountCommand
+        {
+            InvoiceId = id,
+            DiscountAmount = request.DiscountAmount,
+            CentreDiscount = request.CentreDiscount,
+            ReferrerDiscount = request.ReferrerDiscount,
+            InstitutionalDeduction = request.InstitutionalDeduction
         });
         return Ok(result);
     }
@@ -212,5 +215,5 @@ public class FinanceController : ControllerBase
 }
 
 public record UpdateExpenseStatusRequest(string Status);
-public record ApplyDiscountRequest(decimal DiscountAmount);
+public record ApplyDiscountRequest(decimal DiscountAmount, decimal? CentreDiscount = null, decimal? ReferrerDiscount = null, decimal? InstitutionalDeduction = null);
 

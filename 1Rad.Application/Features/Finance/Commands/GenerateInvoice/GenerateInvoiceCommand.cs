@@ -142,8 +142,11 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
 
             _context.Invoices.Add(invoice);
 
-            // Record Referral Commission if Referrer is provided
-            if (request.ReferrerId.HasValue && (request.CommissionAmount ?? 0) > 0)
+            // Record a Referral Commission whenever a referrer is chosen — even at
+            // ₹0 — so the referral is tracked against them and the invoice's referrer
+            // (Revenue Hub) matches the Referral Hub. Self / walk-in is skipped below
+            // (it earns nothing).
+            if (request.ReferrerId.HasValue)
             {
                 var referrer = await _context.Referrers
                     .FirstOrDefaultAsync(r => r.ReferrerId == request.ReferrerId.Value, cancellationToken);

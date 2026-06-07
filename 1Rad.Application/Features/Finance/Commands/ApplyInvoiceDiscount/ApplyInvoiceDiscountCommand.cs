@@ -8,6 +8,12 @@ public record ApplyInvoiceDiscountCommand : IRequest<bool>
 {
     public Guid InvoiceId { get; init; }
     public decimal DiscountAmount { get; init; }
+    // Optional discount breakdown — sent by the settlement drawer's "Save as
+    // draft" so reopening the invoice restores the partial edits. When any are
+    // supplied, the total discount is derived from them.
+    public decimal? CentreDiscount { get; init; }
+    public decimal? ReferrerDiscount { get; init; }
+    public decimal? InstitutionalDeduction { get; init; }
 }
 
 public class ApplyInvoiceDiscountCommandHandler : IRequestHandler<ApplyInvoiceDiscountCommand, bool>
@@ -39,7 +45,22 @@ public class ApplyInvoiceDiscountCommandHandler : IRequestHandler<ApplyInvoiceDi
         var grossAmount = invoice.Items.Sum(x => x.Amount * x.Quantity);
         invoice.GrossAmount = grossAmount;
         
-        var discount = request.DiscountAmount;
+        // When the settlement drawer saves a DRAFT it sends the discount
+        // breakdown; persist it and derive the total from it so reopening the
+        // invoice restores the partial edits (centre / referrer / deduction).
+        var hasBreakdown = request.CentreDiscount.HasValue
+                         || request.ReferrerDiscount.HasValue
+                         || request.InstitutionalDeduction.HasValue;
+        if (hasBreakdown)
+        {
+            invoice.CentreDiscount         = request.CentreDiscount         ?? invoice.CentreDiscount;
+            invoice.ReferrerDiscount       = request.ReferrerDiscount       ?? invoice.ReferrerDiscount;
+            invoice.InstitutionalDeduction = request.InstitutionalDeduction ?? invoice.InstitutionalDeduction;
+        }
+
+        var discount = hasBreakdown
+            ? invoice.CentreDiscount + invoice.ReferrerDiscount + invoice.InstitutionalDeduction
+            : request.DiscountAmount;
         if (discount > grossAmount)
         {
             discount = grossAmount;

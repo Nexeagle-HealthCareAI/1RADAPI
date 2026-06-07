@@ -147,8 +147,21 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
                     BalanceAmount = i.TotalAmount - i.PaidAmount,
                     Status = i.Status,
                     CreatedAt = i.CreatedAt,
-                    ReferrerName = i.Appointment != null ? i.Appointment.ReferredBy : (i.Patient.Referrer != null ? i.Patient.Referrer.Name : null),
-                    ReferrerId = i.Patient.ReferrerId ?? (i.Appointment != null ? _context.Referrers.Where(r => r.Name == i.Appointment.ReferredBy && r.HospitalId == i.HospitalId).Select(r => (Guid?)r.ReferrerId).FirstOrDefault() : null),
+                    // Referrer reflects the actual commission (source of truth — it
+                    // is written from the selected referrerId) so a MANUAL invoice's
+                    // referrer matches the Referral Hub instead of falling back to the
+                    // appointment's / patient's default referrer. Only when there is no
+                    // commission row do we use those fallbacks.
+                    ReferrerName = (_context.ReferralCommissions
+                            .Where(c => ((i.AppointmentId != null && c.AppointmentId == i.AppointmentId) || (i.InvoiceId != null && c.ReferenceNumber == i.InvoiceId)) && c.HospitalId == i.HospitalId)
+                            .Select(c => c.ReferrerName)
+                            .FirstOrDefault())
+                        ?? (i.Appointment != null ? i.Appointment.ReferredBy : (i.Patient.Referrer != null ? i.Patient.Referrer.Name : null)),
+                    ReferrerId = (_context.ReferralCommissions
+                            .Where(c => ((i.AppointmentId != null && c.AppointmentId == i.AppointmentId) || (i.InvoiceId != null && c.ReferenceNumber == i.InvoiceId)) && c.HospitalId == i.HospitalId)
+                            .Select(c => (Guid?)c.ReferrerId)
+                            .FirstOrDefault())
+                        ?? i.Patient.ReferrerId ?? (i.Appointment != null ? _context.Referrers.Where(r => r.Name == i.Appointment.ReferredBy && r.HospitalId == i.HospitalId).Select(r => (Guid?)r.ReferrerId).FirstOrDefault() : null),
                     Modality = i.Appointment != null ? i.Appointment.Modality : null,
                     CommissionAmount = (_context.ReferralCommissions.Where(c => ((i.AppointmentId != null && c.AppointmentId == i.AppointmentId) || (i.InvoiceId != null && c.ReferenceNumber == i.InvoiceId)) && c.HospitalId == i.HospitalId).Sum(c => (decimal?)c.CommissionAmount) ?? 0),
                     CommissionId = _context.ReferralCommissions
