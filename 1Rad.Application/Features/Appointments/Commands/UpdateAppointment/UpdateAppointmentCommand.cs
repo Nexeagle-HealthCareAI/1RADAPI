@@ -405,17 +405,41 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             }
         }
 
-        // Soft-delete any existing rows the client dropped. We mark rather
-        // than hard-delete so any DiagnosticReport / StudyAsset already
-        // attached keeps its FK and its history (the FK has ON DELETE SET
-        // NULL as a safety net, but soft-delete is the principled path).
-        await Task.CompletedTask;
-        foreach (var stale in existing)
+        // HARD-DELETE the rows the client dropped (the removed services).
+        //
+        // The four FKs that point at AppointmentService (InvoiceItem,
+        // ReferralCommission, DiagnosticReport, StudyAsset) are all NoAction, so
+        // the database REJECTS the delete while any dependent row still exists —
+        // we must clear them first. Billing artifacts are safe to remove with the
+        // service; clinical artifacts are NOT — a removed service that already has
+        // a report or DICOM study would lose that history, so we BLOCK the edit
+        // and make the caller deal with the report/scan explicitly.
+        var staleServices = existing.Where(s => !kept.Contains(s.Id)).ToList();
+        if (staleServices.Count > 0)
         {
-            if (!kept.Contains(stale.Id))
-            {
-                stale.DeletedAt = DateTime.UtcNow;
-            }
+            var staleIds = staleServices.Select(s => s.Id).ToList();
+
+            // Guard: refuse to remove a service that has clinical work attached.
+            var hasClinicalWork =
+                await _context.DiagnosticReports.AnyAsync(
+                    r => r.AppointmentServiceId != null && staleIds.Contains(r.AppointmentServiceId.Value), cancellationToken)
+                || await _context.StudyAssets.AnyAsync(
+                    a => a.AppointmentServiceId != null && staleIds.Contains(a.AppointmentServiceId.Value), cancellationToken);
+            if (hasClinicalWork)
+                throw new ArgumentException(
+                    "Cannot remove a service that already has a report or scan attached. " +
+                    "Cancel or reassign its report/scan first, then remove the service.");
+
+            // Drop the referral commissions for the removed services (NoAction FK
+            // would otherwise block the delete). Their invoice items are deleted by
+            // the invoice reconciliation below, which also re-totals the bill.
+            var staleCommissions = await _context.ReferralCommissions
+                .Where(c => c.AppointmentServiceId != null && staleIds.Contains(c.AppointmentServiceId.Value))
+                .ToListAsync(cancellationToken);
+            if (staleCommissions.Count > 0)
+                _context.ReferralCommissions.RemoveRange(staleCommissions);
+
+            _context.AppointmentServices.RemoveRange(staleServices);
         }
 
         return live;
