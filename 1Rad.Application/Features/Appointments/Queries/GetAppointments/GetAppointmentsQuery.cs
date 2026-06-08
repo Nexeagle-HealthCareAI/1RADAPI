@@ -168,10 +168,12 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
                 .AsNoTracking()
                 .Where(s => appointmentIds.Contains(s.AppointmentId));
 
-            if (!request.IncludeDeleted)
-            {
-                serviceQuery = serviceQuery.Where(s => s.DeletedAt == null);
-            }
+            // Soft-deleted SERVICE lines are ALWAYS excluded. `IncludeDeleted`
+            // exists for APPOINTMENT-level tombstones (so the sync can drop
+            // deleted visits from the local cache) — it must NOT resurrect
+            // removed services inside a visit that is still live, or a service
+            // the user removed keeps coming back on the board.
+            serviceQuery = serviceQuery.Where(s => s.DeletedAt == null);
 
             var services = await serviceQuery
                 .OrderBy(s => s.UpdatedAt)
