@@ -15,6 +15,8 @@ public class LoginCommandHandlerTests
 {
     private readonly Mock<IPasswordHasher> _hasherMock;
     private readonly Mock<IJwtProvider> _jwtMock;
+    private readonly Mock<IActiveSessionCache> _sessionCacheMock;
+    private readonly Mock<ISessionAlertService> _sessionAlertsMock;
     private readonly Mock<IPublisher> _publisherMock;
     private readonly Mock<IUserContext> _userContextMock;
     private readonly Mock<ILogger<LoginCommandHandler>> _loggerMock;
@@ -24,6 +26,8 @@ public class LoginCommandHandlerTests
     {
         _hasherMock = new Mock<IPasswordHasher>();
         _jwtMock = new Mock<IJwtProvider>();
+        _sessionCacheMock = new Mock<IActiveSessionCache>();
+        _sessionAlertsMock = new Mock<ISessionAlertService>();
         _publisherMock = new Mock<IPublisher>();
         _userContextMock = new Mock<IUserContext>();
         _loggerMock = new Mock<ILogger<LoginCommandHandler>>();
@@ -67,11 +71,11 @@ public class LoginCommandHandlerTests
         await _context.SaveChangesAsync();
 
         _hasherMock.Setup(x => x.Verify(password, passwordHash)).Returns(true);
-        _jwtMock.Setup(x => x.GenerateContextualToken(It.IsAny<User>(), It.IsAny<UserHospitalMapping>(), It.IsAny<IEnumerable<Guid>>()))
+        _jwtMock.Setup(x => x.GenerateContextualToken(It.IsAny<User>(), It.IsAny<UserHospitalMapping>(), It.IsAny<IEnumerable<Guid>>(), It.IsAny<Guid?>()))
                 .Returns("access_token");
         _jwtMock.Setup(x => x.GenerateRefreshToken()).Returns("refresh_token");
 
-        var handler = new LoginCommandHandler(_context, _hasherMock.Object, _jwtMock.Object, _loggerMock.Object);
+        var handler = new LoginCommandHandler(_context, _hasherMock.Object, _jwtMock.Object, _sessionCacheMock.Object, _sessionAlertsMock.Object, _loggerMock.Object);
         var command = new LoginCommand(identifier, password);
 
         // Act
@@ -104,7 +108,7 @@ public class LoginCommandHandlerTests
 
         _hasherMock.Setup(x => x.Verify(It.IsAny<string>(), It.IsAny<string>())).Returns(false);
 
-        var handler = new LoginCommandHandler(_context, _hasherMock.Object, _jwtMock.Object, _loggerMock.Object);
+        var handler = new LoginCommandHandler(_context, _hasherMock.Object, _jwtMock.Object, _sessionCacheMock.Object, _sessionAlertsMock.Object, _loggerMock.Object);
         var command = new LoginCommand(identifier, "wrong_password");
 
         // Act

@@ -55,7 +55,7 @@ public class SwitchContextCommandHandlerTests
         _context.UserHospitalMappings.Add(mapping);
         await _context.SaveChangesAsync();
 
-        _jwtMock.Setup(x => x.GenerateContextualToken(It.IsAny<User>(), It.IsAny<UserHospitalMapping>(), It.IsAny<IEnumerable<Guid>>()))
+        _jwtMock.Setup(x => x.GenerateContextualToken(It.IsAny<User>(), It.IsAny<UserHospitalMapping>(), It.IsAny<IEnumerable<Guid>>(), It.IsAny<Guid?>()))
                 .Returns("new_switched_token");
 
         var handler = new SwitchContextCommandHandler(_context, _userContextMock.Object, _jwtMock.Object, _loggerMock.Object);
