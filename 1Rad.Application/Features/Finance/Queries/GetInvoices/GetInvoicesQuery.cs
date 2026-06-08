@@ -128,7 +128,7 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
             }
 
             // Execute Projection: Using standard property initialization to ensure safe SQL translation in EF Core.
-            return await query
+            var result = await query
                 .OrderByDescending(i => i.CreatedAt)
                 .Select(i => new InvoiceDto
                 {
@@ -199,6 +199,46 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
                 // up the rest.
                 .Take(200)
                 .ToListAsync(cancellationToken);
+
+            // Backfill display items for invoices that have NONE but are linked
+            // to an appointment — derive them from the live AppointmentService
+            // lines so the Revenue Hub shows the services even when the invoice
+            // was created without line items (or an OCC-blocked edit never
+            // rebuilt them). Read-only — nothing is persisted.
+            var itemlessApptIds = result
+                .Where(inv => inv.Items.Count == 0 && inv.AppointmentId.HasValue)
+                .Select(inv => inv.AppointmentId!.Value)
+                .Distinct()
+                .ToList();
+
+            if (itemlessApptIds.Count > 0)
+            {
+                var svcByAppt = (await _context.AppointmentServices
+                    .AsNoTracking()
+                    .Where(s => itemlessApptIds.Contains(s.AppointmentId) && s.DeletedAt == null)
+                    .Select(s => new { s.AppointmentId, s.Id, s.ServiceName, s.Modality, s.Amount })
+                    .ToListAsync(cancellationToken))
+                    .GroupBy(s => s.AppointmentId)
+                    .ToDictionary(g => g.Key, g => g.ToList());
+
+                foreach (var inv in result)
+                {
+                    if (inv.Items.Count == 0 && inv.AppointmentId.HasValue
+                        && svcByAppt.TryGetValue(inv.AppointmentId.Value, out var svcs))
+                    {
+                        inv.Items = svcs.Select(s => new InvoiceItemDto
+                        {
+                            Description          = s.ServiceName,
+                            Amount               = s.Amount,
+                            Quantity             = 1,
+                            AppointmentServiceId = s.Id,
+                            Modality             = s.Modality,
+                        }).ToList();
+                    }
+                }
+            }
+
+            return result;
         }
         catch (Exception ex)
         {
