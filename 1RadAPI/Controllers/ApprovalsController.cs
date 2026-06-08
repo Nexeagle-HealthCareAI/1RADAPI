@@ -5,6 +5,7 @@ using _1Rad.Domain.Constants;
 using _1Rad.Application.Features.Approvals.Commands.CreateApprovalRequest;
 using _1Rad.Application.Features.Approvals.Commands.ReviewApproval;
 using _1Rad.Application.Features.Approvals.Queries.GetApprovals;
+using _1Rad.Application.Features.Approvals.Queries.GetApprovalsCount;
 
 namespace _1RadAPI.Controllers;
 
@@ -31,6 +32,15 @@ public class ApprovalsController : ControllerBase
     {
         var result = await _mediator.Send(new GetApprovalsQuery { Status = status ?? "PENDING" });
         return Ok(result);
+    }
+
+    // Lightweight count for the nav badge — avoids fetching the whole list just
+    // to read its length (polled per-admin).
+    [HttpGet("count")]
+    public async Task<IActionResult> Count([FromQuery] string? status)
+    {
+        var count = await _mediator.Send(new GetApprovalsCountQuery(status ?? "PENDING"));
+        return Ok(new { count });
     }
 
     // Approve / reject — admin or admin-doctor only. Approving applies the change.

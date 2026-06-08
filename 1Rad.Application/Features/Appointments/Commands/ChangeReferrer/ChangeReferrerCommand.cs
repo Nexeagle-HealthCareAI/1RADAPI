@@ -17,6 +17,12 @@ public class ChangeReferrerResult
     public bool Applied { get; set; }
     public bool RequiresApproval { get; set; }
     public string Message { get; set; } = string.Empty;
+    // Snapshot the admin needs when RequiresApproval: who is currently credited
+    // and how much referral commission has ALREADY been PAID to them. Approving
+    // re-points that same paid amount to the new referrer, so we surface it on
+    // the approval card/modal.
+    public string? PreviousReferrerName { get; set; }
+    public decimal PreviousPaidCommission { get; set; }
 }
 
 public record ChangeReferrerCommand : IRequest<ChangeReferrerResult>
@@ -64,10 +70,18 @@ public class ChangeReferrerCommandHandler : IRequestHandler<ChangeReferrerComman
 
         if (hasPayments)
         {
+            // How much commission has already been PAID to the current referrer on
+            // this visit — the amount that re-points to the new referrer on approval.
+            var paidCommission = await _context.ReferralCommissions
+                .Where(c => c.AppointmentId == request.AppointmentId && c.Status == "PAID")
+                .SumAsync(c => (decimal?)c.CommissionAmount, ct) ?? 0m;
+
             return new ChangeReferrerResult
             {
                 RequiresApproval = true,
-                Message = "Payment has already been collected — changing the referrer needs admin approval."
+                Message = "Payment has already been collected — changing the referrer needs admin approval.",
+                PreviousReferrerName = appointment.ReferredBy,
+                PreviousPaidCommission = paidCommission,
             };
         }
 
