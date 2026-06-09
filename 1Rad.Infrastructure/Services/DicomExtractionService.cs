@@ -29,13 +29,17 @@ public class DicomExtractionService : IDicomExtractionService
     // study views into local cache hits instead of re-downloading every slice.
     private const string ImmutableCacheControl = "public, max-age=31536000, immutable";
 
-    // Transcode uncompressed DICOM pixel data to JPEG-LS Lossless before
-    // uploading to blob storage. Lossless = identical pixel values after
-    // decode (primary-diagnosis safe), but typically 3-4x smaller bytes.
-    // Frontend Cornerstone wadouri loader transparently decodes the new
-    // transfer syntax — no client change required.
-    // Flip to false in this service to skip transcoding entirely.
-    private const bool TranscodeToJpegLs = true;
+    // Transcode every slice to HTJ2K Lossless RPCL (High-Throughput JPEG 2000,
+    // transfer syntax 1.2.840.10008.1.2.4.202) before uploading to blob.
+    // Lossless = identical pixel values after decode (primary-diagnosis safe),
+    // and the RPCL (Resolution-Position-Component-Layer) progression order is
+    // what lets the viewer pull a low-res preview from the first few KB via a
+    // byte-range request, then sharpen — the basis of progressive 2D loading
+    // and decimated MPR. The frontend decodes it with @cornerstonejs/codec-
+    // openjph (already installed); pre-existing JPEG-LS studies keep working
+    // via the charls codec, so this needs no client change and no forced
+    // re-extraction. Flip to false to upload original bytes untouched.
+    private const bool TranscodeToHtj2k = true;
 
     private readonly IApplicationDbContext _db;
     private readonly IBlobService _blob;
@@ -65,34 +69,33 @@ public class DicomExtractionService : IDicomExtractionService
     }
 
     /// <summary>
-    /// Returns JPEG-LS-transcoded bytes for the given DICOM if the source is
-    /// uncompressed (Implicit/Explicit VR Little Endian) AND transcoding is
-    /// enabled. Otherwise returns the original bytes unchanged.
+    /// Returns HTJ2K-Lossless-RPCL-transcoded bytes for the given DICOM, or the
+    /// original bytes if the slice is already HTJ2K, transcoding is disabled, or
+    /// the source codec can't be decoded.
     ///
-    /// Only transcodes from uncompressed sources to avoid:
-    ///  - Lossy-to-lossy recompression (quality degradation).
-    ///  - Failing on exotic codecs we don't have decoders for.
-    /// Falls back to original bytes on any transcode error — the slice
-    /// always uploads successfully even if compression fails.
+    /// Unlike the previous JPEG-LS path we transcode from ANY source syntax, not
+    /// just uncompressed: HTJ2K RPCL is LOSSLESS, so re-encoding an already-lossy
+    /// source introduces no FURTHER loss, and getting every slice into HTJ2K is
+    /// the prerequisite for byte-range progressive loading + decimated MPR. The
+    /// decode happens inside fo-dicom.Codecs (OpenJPH); on any failure (exotic
+    /// source codec, etc.) we fall back to the original bytes so the slice always
+    /// uploads successfully.
     /// </summary>
     private byte[] TranscodeSliceBytes(DicomFile dicom, byte[] originalBytes, out bool didTranscode)
     {
         didTranscode = false;
-        if (!TranscodeToJpegLs) return originalBytes;
+        if (!TranscodeToHtj2k) return originalBytes;
 
         try
         {
             var srcSyntax = dicom.Dataset.InternalTransferSyntax;
-            if (srcSyntax == DicomTransferSyntax.JPEGLSLossless)
-                return originalBytes; // already JPEG-LS
+            // Already an HTJ2K variant — re-encoding would only burn CPU.
+            if (srcSyntax == DicomTransferSyntax.HTJ2KLosslessRPCL ||
+                srcSyntax == DicomTransferSyntax.HTJ2KLossless ||
+                srcSyntax == DicomTransferSyntax.HTJ2K)
+                return originalBytes;
 
-            var isUncompressed =
-                srcSyntax == DicomTransferSyntax.ImplicitVRLittleEndian ||
-                srcSyntax == DicomTransferSyntax.ExplicitVRLittleEndian ||
-                srcSyntax == DicomTransferSyntax.ExplicitVRBigEndian;
-            if (!isUncompressed) return originalBytes;
-
-            var transcoder = new DicomTranscoder(srcSyntax, DicomTransferSyntax.JPEGLSLossless);
+            var transcoder = new DicomTranscoder(srcSyntax, DicomTransferSyntax.HTJ2KLosslessRPCL);
             var transcodedFile = transcoder.Transcode(dicom);
             using var ms = new MemoryStream();
             transcodedFile.Save(ms);
@@ -101,7 +104,7 @@ public class DicomExtractionService : IDicomExtractionService
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "[DICOM_EXTRACT] JPEG-LS transcode failed — uploading original bytes");
+            _logger.LogWarning(ex, "[DICOM_EXTRACT] HTJ2K transcode failed — uploading original bytes");
             return originalBytes;
         }
     }
@@ -239,8 +242,9 @@ public class DicomExtractionService : IDicomExtractionService
                     cancellationToken.ThrowIfCancellationRequested();
                     var p = series.Slices[i];
 
-                    // Transcode uncompressed pixel data to JPEG-LS Lossless to
-                    // shrink the blob payload by ~3-4x. Lossless = primary-
+                    // Transcode to HTJ2K Lossless RPCL — shrinks the payload and,
+                    // crucially, makes each slice resolution-progressive (a low-res
+                    // image decodes from a byte-range prefix). Lossless = primary-
                     // diagnosis safe; falls back to original bytes on any error.
                     var uploadBytes = TranscodeSliceBytes(p.DicomFile, p.OriginalBytes, out var didTranscode);
                     totalOriginalBytes += p.OriginalBytes.Length;
@@ -313,7 +317,7 @@ public class DicomExtractionService : IDicomExtractionService
                 : 1.0;
             _logger.LogInformation(
                 "[DICOM_EXTRACT] Asset {AssetId} extracted {Slices} slices across {Series} series. " +
-                "Transcoded {Transcoded}/{Slices} slices to JPEG-LS Lossless. " +
+                "Transcoded {Transcoded}/{Slices} slices to HTJ2K Lossless RPCL. " +
                 "Bytes uploaded: {Uploaded:N0} (was {Original:N0}, ratio {Ratio:P1}).",
                 assetId, sliceCount, bySeries.Count,
                 transcodedSliceCount, sliceCount,
