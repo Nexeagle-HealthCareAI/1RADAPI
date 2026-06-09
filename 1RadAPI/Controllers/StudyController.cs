@@ -3,6 +3,7 @@ using _1Rad.Domain.Entities;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -21,19 +22,57 @@ namespace _1RadAPI.Controllers
         private readonly IUserContext _userContext;
         private readonly IDicomExtractionQueue _extractionQueue;
         private readonly IDicomExtractionService _extractionService;
+        private readonly IConfiguration _configuration;
 
         public StudyController(
             IApplicationDbContext context,
             IBlobService blobService,
             IUserContext userContext,
             IDicomExtractionQueue extractionQueue,
-            IDicomExtractionService extractionService)
+            IDicomExtractionService extractionService,
+            IConfiguration configuration)
         {
             _context = context;
             _blobService = blobService;
             _userContext = userContext;
             _extractionQueue = extractionQueue;
             _extractionService = extractionService;
+            _configuration = configuration;
+        }
+
+        /// <summary>
+        /// Rewrites an Azure Blob URL to go through the CDN / Front Door
+        /// endpoint configured in <c>AzureBlobStorage:CdnBaseUrl</c>
+        /// (e.g. https://cdn.1rad.app or https://1rad-dicom.azurefd.net).
+        ///
+        /// DICOM slices are immutable and SAS-free on read, so Front Door
+        /// caches them at the edge: the second-and-later access to any slice
+        /// is a ~20 ms edge hit instead of a round trip to Blob in a single
+        /// region. We only rewrite the host — the path (/{container}/{blob})
+        /// is preserved, and Front Door's route maps it 1:1 to the origin.
+        ///
+        /// When the setting is empty the original Blob URL is returned
+        /// unchanged, so the CDN is an opt-in toggle with zero-redeploy
+        /// rollback (clear the App Setting and every URL reverts to Blob).
+        /// </summary>
+        private string? ToCdn(string? blobUrl)
+        {
+            if (string.IsNullOrEmpty(blobUrl)) return blobUrl;
+            var cdnBase = _configuration["AzureBlobStorage:CdnBaseUrl"];
+            if (string.IsNullOrWhiteSpace(cdnBase)) return blobUrl;
+            try
+            {
+                var u = new Uri(blobUrl);
+                // Only rewrite OUR blob hosts — leave anything else (already a
+                // CDN URL, external, or relative) untouched.
+                if (!u.Host.EndsWith(".blob.core.windows.net", StringComparison.OrdinalIgnoreCase))
+                    return blobUrl;
+                return $"{cdnBase.TrimEnd('/')}{u.AbsolutePath}";
+            }
+            catch
+            {
+                return blobUrl;
+            }
         }
 
         [HttpGet("{appointmentId}/assets")]
@@ -116,7 +155,7 @@ namespace _1RadAPI.Controllers
                         appointmentServiceId = a.AppointmentServiceId,
                         fileName = a.FileName,
                         fileType = a.FileType,
-                        blobUrl = a.BlobUrl,
+                        blobUrl = ToCdn(a.BlobUrl),
                         extractionStatus = "NotApplicable",
                         series = (object?)null,
                     };
@@ -132,7 +171,7 @@ namespace _1RadAPI.Controllers
                         appointmentServiceId = a.AppointmentServiceId,
                         fileName = a.FileName,
                         fileType = a.FileType,
-                        blobUrl = a.BlobUrl,
+                        blobUrl = ToCdn(a.BlobUrl),
                         extractionStatus = a.ExtractionStatus ?? "Pending",
                         series = (object?)null,
                     };
@@ -148,14 +187,14 @@ namespace _1RadAPI.Controllers
                             seriesUID = g.Key,
                             seriesDescription = first.SeriesDescription,
                             modality = first.Modality,
-                            thumbnailUrl = first.ThumbnailUrl,
+                            thumbnailUrl = ToCdn(first.ThumbnailUrl),
                             slices = g.OrderBy(s => s.InstanceNumber ?? int.MaxValue)
                                       .ThenBy(s => s.SopInstanceUID)
                                       .Select(s => new
                                       {
                                           sopInstanceUID = s.SopInstanceUID,
                                           instanceNumber = s.InstanceNumber,
-                                          url = s.BlobUrl,
+                                          url = ToCdn(s.BlobUrl),
                                           metadata = s.MetadataJson,
                                       })
                                       .ToList(),
@@ -175,7 +214,7 @@ namespace _1RadAPI.Controllers
                     appointmentServiceId = a.AppointmentServiceId,
                     fileName = a.FileName,
                     fileType = a.FileType,
-                    blobUrl = a.BlobUrl, // kept for fallback compat
+                    blobUrl = ToCdn(a.BlobUrl), // kept for fallback compat
                     extractionStatus = "Extracted",
                     series = (object?)seriesGroups,
                 };
@@ -228,7 +267,7 @@ namespace _1RadAPI.Controllers
                         id = a.Id,
                         fileName = a.FileName,
                         fileType = a.FileType,
-                        blobUrl = a.BlobUrl,
+                        blobUrl = ToCdn(a.BlobUrl),
                         uploadedAt = a.UploadedAt
                     }),
                     deviceInfo = deviceInfo,
