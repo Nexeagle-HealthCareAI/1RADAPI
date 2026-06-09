@@ -152,22 +152,16 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
                     // referrer matches the Referral Hub instead of falling back to the
                     // appointment's / patient's default referrer. Only when there is no
                     // commission row do we use those fallbacks.
-                    ReferrerName = (_context.ReferralCommissions
-                            .Where(c => ((i.AppointmentId != null && c.AppointmentId == i.AppointmentId) || (i.InvoiceId != null && c.ReferenceNumber == i.InvoiceId)) && c.HospitalId == i.HospitalId)
-                            .Select(c => c.ReferrerName)
-                            .FirstOrDefault())
-                        ?? (i.Appointment != null ? i.Appointment.ReferredBy : (i.Patient.Referrer != null ? i.Patient.Referrer.Name : null)),
-                    ReferrerId = (_context.ReferralCommissions
-                            .Where(c => ((i.AppointmentId != null && c.AppointmentId == i.AppointmentId) || (i.InvoiceId != null && c.ReferenceNumber == i.InvoiceId)) && c.HospitalId == i.HospitalId)
-                            .Select(c => (Guid?)c.ReferrerId)
-                            .FirstOrDefault())
-                        ?? i.Patient.ReferrerId ?? (i.Appointment != null ? _context.Referrers.Where(r => r.Name == i.Appointment.ReferredBy && r.HospitalId == i.HospitalId).Select(r => (Guid?)r.ReferrerId).FirstOrDefault() : null),
+                    // Referrer/commission fields are resolved in ONE batched pass
+                    // after materialisation (see below) instead of 4 correlated
+                    // subqueries per invoice. Here we seed only the FALLBACKS — a
+                    // matching commission overrides them in memory, preserving the
+                    // old `commission ?? fallback` precedence exactly.
+                    ReferrerName = (i.Appointment != null ? i.Appointment.ReferredBy : (i.Patient.Referrer != null ? i.Patient.Referrer.Name : null)),
+                    ReferrerId = i.Patient.ReferrerId,
                     Modality = i.Appointment != null ? i.Appointment.Modality : null,
-                    CommissionAmount = (_context.ReferralCommissions.Where(c => ((i.AppointmentId != null && c.AppointmentId == i.AppointmentId) || (i.InvoiceId != null && c.ReferenceNumber == i.InvoiceId)) && c.HospitalId == i.HospitalId).Sum(c => (decimal?)c.CommissionAmount) ?? 0),
-                    CommissionId = _context.ReferralCommissions
-                        .Where(c => ((i.AppointmentId != null && c.AppointmentId == i.AppointmentId) || (i.InvoiceId != null && c.ReferenceNumber == i.InvoiceId)) && c.HospitalId == i.HospitalId)
-                        .Select(c => (Guid?)c.Id)
-                        .FirstOrDefault(),
+                    CommissionAmount = 0,
+                    CommissionId = null,
                     AppointmentStatus = i.Appointment != null ? i.Appointment.Status : null,
                     AppointmentId = i.AppointmentId,
 
@@ -199,6 +193,70 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
                 // up the rest.
                 .Take(200)
                 .ToListAsync(cancellationToken);
+
+            // ── Batched referrer + commission resolution ──────────────────
+            // One query for every commission touching the result set, then resolve
+            // ReferrerName / ReferrerId / CommissionAmount / CommissionId per invoice
+            // in memory — replaces 4 correlated subqueries PER ROW. A matching
+            // commission OVERRIDES the seeded fallbacks (old `commission ?? fallback`).
+            var commHospitalId = _context.UserContext.HospitalId;
+            var commApptIds = result.Where(r => r.AppointmentId.HasValue).Select(r => r.AppointmentId!.Value).Distinct().ToList();
+            var commDisplayIds = result.Select(r => r.DisplayId).Where(d => !string.IsNullOrEmpty(d)).Distinct().ToList();
+            if (commApptIds.Count > 0 || commDisplayIds.Count > 0)
+            {
+                var comms = await _context.ReferralCommissions
+                    .AsNoTracking()
+                    .Where(c => c.HospitalId == commHospitalId
+                        && ((c.AppointmentId != null && commApptIds.Contains(c.AppointmentId.Value))
+                            || (c.ReferenceNumber != null && commDisplayIds.Contains(c.ReferenceNumber))))
+                    .Select(c => new { c.Id, c.AppointmentId, c.ReferenceNumber, c.ReferrerId, c.ReferrerName, c.CommissionAmount })
+                    .ToListAsync(cancellationToken);
+
+                if (comms.Count > 0)
+                {
+                    foreach (var inv in result)
+                    {
+                        var matched = comms.Where(c =>
+                            (inv.AppointmentId.HasValue && c.AppointmentId == inv.AppointmentId)
+                            || (!string.IsNullOrEmpty(inv.DisplayId) && c.ReferenceNumber == inv.DisplayId))
+                            .ToList();
+                        if (matched.Count == 0) continue;
+
+                        var first = matched[0];
+                        // commission name overrides the fallback only when present
+                        if (first.ReferrerName != null) inv.ReferrerName = first.ReferrerName;
+                        inv.ReferrerId = first.ReferrerId;
+                        inv.CommissionAmount = matched.Sum(c => c.CommissionAmount);
+                        inv.CommissionId = first.Id;
+                    }
+                }
+            }
+
+            // Referrer-by-name fallback (was a per-row Referrers subquery): only for
+            // invoices still without a referrer id but carrying a referrer name.
+            var unresolvedNames = result
+                .Where(r => !r.ReferrerId.HasValue && !string.IsNullOrEmpty(r.ReferrerName))
+                .Select(r => r.ReferrerName!)
+                .Distinct()
+                .ToList();
+            if (unresolvedNames.Count > 0)
+            {
+                var refIdByName = (await _context.Referrers
+                    .AsNoTracking()
+                    .Where(r => r.HospitalId == commHospitalId && r.Name != null && unresolvedNames.Contains(r.Name))
+                    .Select(r => new { r.Name, r.ReferrerId })
+                    .ToListAsync(cancellationToken))
+                    .GroupBy(r => r.Name!)
+                    .ToDictionary(g => g.Key, g => g.First().ReferrerId);
+                foreach (var inv in result)
+                {
+                    if (!inv.ReferrerId.HasValue && !string.IsNullOrEmpty(inv.ReferrerName)
+                        && refIdByName.TryGetValue(inv.ReferrerName, out var rid))
+                    {
+                        inv.ReferrerId = rid;
+                    }
+                }
+            }
 
             // Backfill display items for invoices that have NONE but are linked
             // to an appointment — derive them from the live AppointmentService

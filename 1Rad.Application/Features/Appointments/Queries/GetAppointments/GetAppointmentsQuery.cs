@@ -131,11 +131,11 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
                     x.Appointment.ScannedAt,
                     x.Invoice != null ? x.Invoice.TotalAmount : 0,
                     x.Invoice != null ? x.Invoice.ReferralCutValue : 0,
-                    _context.StudyAssets.Count(sa => sa.AppointmentId == x.Appointment.AppointmentId),
-                    _context.DiagnosticReports
-                        .Where(dr => dr.AppointmentId == x.Appointment.AppointmentId)
-                        .Select(dr => dr.Impression)
-                        .FirstOrDefault(),
+                    // AssetCount + ReportImpression are filled by batched second
+                    // queries below (one GROUP BY + one fetch) instead of a
+                    // correlated subquery PER ROW — the worklist N+1 fix.
+                    0,
+                    (string?)null,
                     x.Appointment.DailyTokenNumber,
                     x.Appointment.DelayReason,
                     x.Appointment.ReportProgressStatus ?? "NOT_STARTED",
@@ -204,23 +204,41 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
                 .GroupBy(s => s.AppointmentId)
                 .ToDictionary(g => g.Key, g => (IReadOnlyList<AppointmentServiceDto>)g.Select(x => x.Dto).ToList());
 
+            // ── Batched StudyAsset counts — one GROUP BY instead of a COUNT
+            // subquery per appointment row. ───────────────────────────────
+            var assetCountByAppointment = (await _context.StudyAssets
+                .AsNoTracking()
+                .Where(sa => appointmentIds.Contains(sa.AppointmentId))
+                .GroupBy(sa => sa.AppointmentId)
+                .Select(g => new { AppointmentId = g.Key, Count = g.Count() })
+                .ToListAsync(cancellationToken))
+                .ToDictionary(x => x.AppointmentId, x => x.Count);
+
+            // ── Batched report impressions — one fetch + first-per-appointment
+            // in memory (mirrors the old per-row FirstOrDefault). ──────────
+            var impressionByAppointment = (await _context.DiagnosticReports
+                .AsNoTracking()
+                .Where(dr => appointmentIds.Contains(dr.AppointmentId))
+                .Select(dr => new { dr.AppointmentId, dr.Impression })
+                .ToListAsync(cancellationToken))
+                .GroupBy(r => r.AppointmentId)
+                .ToDictionary(g => g.Key, g => g.Select(r => r.Impression).FirstOrDefault());
+
             // Reattach to each DTO. Records are immutable so we `with`-clone
             // — cheap because the underlying string/scalar fields are
             // pass-through references.
             for (int i = 0; i < appointments.Count; i++)
             {
-                if (servicesByAppointment.TryGetValue(appointments[i].AppointmentId, out var lines))
+                var apptId = appointments[i].AppointmentId;
+                appointments[i] = appointments[i] with
                 {
-                    appointments[i] = appointments[i] with { Services = lines };
-                }
-                else
-                {
-                    // Visit has no service rows (shouldn't happen after
-                    // migration 57's backfill, but defensive). Surface an
-                    // empty list so frontends can rely on `services` being
-                    // non-null on responses from this server build.
-                    appointments[i] = appointments[i] with { Services = System.Array.Empty<AppointmentServiceDto>() };
-                }
+                    // Visit with no service rows surfaces an empty (non-null) list.
+                    Services = servicesByAppointment.TryGetValue(apptId, out var lines)
+                        ? lines
+                        : System.Array.Empty<AppointmentServiceDto>(),
+                    AssetCount = assetCountByAppointment.TryGetValue(apptId, out var ac) ? ac : 0,
+                    ReportImpression = impressionByAppointment.TryGetValue(apptId, out var imp) ? imp : null,
+                };
             }
 
             return appointments;
