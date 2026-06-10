@@ -721,12 +721,22 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             keep.Add(newCommission.Id);
         }
 
-        // Any commission rows that no longer correspond to a live service
-        // get their amount zeroed (preserves audit trail, matches v1
-        // "drop referrer" behaviour).
+        // Any commission rows that no longer correspond to a live service are
+        // soft-deleted (zeroed + DeletedAt) so the referrer is credited ONLY for
+        // the services CURRENTLY on the appointment. A modality that was later
+        // changed/removed must drop out of the Referral Hub ledger entirely — not
+        // linger as a ₹0 row (the ledger filters DeletedAt == null). The row is
+        // kept (soft-delete) for audit rather than hard-deleted, and UpdatedAt is
+        // bumped so the offline sync applies the tombstone to the local cache.
         foreach (var c in commissions)
         {
-            if (!keep.Contains(c.Id)) c.CommissionAmount = 0;
+            if (keep.Contains(c.Id)) continue;
+            c.CommissionAmount = 0;
+            if (c.DeletedAt == null)
+            {
+                c.DeletedAt = DateTime.UtcNow;
+                c.UpdatedAt = DateTime.UtcNow;
+            }
         }
     }
 }

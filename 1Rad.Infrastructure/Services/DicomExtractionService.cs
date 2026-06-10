@@ -120,9 +120,11 @@ public class DicomExtractionService : IDicomExtractionService
             return 0;
         }
 
-        // Non-ZIP assets don't get extracted — viewer can load them directly.
+        // Only ZIP archives and per-instance ("instances") uploads get
+        // extracted into per-slice blobs. Single attachments (dcm/jpg/png)
+        // load directly in the viewer.
         var ext = (asset.FileType ?? "").Trim().ToLowerInvariant();
-        if (ext != "zip")
+        if (ext != "zip" && ext != "instances")
         {
             asset.ExtractionStatus = "NotApplicable";
             asset.ExtractionCompletedAt = DateTime.UtcNow;
@@ -150,63 +152,17 @@ public class DicomExtractionService : IDicomExtractionService
 
         try
         {
-            // 1. Download the ZIP from blob.
-            using var zipStream = await _blob.DownloadFileAsync(asset.BlobUrl);
-            using var memory = new MemoryStream();
-            await zipStream.CopyToAsync(memory, cancellationToken);
-            memory.Position = 0;
-
-            using var archive = new ZipArchive(memory, ZipArchiveMode.Read);
-
-            // 2. Parse every entry that looks like DICOM. Group by SeriesUID.
-            var parsedSlices = new List<ParsedSlice>(archive.Entries.Count);
-            foreach (var entry in archive.Entries)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (entry.Length == 0) continue;
-                // Skip __MACOSX/ and other zip junk
-                if (entry.FullName.StartsWith("__MACOSX", StringComparison.OrdinalIgnoreCase)) continue;
-                if (entry.Name.StartsWith("._", StringComparison.Ordinal)) continue;
-
-                try
-                {
-                    using var es = entry.Open();
-                    var ms = new MemoryStream((int)Math.Min(entry.Length, int.MaxValue));
-                    await es.CopyToAsync(ms, cancellationToken);
-                    ms.Position = 0;
-
-                    var dicom = DicomFile.Open(ms, FileReadOption.ReadAll);
-                    var ds = dicom.Dataset;
-
-                    var seriesUid    = ds.GetSingleValueOrDefault(DicomTag.SeriesInstanceUID, string.Empty);
-                    var sopUid       = ds.GetSingleValueOrDefault(DicomTag.SOPInstanceUID,    string.Empty);
-                    if (string.IsNullOrEmpty(seriesUid) || string.IsNullOrEmpty(sopUid))
-                    {
-                        _logger.LogDebug("[DICOM_EXTRACT] Asset {AssetId} entry {Name} missing UIDs — skipping.", assetId, entry.Name);
-                        continue;
-                    }
-
-                    parsedSlices.Add(new ParsedSlice
-                    {
-                        EntryName        = entry.Name,
-                        SeriesUid        = seriesUid,
-                        SopUid           = sopUid,
-                        InstanceNumber   = ds.GetSingleValueOrDefault<int?>(DicomTag.InstanceNumber, null),
-                        SeriesDescription = ds.GetSingleValueOrDefault<string?>(DicomTag.SeriesDescription, null),
-                        Modality         = ds.GetSingleValueOrDefault<string?>(DicomTag.Modality, null),
-                        DicomFile        = dicom,
-                        OriginalBytes    = ms.ToArray(),
-                    });
-                }
-                catch (Exception parseEx)
-                {
-                    // Bad file inside zip — log and move on. Don't fail the whole extraction.
-                    _logger.LogDebug(parseEx, "[DICOM_EXTRACT] Asset {AssetId} entry {Name} not a valid DICOM file — skipping.", assetId, entry.Name);
-                }
-            }
+            // 1+2. Gather DICOM slices from the source — either a single ZIP
+            // archive (legacy) or a set of pre-staged per-instance blobs (the
+            // bridge's SAS-per-file path). Both yield a flat list of parsed
+            // slices; everything downstream (grouping, transcode, index,
+            // thumbnails) is identical.
+            var parsedSlices = ext == "instances"
+                ? await GatherSlicesFromStagedInstancesAsync(asset, cancellationToken)
+                : await GatherSlicesFromZipAsync(asset, cancellationToken);
 
             if (parsedSlices.Count == 0)
-                throw new InvalidOperationException("ZIP contained no readable DICOM files.");
+                throw new InvalidOperationException("No readable DICOM instances found in the upload.");
 
             // 3. Group by series and order by InstanceNumber so the blob layout
             // is deterministic and the manifest comes out pre-sorted.
@@ -333,6 +289,113 @@ public class DicomExtractionService : IDicomExtractionService
             _logger.LogError(ex, "[DICOM_EXTRACT] Asset {AssetId} extraction failed.", assetId);
             throw;
         }
+    }
+
+    // Parse one downloaded DICOM byte stream into a ParsedSlice, or null if it
+    // isn't a readable DICOM with the UIDs we need. Shared by both gatherers.
+    private ParsedSlice? ParseSlice(Guid assetId, string label, byte[] bytes)
+    {
+        try
+        {
+            using var ms = new MemoryStream(bytes, writable: false);
+            var dicom = DicomFile.Open(ms, FileReadOption.ReadAll);
+            var ds = dicom.Dataset;
+            var seriesUid = ds.GetSingleValueOrDefault(DicomTag.SeriesInstanceUID, string.Empty);
+            var sopUid    = ds.GetSingleValueOrDefault(DicomTag.SOPInstanceUID,    string.Empty);
+            if (string.IsNullOrEmpty(seriesUid) || string.IsNullOrEmpty(sopUid))
+            {
+                _logger.LogDebug("[DICOM_EXTRACT] Asset {AssetId} {Label} missing UIDs — skipping.", assetId, label);
+                return null;
+            }
+            return new ParsedSlice
+            {
+                EntryName         = label,
+                SeriesUid         = seriesUid,
+                SopUid            = sopUid,
+                InstanceNumber    = ds.GetSingleValueOrDefault<int?>(DicomTag.InstanceNumber, null),
+                SeriesDescription = ds.GetSingleValueOrDefault<string?>(DicomTag.SeriesDescription, null),
+                Modality          = ds.GetSingleValueOrDefault<string?>(DicomTag.Modality, null),
+                DicomFile         = dicom,
+                OriginalBytes     = bytes,
+            };
+        }
+        catch (Exception parseEx)
+        {
+            _logger.LogDebug(parseEx, "[DICOM_EXTRACT] Asset {AssetId} {Label} not a valid DICOM file — skipping.", assetId, label);
+            return null;
+        }
+    }
+
+    // Legacy path: download the study ZIP from blob and parse every entry.
+    private async Task<List<ParsedSlice>> GatherSlicesFromZipAsync(StudyAsset asset, CancellationToken ct)
+    {
+        using var zipStream = await _blob.DownloadFileAsync(asset.BlobUrl);
+        using var memory = new MemoryStream();
+        await zipStream.CopyToAsync(memory, ct);
+        memory.Position = 0;
+
+        using var archive = new ZipArchive(memory, ZipArchiveMode.Read);
+        var parsed = new List<ParsedSlice>(archive.Entries.Count);
+        foreach (var entry in archive.Entries)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (entry.Length == 0) continue;
+            if (entry.FullName.StartsWith("__MACOSX", StringComparison.OrdinalIgnoreCase)) continue;
+            if (entry.Name.StartsWith("._", StringComparison.Ordinal)) continue;
+
+            using var es = entry.Open();
+            using var ms = new MemoryStream((int)Math.Min(entry.Length, int.MaxValue));
+            await es.CopyToAsync(ms, ct);
+            var slice = ParseSlice(asset.Id, entry.Name, ms.ToArray());
+            if (slice != null) parsed.Add(slice);
+        }
+        return parsed;
+    }
+
+    // Per-instance path: asset.BlobUrl points to a small JSON manifest listing
+    // the pre-staged instance blob URLs (the bridge PUT each .dcm via SAS).
+    // Download + parse each, then best-effort delete the staging blobs so they
+    // don't linger (the final transcoded slices are written elsewhere).
+    private async Task<List<ParsedSlice>> GatherSlicesFromStagedInstancesAsync(StudyAsset asset, CancellationToken ct)
+    {
+        using var manifestStream = await _blob.DownloadFileAsync(asset.BlobUrl);
+        using var mm = new MemoryStream();
+        await manifestStream.CopyToAsync(mm, ct);
+        var manifest = System.Text.Json.JsonSerializer.Deserialize<StagedManifest>(
+            System.Text.Encoding.UTF8.GetString(mm.ToArray())) ?? new StagedManifest();
+
+        var urls = manifest.Instances ?? new List<string>();
+        var parsed = new List<ParsedSlice>(urls.Count);
+        foreach (var url in urls)
+        {
+            ct.ThrowIfCancellationRequested();
+            byte[] bytes;
+            try
+            {
+                using var s = await _blob.DownloadFileAsync(url);
+                using var ms = new MemoryStream();
+                await s.CopyToAsync(ms, ct);
+                bytes = ms.ToArray();
+            }
+            catch (Exception dlEx)
+            {
+                _logger.LogDebug(dlEx, "[DICOM_EXTRACT] Asset {AssetId} staged instance {Url} download failed — skipping.", asset.Id, url);
+                continue;
+            }
+            var slice = ParseSlice(asset.Id, url, bytes);
+            if (slice != null) parsed.Add(slice);
+        }
+
+        // NOTE: staging blobs are intentionally left in place. Deleting here
+        // would break an extraction retry (the bytes are only in memory for this
+        // run). They live under the staging/{assetId}/ prefix and are reclaimed
+        // by a periodic sweep; the real slices are written under extracted/.
+        return parsed;
+    }
+
+    private sealed class StagedManifest
+    {
+        public List<string>? Instances { get; set; }
     }
 
     private static Image? RenderThumbnail(DicomFile file)

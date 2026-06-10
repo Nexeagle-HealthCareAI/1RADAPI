@@ -55,6 +55,26 @@ namespace _1RadAPI.Controllers
         /// unchanged, so the CDN is an opt-in toggle with zero-redeploy
         /// rollback (clear the App Setting and every URL reverts to Blob).
         /// </summary>
+        // Extract the blob path (everything after "/{container}/") from a full
+        // blob URL, so we can existence-check a staged instance from its
+        // PublicReadUrl. Returns null if the URL can't be parsed.
+        private static string? BlobPathFromUrl(string url, string container)
+        {
+            if (string.IsNullOrWhiteSpace(url)) return null;
+            try
+            {
+                var abs = new Uri(url).AbsolutePath.TrimStart('/'); // "{container}/{path}"
+                var prefix = container + "/";
+                return abs.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                    ? abs.Substring(prefix.Length)
+                    : abs;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         private string? ToCdn(string? blobUrl)
         {
             if (string.IsNullOrEmpty(blobUrl)) return blobUrl;
@@ -625,6 +645,140 @@ namespace _1RadAPI.Controllers
             }
         }
 
+        // ── Per-instance ingest (SAS-per-file) ──────────────────────────────
+        // The bridge uploads each DICOM instance straight to a staging blob via
+        // SAS (no whole-study ZIP), then calls /register. Removes the server
+        // unzip step; the existing extraction worker transcodes the staged
+        // instances to HTJ2K and builds the slice index exactly as for a ZIP.
+
+        [HttpPost("instance-upload/request-sas")]
+        public async Task<IActionResult> RequestInstanceUploadSas([FromBody] InstanceUploadSasRequest request)
+        {
+            try
+            {
+                if (request == null || request.AppointmentId == Guid.Empty)
+                    return BadRequest(new { success = false, error = "AppointmentId is required." });
+                if (request.Count <= 0 || request.Count > 5000)
+                    return BadRequest(new { success = false, error = "Count must be between 1 and 5000." });
+
+                var appointment = await _context.Appointments
+                    .IgnoreQueryFilters()
+                    .FirstOrDefaultAsync(a => a.AppointmentId == request.AppointmentId);
+                if (appointment == null)
+                    return NotFound(new { success = false, error = "Appointment not found." });
+
+                // Mint the asset id now so staging blobs live under it; /register
+                // and the worker find + reference them deterministically.
+                var assetId = Guid.NewGuid();
+                var targets = new List<object>(request.Count);
+                for (int i = 0; i < request.Count; i++)
+                {
+                    var blobPath = $"{appointment.HospitalId:N}/{appointment.AppointmentId:N}/staging/{assetId:N}/{i:D5}.dcm";
+                    var t = await _blobService.GenerateSasUploadUrlAsync(
+                        blobPath, "dicom-files", TimeSpan.FromHours(2), "application/dicom");
+                    targets.Add(new { index = i, sasUrl = t.SasUrl, publicReadUrl = t.PublicReadUrl, blobPath = t.BlobPath });
+                }
+
+                return Ok(new { success = true, data = new { assetId, containerName = "dicom-files", targets } });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, error = $"INSTANCE_SAS_FAILURE: {ex.Message}" });
+            }
+        }
+
+        [HttpPost("instance-upload/register")]
+        public async Task<IActionResult> RegisterInstanceUpload([FromBody] InstanceUploadRegisterRequest request)
+        {
+            try
+            {
+                if (request == null || request.AssetId == Guid.Empty || request.AppointmentId == Guid.Empty)
+                    return BadRequest(new { success = false, error = "AssetId and AppointmentId are required." });
+                if (request.InstanceUrls == null || request.InstanceUrls.Count == 0)
+                    return BadRequest(new { success = false, error = "At least one staged instance URL is required." });
+
+                var appointment = await _context.Appointments
+                    .IgnoreQueryFilters()
+                    .FirstOrDefaultAsync(a => a.AppointmentId == request.AppointmentId);
+                if (appointment == null)
+                    return NotFound(new { success = false, error = "Appointment not found." });
+
+                // Parity with /upload-complete — verify the staged blobs actually
+                // landed before creating an asset that references them. Sample
+                // the first + last (full N HEAD requests would be slow for a
+                // 200-slice study); a sample catches the gross failure modes:
+                // wrong container, CORS, or every PUT having silently failed.
+                var sampleUrls = new List<string> { request.InstanceUrls[0] };
+                if (request.InstanceUrls.Count > 1)
+                    sampleUrls.Add(request.InstanceUrls[request.InstanceUrls.Count - 1]);
+                foreach (var url in sampleUrls)
+                {
+                    var path = BlobPathFromUrl(url, "dicom-files");
+                    if (path == null || !await _blobService.BlobExistsAsync(path, "dicom-files"))
+                    {
+                        return BadRequest(new
+                        {
+                            success = false,
+                            error = "Staged instance blob not found in Azure — the PUT likely failed (CORS not configured on the storage account, or the SAS expired) before register. Re-upload the instances and retry.",
+                        });
+                    }
+                }
+
+                // Write a tiny manifest listing the staged instance blobs. The
+                // extraction worker reads it (asset.BlobUrl points here), then
+                // transcodes each to HTJ2K + builds the slice index. The JSON
+                // property name ("Instances") matches the worker's reader.
+                var manifestJson = System.Text.Json.JsonSerializer.Serialize(new { Instances = request.InstanceUrls });
+                var manifestPath = $"{appointment.HospitalId:N}/{appointment.AppointmentId:N}/staging/{request.AssetId:N}/_manifest.json";
+                string manifestUrl;
+                using (var ms = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(manifestJson)))
+                {
+                    manifestUrl = await _blobService.UploadFileAtPathAsync(ms, manifestPath, "application/json", "dicom-files");
+                }
+
+                var asset = await _context.StudyAssets
+                    .IgnoreQueryFilters()
+                    .FirstOrDefaultAsync(a => a.Id == request.AssetId);
+                if (asset == null)
+                {
+                    asset = new StudyAsset
+                    {
+                        Id = request.AssetId,
+                        AppointmentId = request.AppointmentId,
+                        AppointmentServiceId = request.AppointmentServiceId,
+                        BlobUrl = manifestUrl,
+                        FileName = $"study_{request.InstanceUrls.Count}_instances",
+                        FileType = "instances",
+                        UploadedAt = DateTime.UtcNow,
+                        HospitalId = appointment.HospitalId,
+                        ExtractionStatus = "Queued",
+                    };
+                    _context.StudyAssets.Add(asset);
+                }
+                else
+                {
+                    asset.BlobUrl = manifestUrl;
+                    asset.FileType = "instances";
+                    asset.UploadedAt = DateTime.UtcNow;
+                    asset.ExtractionStatus = "Queued";
+                    if (request.AppointmentServiceId.HasValue)
+                        asset.AppointmentServiceId = request.AppointmentServiceId;
+                }
+
+                if (appointment.Status != "SCANNED" && appointment.Status != "REPORTED")
+                    appointment.Status = "IN_PROGRESS";
+
+                await _context.SaveChangesAsync(default);
+                _extractionQueue.Enqueue(asset.Id);
+
+                return Ok(new { success = true, data = asset });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, error = $"INSTANCE_REGISTER_FAILURE: {ex.Message}" });
+            }
+        }
+
         [HttpGet("proxy-asset")]
         [HttpHead("proxy-asset")]
         [Microsoft.AspNetCore.Authorization.AllowAnonymous]
@@ -699,6 +853,21 @@ namespace _1RadAPI.Controllers
         public string FileName { get; set; } = string.Empty;
         public long FileSize { get; set; }
         public string? ContentType { get; set; }
+    }
+
+    public class InstanceUploadSasRequest
+    {
+        public Guid AppointmentId { get; set; }
+        public int Count { get; set; }
+    }
+
+    public class InstanceUploadRegisterRequest
+    {
+        public Guid AssetId { get; set; }
+        public Guid AppointmentId { get; set; }
+        public Guid? AppointmentServiceId { get; set; }
+        // The PublicReadUrls of the staged instance blobs the bridge uploaded.
+        public List<string> InstanceUrls { get; set; } = new();
     }
 
     public class SasUploadCompleteRequest
