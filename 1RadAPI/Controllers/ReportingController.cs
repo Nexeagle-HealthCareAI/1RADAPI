@@ -9,6 +9,7 @@ using _1Rad.Application.Features.Reporting.Commands.UpsertTemplate;
 using _1Rad.Application.Features.Reporting.Queries.GetKeywords;
 using _1Rad.Application.Features.Reporting.Queries.GetReport;
 using _1Rad.Application.Features.Reporting.Queries.GetReportsDelta;
+using _1Rad.Application.Features.Reporting.Queries.BuildTermFrequency;
 using _1Rad.Application.Common.Exceptions;
 using _1Rad.Application.Features.Reporting.Queries.GetTemplates;
 using System;
@@ -332,6 +333,28 @@ namespace _1RadAPI.Controllers
                 }
             }
             return Ok(new { success = true, issues });
+        }
+
+        /// <summary>
+        /// Term-usage frequency mined from THIS clinic's diagnostic reports, so the
+        /// editor autocomplete can rank the 68k RadLex corpus by real usage instead
+        /// of a heuristic. Returns a term→count map (ordered most-used first).
+        ///
+        /// Workflow: call this once → save the response's `frequency` object to
+        /// easyrad/public/data/radlex_frequency.json → re-run the corpus generator
+        /// (node scripts/build-radlex-corpus.mjs) to fold real usage into the ranking.
+        /// </summary>
+        [HttpGet("terms/frequency")]
+        public async Task<IActionResult> TermFrequency([FromQuery] int maxNgram = 5)
+        {
+            var freq = await _mediator.Send(new BuildTermFrequencyQuery(maxNgram));
+            // Order desc so the most-used terms are easy to eyeball at the top of
+            // the saved JSON (the generator reads it as an unordered map regardless).
+            var ordered = freq
+                .OrderByDescending(kv => kv.Value)
+                .ThenBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(kv => kv.Key, kv => kv.Value);
+            return Ok(new { success = true, count = ordered.Count, frequency = ordered });
         }
 
         /// <summary>
