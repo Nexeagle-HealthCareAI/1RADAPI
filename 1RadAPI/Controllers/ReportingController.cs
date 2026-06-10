@@ -18,12 +18,14 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using _1Rad.Application.Interfaces;
 using MediatR;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace _1RadAPI.Controllers
 {
     [Route("api/v1/[controller]")]
     [ApiController]
+    [Authorize]
     public class ReportingController : ControllerBase
     {
         private readonly IMediator _mediator;
