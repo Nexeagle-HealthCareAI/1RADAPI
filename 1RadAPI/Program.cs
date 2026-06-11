@@ -169,6 +169,18 @@ builder.Services.AddInfrastructure(builder.Configuration);
 
 var app = builder.Build();
 
+// Ops guard: without CdnBaseUrl the viewer's slice URLs point straight at
+// blob storage — no Front Door edge caching AND browsers cap blob origins at
+// ~6 parallel HTTP/1.1 connections, which collapses DICOM scroll throughput.
+// This is the single biggest viewer-latency lever; make a misconfig loud.
+if (string.IsNullOrWhiteSpace(builder.Configuration["AzureBlobStorage:CdnBaseUrl"]))
+{
+    app.Logger.LogWarning(
+        "AzureBlobStorage:CdnBaseUrl is NOT configured — DICOM slice URLs will bypass Front Door " +
+        "(no edge caching, HTTP/1.1 only, ~6 parallel requests). Set it to the Front Door endpoint, " +
+        "e.g. https://<your-frontdoor>.azurefd.net, in App Service configuration.");
+}
+
 // Configure the HTTP request pipeline.
 // CorrelationIdMiddleware MUST run before ExceptionHandlingMiddleware so the
 // exception handler can include the correlation ID in error responses.

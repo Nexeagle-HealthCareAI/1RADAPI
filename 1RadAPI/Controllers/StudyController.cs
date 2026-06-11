@@ -310,26 +310,21 @@ namespace _1RadAPI.Controllers
             if (assets.Count == 0)
                 return Ok(new { success = true, data = new { appointmentId = appointment.AppointmentId, assets = Array.Empty<object>() } });
 
-            // Lazy fallback: any ZIP without an ExtractionStatus row is a
-            // legacy upload — extract it now (blocking the first viewer hit).
-            // Statuses Queued / Running mean the worker will pick it up; we
-            // don't block, just tell the frontend to fall back to ZIP for now.
-            foreach (var a in assets.Where(a =>
-                         (a.FileType ?? "").Equals("zip", StringComparison.OrdinalIgnoreCase) &&
-                         string.IsNullOrEmpty(a.ExtractionStatus)))
+            // Lazy fallback: legacy uploads from before their type became
+            // extraction-eligible (ZIPs without a status; single DCMs that
+            // were passthrough) — ENQUEUE for the background worker instead of
+            // extracting inline. Blocking this request meant the first viewer
+            // open of a legacy study could hang for minutes; the frontend
+            // already polls and renders a "processing" state.
+            var lazyAppointment = assets.Where(NeedsLazyExtraction).ToList();
+            if (lazyAppointment.Count > 0)
             {
-                try
-                {
-                    await _extractionService.ExtractAsync(a.Id, cancellationToken);
-                }
-                catch
-                {
-                    // ExtractAsync flagged the asset; just continue and the
-                    // response will tell the frontend to use ZIP fallback.
-                }
+                foreach (var a in lazyAppointment) a.ExtractionStatus = "Queued";
+                await _context.SaveChangesAsync(cancellationToken);
+                foreach (var a in lazyAppointment) _extractionQueue.Enqueue(a.Id);
             }
 
-            // Reload after potential lazy extraction so we see the new state.
+            // Reload with slices included for the manifest DTOs.
             assets = await _context.StudyAssets
                 .Where(a => a.AppointmentId == appointment.AppointmentId)
                 .Include(a => a.Slices)
@@ -373,25 +368,15 @@ namespace _1RadAPI.Controllers
                 .OrderByDescending(a => a.UploadedAt)
                 .ToListAsync(cancellationToken);
 
-            // Same lazy-extraction fallback as the by-appointment route:
-            // legacy ZIPs without an ExtractionStatus extract on first view.
-            var needsLazy = assets.Any(a =>
-                (a.FileType ?? "").Equals("zip", StringComparison.OrdinalIgnoreCase) &&
-                string.IsNullOrEmpty(a.ExtractionStatus));
-            if (needsLazy)
+            // Same lazy-extraction fallback as the by-appointment route, but
+            // NON-BLOCKING: enqueue for the worker; the frontend polls and
+            // shows "processing" until slices are ready.
+            var lazyStudy = assets.Where(NeedsLazyExtraction).ToList();
+            if (lazyStudy.Count > 0)
             {
-                foreach (var a in assets.Where(a =>
-                             (a.FileType ?? "").Equals("zip", StringComparison.OrdinalIgnoreCase) &&
-                             string.IsNullOrEmpty(a.ExtractionStatus)))
-                {
-                    try { await _extractionService.ExtractAsync(a.Id, cancellationToken); }
-                    catch { /* flagged on the asset; fall back to ZIP below */ }
-                }
-                assets = await _context.StudyAssets
-                    .Where(a => a.ImagingStudyId == study.Id)
-                    .Include(a => a.Slices)
-                    .OrderByDescending(a => a.UploadedAt)
-                    .ToListAsync(cancellationToken);
+                foreach (var a in lazyStudy) a.ExtractionStatus = "Queued";
+                await _context.SaveChangesAsync(cancellationToken);
+                foreach (var a in lazyStudy) _extractionQueue.Enqueue(a.Id);
             }
 
             return Ok(new
@@ -412,18 +397,97 @@ namespace _1RadAPI.Controllers
             });
         }
 
+        /// <summary>
+        /// Lightweight extraction-status poll — the viewer hits this every few
+        /// seconds while a study is processing. The full manifest (all slice
+        /// rows + metadata JSON) is only fetched once something is actually
+        /// ready; previously the poll re-ran the heavy manifest query each tick.
+        /// </summary>
+        [HttpGet("by-study/{imagingStudyId:guid}/extraction-status")]
+        [RequiresModule(ModuleConstants.Pacs)]
+        public async Task<IActionResult> GetExtractionStatusByStudy(Guid imagingStudyId, CancellationToken cancellationToken)
+        {
+            var study = await _context.ImagingStudies
+                .AsNoTracking()
+                .Where(st => st.Id == imagingStudyId)
+                .Select(st => new { st.Id, st.Status })
+                .FirstOrDefaultAsync(cancellationToken);
+            if (study == null)
+                return NotFound(new { success = false, error = "Imaging study not found." });
+
+            var assets = await _context.StudyAssets
+                .AsNoTracking()
+                .Where(a => a.ImagingStudyId == imagingStudyId)
+                .Select(a => new { assetId = a.Id, fileName = a.FileName, fileType = a.FileType, extractionStatus = a.ExtractionStatus })
+                .ToListAsync(cancellationToken);
+
+            return Ok(new { success = true, data = new { status = study.Status, assets } });
+        }
+
+        /// <summary>Same lightweight poll, keyed by appointment.</summary>
+        [HttpGet("{appointmentId}/extraction-status")]
+        [RequiresModule(ModuleConstants.Pacs)]
+        public async Task<IActionResult> GetExtractionStatus(string appointmentId, CancellationToken cancellationToken)
+        {
+            Guid.TryParse(appointmentId, out var guidId);
+            var appointment = await _context.Appointments
+                .AsNoTracking()
+                .Where(a => (guidId != Guid.Empty && a.AppointmentId == guidId) || a.DisplayId == appointmentId)
+                .Select(a => new { a.AppointmentId })
+                .FirstOrDefaultAsync(cancellationToken);
+            if (appointment == null)
+                return NotFound(new { success = false, error = "Appointment not found." });
+
+            var assets = await _context.StudyAssets
+                .AsNoTracking()
+                .Where(a => a.AppointmentId == appointment.AppointmentId)
+                .Select(a => new { assetId = a.Id, fileName = a.FileName, fileType = a.FileType, extractionStatus = a.ExtractionStatus })
+                .ToListAsync(cancellationToken);
+
+            return Ok(new { success = true, data = new { status = (string?)null, assets } });
+        }
+
         // Per-asset manifest DTOs — shared by the by-appointment and by-study
         // manifest endpoints so the viewer consumes one shape everywhere.
+        /// <summary>
+        /// File types the extraction worker normalises into per-slice HTJ2K
+        /// blobs. Single .dcm files are included so preamble-less DICOMs
+        /// (common from modality exports) come out as valid P10 the browser
+        /// parser accepts — serving the raw upload broke the viewer with
+        /// "DICM prefix not found".
+        /// </summary>
+        private static bool NeedsExtraction(string? fileType)
+        {
+            var t = (fileType ?? "").Trim().ToLowerInvariant();
+            return t == "zip" || t == "dcm" || t == "dicom";
+        }
+
+        /// <summary>
+        /// True for assets that should lazily extract on first manifest hit:
+        /// legacy rows uploaded before their type was extraction-eligible.
+        /// ZIPs: no status at all. Single DCMs: no status OR the old
+        /// "NotApplicable" marker (they were passthrough before).
+        /// </summary>
+        private static bool NeedsLazyExtraction(StudyAsset a)
+        {
+            var t = (a.FileType ?? "").Trim().ToLowerInvariant();
+            if (t == "zip") return string.IsNullOrEmpty(a.ExtractionStatus);
+            if (t == "dcm" || t == "dicom")
+                return string.IsNullOrEmpty(a.ExtractionStatus) || a.ExtractionStatus == "NotApplicable";
+            return false;
+        }
+
         private List<object> BuildManifestAssetDtos(List<StudyAsset> assets)
         {
             return assets.Select(a =>
             {
-                // ZIPs and per-instance ("instances") uploads both extract into
-                // the slice index. (Previously only "zip" was checked, which sent
-                // instances-assets down the passthrough branch — handing the
-                // viewer the staging _manifest.json URL instead of the series.)
+                // ZIPs, per-instance ("instances") uploads and single DCMs all
+                // extract into the slice index. (Previously only "zip" was
+                // checked, which sent instances-assets down the passthrough
+                // branch — handing the viewer the staging _manifest.json URL
+                // instead of the series.)
                 var t = (a.FileType ?? "").Trim().ToLowerInvariant();
-                var extractable = t == "zip" || t == "instances";
+                var extractable = t == "zip" || t == "instances" || t == "dcm" || t == "dicom";
                 if (!extractable)
                 {
                     // Pass-through for non-extractable attachments (single DCM, JPG, PNG).
@@ -703,16 +767,16 @@ namespace _1RadAPI.Controllers
                     appointment.Status = "IN_PROGRESS";
                 }
 
-                // Mark for DICOM extraction (Option C). Only ZIPs need it; other
-                // file types fall through with NotApplicable.
-                if (asset.FileType?.Equals("zip", StringComparison.OrdinalIgnoreCase) == true)
+                // Mark for DICOM extraction (Option C). ZIPs and single DCMs
+                // are normalised by the worker; other types are NotApplicable.
+                if (NeedsExtraction(asset.FileType))
                 {
                     asset.ExtractionStatus = "Queued";
                 }
 
                 if (IsImagingFileType(asset.FileType))
                     EnsureImagingStudy(asset, appointment, "api-upload",
-                        directlyViewable: !"zip".Equals(asset.FileType, StringComparison.OrdinalIgnoreCase));
+                        directlyViewable: !NeedsExtraction(asset.FileType));
 
                 await _context.SaveChangesAsync(default);
                 _storage.Invalidate(appointment.HospitalId);
@@ -938,15 +1002,16 @@ namespace _1RadAPI.Controllers
                     appointment.Status = "IN_PROGRESS";
                 }
 
-                // Mark for DICOM extraction (Option C). Only ZIPs need extraction.
-                if (asset.FileType?.Equals("zip", StringComparison.OrdinalIgnoreCase) == true)
+                // Mark for DICOM extraction (Option C). ZIPs and single DCMs
+                // are normalised by the worker; other types are NotApplicable.
+                if (NeedsExtraction(asset.FileType))
                 {
                     asset.ExtractionStatus = "Queued";
                 }
 
                 if (IsImagingFileType(asset.FileType))
                     EnsureImagingStudy(asset, appointment, "sas-upload",
-                        directlyViewable: !"zip".Equals(asset.FileType, StringComparison.OrdinalIgnoreCase));
+                        directlyViewable: !NeedsExtraction(asset.FileType));
 
                 await _context.SaveChangesAsync(default);
 
@@ -1335,13 +1400,15 @@ namespace _1RadAPI.Controllers
                 asset.StorageBytes = await _blobService.GetBlobSizeAsync(request.BlobPath, request.ContainerName);
                 _storage.Invalidate(study.HospitalId);
 
-                if (asset.FileType?.Equals("zip", StringComparison.OrdinalIgnoreCase) == true)
+                if (NeedsExtraction(asset.FileType))
                     asset.ExtractionStatus = "Queued";
 
-                // A directly-viewable single instance (.dcm) is Ready immediately;
-                // ZIP/instances flip to Processing→Ready in the extraction worker.
+                // Extractable types (ZIP + single DCM) flip to Processing→Ready
+                // in the extraction worker — single DCMs are normalised there
+                // too (preamble-less files come out as valid HTJ2K P10). Only
+                // non-DICOM imaging attachments are Ready immediately.
                 if (IsImagingFileType(asset.FileType)
-                    && !"zip".Equals(asset.FileType, StringComparison.OrdinalIgnoreCase)
+                    && !NeedsExtraction(asset.FileType)
                     && study.Status == ImagingStudyStatus.Received)
                 {
                     study.Status = ImagingStudyStatus.Ready;

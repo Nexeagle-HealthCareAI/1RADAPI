@@ -130,11 +130,15 @@ public class DicomExtractionService : IDicomExtractionService
                 .FirstOrDefaultAsync(st => st.Id == asset.ImagingStudyId, cancellationToken)
             : null;
 
-        // Only ZIP archives and per-instance ("instances") uploads get
-        // extracted into per-slice blobs. Single attachments (dcm/jpg/png)
+        // ZIP archives, per-instance ("instances") uploads AND single .dcm
+        // files all get extracted into per-slice blobs. Single DCMs go through
+        // the same pipeline so they are normalised (fo-dicom tolerates files
+        // saved without the 128-byte preamble/DICM marker; the transcoded
+        // output is always a valid P10 the browser parser accepts) and gain
+        // HTJ2K compression + a thumbnail. Non-DICOM attachments (jpg/png/pdf)
         // load directly in the viewer.
         var ext = (asset.FileType ?? "").Trim().ToLowerInvariant();
-        if (ext != "zip" && ext != "instances")
+        if (ext != "zip" && ext != "instances" && ext != "dcm" && ext != "dicom")
         {
             asset.ExtractionStatus = "NotApplicable";
             asset.ExtractionCompletedAt = DateTime.UtcNow;
@@ -168,14 +172,17 @@ public class DicomExtractionService : IDicomExtractionService
 
         try
         {
-            // 1+2. Gather DICOM slices from the source — either a single ZIP
-            // archive (legacy) or a set of pre-staged per-instance blobs (the
-            // bridge's SAS-per-file path). Both yield a flat list of parsed
-            // slices; everything downstream (grouping, transcode, index,
-            // thumbnails) is identical.
-            var parsedSlices = ext == "instances"
-                ? await GatherSlicesFromStagedInstancesAsync(asset, cancellationToken)
-                : await GatherSlicesFromZipAsync(asset, cancellationToken);
+            // 1+2. Gather DICOM slices from the source — a ZIP archive, a set
+            // of pre-staged per-instance blobs (the bridge's SAS-per-file
+            // path), or a single uploaded .dcm. All yield a flat list of
+            // parsed slices; everything downstream (grouping, transcode,
+            // index, thumbnails) is identical.
+            var parsedSlices = ext switch
+            {
+                "instances" => await GatherSlicesFromStagedInstancesAsync(asset, cancellationToken),
+                "zip"       => await GatherSlicesFromZipAsync(asset, cancellationToken),
+                _           => await GatherSlicesFromSingleDcmAsync(asset, cancellationToken),
+            };
 
             if (parsedSlices.Count == 0)
                 throw new InvalidOperationException("No readable DICOM instances found in the upload.");
@@ -206,76 +213,96 @@ public class DicomExtractionService : IDicomExtractionService
             long totalUploadedBytes  = 0;
             int  transcodedSliceCount = 0;
 
-            // 4. Upload each slice + populate slice index. For the first slice
-            // of each series, also generate a thumbnail.
-            foreach (var series in bySeries)
-            {
-                string? thumbnailUrl = null;
-                for (int i = 0; i < series.Slices.Count; i++)
+            // 4. Transcode + upload every slice IN PARALLEL (bounded), then
+            // write the slice index sequentially. The previous one-at-a-time
+            // loop serialised CPU transcode behind network upload RTT — a
+            // 300-slice study took minutes. Transcode is CPU-bound, upload is
+            // IO-bound; they pipeline well at modest concurrency. The
+            // DbContext is NOT thread-safe, so all EF writes happen after the
+            // parallel phase completes (re-runs wipe the index anyway, so the
+            // old chunked-save crash recovery is unnecessary).
+            using var uploadGate = new SemaphoreSlim(6);
+            var sliceTasks = bySeries
+                .SelectMany(series => series.Slices.Select((p, i) => (series, p, i)))
+                .Select(async item =>
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    var p = series.Slices[i];
-
-                    // Transcode to HTJ2K Lossless RPCL — shrinks the payload and,
-                    // crucially, makes each slice resolution-progressive (a low-res
-                    // image decodes from a byte-range prefix). Lossless = primary-
-                    // diagnosis safe; falls back to original bytes on any error.
-                    var uploadBytes = TranscodeSliceBytes(p.DicomFile, p.OriginalBytes, out var didTranscode);
-                    totalOriginalBytes += p.OriginalBytes.Length;
-                    totalUploadedBytes += uploadBytes.Length;
-                    if (didTranscode) transcodedSliceCount++;
-
-                    // Slice blob path: deterministic, easy to delete by prefix.
-                    var sliceBlobPath = $"{hospitalIdN}/{appointmentIdN}/extracted/{assetIdN}/series/{series.Index:D3}/{i:D4}.dcm";
-                    string sliceUrl;
-                    using (var sliceUp = new MemoryStream(uploadBytes, writable: false))
+                    await uploadGate.WaitAsync(cancellationToken);
+                    try
                     {
-                        sliceUrl = await _blob.UploadFileAtPathAsync(sliceUp, sliceBlobPath, "application/dicom", Container, ImmutableCacheControl);
-                    }
+                        cancellationToken.ThrowIfCancellationRequested();
+                        var (series, p, i) = item;
 
-                    // Thumbnail: first slice of each series only.
-                    if (i == 0)
-                    {
-                        try
+                        // Transcode to HTJ2K Lossless RPCL — shrinks the payload and,
+                        // crucially, makes each slice resolution-progressive (a low-res
+                        // image decodes from a byte-range prefix). Lossless = primary-
+                        // diagnosis safe; falls back to original bytes on any error.
+                        var uploadBytes = TranscodeSliceBytes(p.DicomFile, p.OriginalBytes, out var didTranscode);
+                        Interlocked.Add(ref totalOriginalBytes, p.OriginalBytes.Length);
+                        Interlocked.Add(ref totalUploadedBytes, uploadBytes.Length);
+                        if (didTranscode) Interlocked.Increment(ref transcodedSliceCount);
+
+                        // Slice blob path: deterministic, easy to delete by prefix.
+                        var sliceBlobPath = $"{hospitalIdN}/{appointmentIdN}/extracted/{assetIdN}/series/{series.Index:D3}/{i:D4}.dcm";
+                        string sliceUrl;
+                        using (var sliceUp = new MemoryStream(uploadBytes, writable: false))
                         {
-                            using var thumb = RenderThumbnail(p.DicomFile);
-                            if (thumb != null)
+                            sliceUrl = await _blob.UploadFileAtPathAsync(sliceUp, sliceBlobPath, "application/dicom", Container, ImmutableCacheControl);
+                        }
+
+                        // Thumbnail: first slice of each series only.
+                        string? thumbnailUrl = null;
+                        if (i == 0)
+                        {
+                            try
                             {
-                                using var ms = new MemoryStream();
-                                thumb.SaveAsJpeg(ms, new JpegEncoder { Quality = 70 });
-                                ms.Position = 0;
-                                var thumbPath = $"{hospitalIdN}/{appointmentIdN}/extracted/{assetIdN}/thumbs/{series.Index:D3}.jpg";
-                                thumbnailUrl = await _blob.UploadFileAtPathAsync(ms, thumbPath, "image/jpeg", Container, ImmutableCacheControl);
+                                using var thumb = RenderThumbnail(p.DicomFile);
+                                if (thumb != null)
+                                {
+                                    using var ms = new MemoryStream();
+                                    thumb.SaveAsJpeg(ms, new JpegEncoder { Quality = 70 });
+                                    ms.Position = 0;
+                                    var thumbPath = $"{hospitalIdN}/{appointmentIdN}/extracted/{assetIdN}/thumbs/{series.Index:D3}.jpg";
+                                    thumbnailUrl = await _blob.UploadFileAtPathAsync(ms, thumbPath, "image/jpeg", Container, ImmutableCacheControl);
+                                }
+                            }
+                            catch (Exception thumbEx)
+                            {
+                                _logger.LogDebug(thumbEx, "[DICOM_EXTRACT] Asset {AssetId} series {Idx} thumbnail failed — continuing without.", assetId, item.series.Index);
                             }
                         }
-                        catch (Exception thumbEx)
-                        {
-                            _logger.LogDebug(thumbEx, "[DICOM_EXTRACT] Asset {AssetId} series {Idx} thumbnail failed — continuing without.", assetId, series.Index);
-                        }
+
+                        return (item.series, item.p, item.i, sliceUrl, sliceBlobPath, thumbnailUrl);
                     }
-
-                    _db.StudySliceIndexes.Add(new StudySliceIndex
+                    finally
                     {
-                        SliceId           = Guid.NewGuid(),
-                        AssetId           = asset.Id,
-                        AppointmentId     = asset.AppointmentId,
-                        HospitalId        = asset.HospitalId,
-                        SeriesUID         = p.SeriesUid,
-                        SopInstanceUID    = p.SopUid,
-                        InstanceNumber    = p.InstanceNumber,
-                        SeriesDescription = Truncate(p.SeriesDescription, 200),
-                        Modality          = Truncate(p.Modality, 16),
-                        BlobUrl           = sliceUrl,
-                        BlobPath          = sliceBlobPath,
-                        ThumbnailUrl      = i == 0 ? thumbnailUrl : null,
-                        MetadataJson      = ExtractMetadataJson(p.DicomFile),
-                        ExtractedAt       = DateTime.UtcNow,
-                    });
-                    sliceCount++;
+                        uploadGate.Release();
+                    }
+                })
+                .ToList();
 
-                    // Persist in chunks of 100 so a crash mid-extraction isn't a total loss.
-                    if (sliceCount % 100 == 0) await _db.SaveChangesAsync(cancellationToken);
-                }
+            var uploaded = await Task.WhenAll(sliceTasks);
+
+            // Sequential EF phase — deterministic order (series, instance).
+            foreach (var u in uploaded.OrderBy(x => x.series.Index).ThenBy(x => x.i))
+            {
+                _db.StudySliceIndexes.Add(new StudySliceIndex
+                {
+                    SliceId           = Guid.NewGuid(),
+                    AssetId           = asset.Id,
+                    AppointmentId     = asset.AppointmentId,
+                    HospitalId        = asset.HospitalId,
+                    SeriesUID         = u.p.SeriesUid,
+                    SopInstanceUID    = u.p.SopUid,
+                    InstanceNumber    = u.p.InstanceNumber,
+                    SeriesDescription = Truncate(u.p.SeriesDescription, 200),
+                    Modality          = Truncate(u.p.Modality, 16),
+                    BlobUrl           = u.sliceUrl,
+                    BlobPath          = u.sliceBlobPath,
+                    ThumbnailUrl      = u.i == 0 ? u.thumbnailUrl : null,
+                    MetadataJson      = ExtractMetadataJson(u.p.DicomFile),
+                    ExtractedAt       = DateTime.UtcNow,
+                });
+                sliceCount++;
             }
 
             asset.ExtractionStatus      = "Extracted";
@@ -434,6 +461,18 @@ public class DicomExtractionService : IDicomExtractionService
         return parsed;
     }
 
+    // Single-DCM path: the asset blob IS the one instance. Normalised through
+    // the same transcode pipeline so even preamble-less files come out as
+    // valid HTJ2K P10 slices.
+    private async Task<List<ParsedSlice>> GatherSlicesFromSingleDcmAsync(StudyAsset asset, CancellationToken ct)
+    {
+        using var stream = await _blob.DownloadFileAsync(asset.BlobUrl);
+        using var ms = new MemoryStream();
+        await stream.CopyToAsync(ms, ct);
+        var slice = ParseSlice(asset.Id, asset.FileName ?? "instance.dcm", ms.ToArray());
+        return slice != null ? new List<ParsedSlice> { slice } : new List<ParsedSlice>();
+    }
+
     // Per-instance path: asset.BlobUrl points to a small JSON manifest listing
     // the pre-staged instance blob URLs (the bridge PUT each .dcm via SAS).
     // Download + parse each, then best-effort delete the staging blobs so they
@@ -447,26 +486,39 @@ public class DicomExtractionService : IDicomExtractionService
             System.Text.Encoding.UTF8.GetString(mm.ToArray())) ?? new StagedManifest();
 
         var urls = manifest.Instances ?? new List<string>();
-        var parsed = new List<ParsedSlice>(urls.Count);
-        foreach (var url in urls)
+        // Download + parse in parallel (bounded) — the sequential loop paid a
+        // full round-trip per instance, which alone took minutes on large
+        // studies. Order is restored downstream by the series/instance sort.
+        using var downloadGate = new SemaphoreSlim(8);
+        var downloadTasks = urls.Select(async url =>
         {
-            ct.ThrowIfCancellationRequested();
-            byte[] bytes;
+            await downloadGate.WaitAsync(ct);
             try
             {
-                using var s = await _blob.DownloadFileAsync(url);
-                using var ms = new MemoryStream();
-                await s.CopyToAsync(ms, ct);
-                bytes = ms.ToArray();
+                ct.ThrowIfCancellationRequested();
+                byte[] bytes;
+                try
+                {
+                    using var s = await _blob.DownloadFileAsync(url);
+                    using var ms = new MemoryStream();
+                    await s.CopyToAsync(ms, ct);
+                    bytes = ms.ToArray();
+                }
+                catch (Exception dlEx)
+                {
+                    _logger.LogDebug(dlEx, "[DICOM_EXTRACT] Asset {AssetId} staged instance {Url} download failed — skipping.", asset.Id, url);
+                    return null;
+                }
+                return ParseSlice(asset.Id, url, bytes);
             }
-            catch (Exception dlEx)
+            finally
             {
-                _logger.LogDebug(dlEx, "[DICOM_EXTRACT] Asset {AssetId} staged instance {Url} download failed — skipping.", asset.Id, url);
-                continue;
+                downloadGate.Release();
             }
-            var slice = ParseSlice(asset.Id, url, bytes);
-            if (slice != null) parsed.Add(slice);
-        }
+        }).ToList();
+
+        var results = await Task.WhenAll(downloadTasks);
+        var parsed = results.Where(s => s != null).Select(s => s!).ToList();
 
         // NOTE: staging blobs are intentionally left in place. Deleting here
         // would break an extraction retry (the bytes are only in memory for this
