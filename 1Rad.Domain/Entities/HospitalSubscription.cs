@@ -12,6 +12,18 @@ public class HospitalSubscription : BaseEntity
     public DateTime EndDate { get; set; }
     public bool IsTrial { get; set; }
     public string Status { get; set; } = "Active"; // Active | Expiring | Expired | Locked
+
+    // Product composition this center bought, comma-separated ("RIS,PACS",
+    // "RIS", "PACS"). Lives on the subscription (not the plan) because plans
+    // are pricing tiers (Monthly/Yearly) and centers in one group can run
+    // different SKUs. Legacy rows are backfilled to the full product.
+    public string Modules { get; set; } = Constants.ModuleConstants.DefaultModules;
+
+    // PACS storage allowance in GB for this center. NULL = unmetered (legacy
+    // and RIS-only subscriptions). When the hospital's persisted bytes exceed
+    // this, NEW DICOM uploads are rejected (STORAGE_QUOTA_EXCEEDED) — viewing
+    // existing studies is never blocked by quota.
+    public int? IncludedStorageGb { get; set; }
     public bool IsLocked { get; set; } = false;
     public DateTime? LockedAt { get; set; }
     public string? LockReason { get; set; } // GracePeriodExpired | PaymentOverdue

@@ -21,22 +21,36 @@ public class SubscriptionStatusResponse
     public int DaysRemaining { get; set; }   // Math.Max(0, (int)(EndDate - UtcNow).TotalDays)
     public bool HasPendingPaymentRequest { get; set; }
     public string? PendingRequestStatus { get; set; }  // Pending|Approved|Rejected
+
+    // Product modules this center's subscription enables ("RIS", "PACS").
+    // The frontend gates routes/nav off this; the backend independently
+    // enforces via [RequiresModule]. No subscription row → full product.
+    public List<string> Modules { get; set; } = new();
+
+    // PACS storage position (Phase 3). IncludedStorageGb null = unmetered.
+    public long StorageUsedBytes { get; set; }
+    public int? IncludedStorageGb { get; set; }
+    public double? StoragePercentUsed { get; set; }
+    public bool StorageOverQuota { get; set; }
 }
 
 public class GetSubscriptionStatusQueryHandler : IRequestHandler<GetSubscriptionStatusQuery, SubscriptionStatusResponse>
 {
     private readonly IApplicationDbContext _context;
     private readonly IUserContext _userContext;
+    private readonly IStorageMeteringService _storage;
 
-    public GetSubscriptionStatusQueryHandler(IApplicationDbContext context, IUserContext userContext)
+    public GetSubscriptionStatusQueryHandler(IApplicationDbContext context, IUserContext userContext, IStorageMeteringService storage)
     {
         _context = context;
         _userContext = userContext;
+        _storage = storage;
     }
 
     public async Task<SubscriptionStatusResponse> Handle(GetSubscriptionStatusQuery request, CancellationToken cancellationToken)
     {
         var hospitalId = _userContext.HospitalId;
+        var storageUsage = await _storage.GetUsageAsync(hospitalId, cancellationToken);
 
         var subscription = await _context.HospitalSubscriptions
             .Include(s => s.Plan)
@@ -54,7 +68,14 @@ public class GetSubscriptionStatusQueryHandler : IRequestHandler<GetSubscription
                 Status = "None",
                 BillingCycle = string.Empty,
                 DaysRemaining = 0,
-                HasPendingPaymentRequest = false
+                HasPendingPaymentRequest = false,
+                // No subscription row → full product (pre-module behaviour;
+                // mirrors ModuleEntitlementService).
+                Modules = Domain.Constants.ModuleConstants.Parse(Domain.Constants.ModuleConstants.DefaultModules).ToList(),
+                StorageUsedBytes = storageUsage.UsedBytes,
+                IncludedStorageGb = storageUsage.IncludedStorageGb,
+                StoragePercentUsed = storageUsage.PercentUsed,
+                StorageOverQuota = storageUsage.IsOverQuota
             };
         }
 
@@ -102,7 +123,15 @@ public class GetSubscriptionStatusQueryHandler : IRequestHandler<GetSubscription
             EndDate = subscription.EndDate,
             DaysRemaining = daysRemaining,
             HasPendingPaymentRequest = latestPaymentRequest?.Status == "Pending",
-            PendingRequestStatus = latestPaymentRequest?.Status
+            PendingRequestStatus = latestPaymentRequest?.Status,
+            Modules = Domain.Constants.ModuleConstants.Parse(
+                string.IsNullOrWhiteSpace(subscription.Modules)
+                    ? Domain.Constants.ModuleConstants.DefaultModules
+                    : subscription.Modules).ToList(),
+            StorageUsedBytes = storageUsage.UsedBytes,
+            IncludedStorageGb = storageUsage.IncludedStorageGb,
+            StoragePercentUsed = storageUsage.PercentUsed,
+            StorageOverQuota = storageUsage.IsOverQuota
         };
     }
 }

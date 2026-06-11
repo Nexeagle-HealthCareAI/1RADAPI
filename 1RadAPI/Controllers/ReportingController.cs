@@ -195,6 +195,24 @@ namespace _1RadAPI.Controllers
         }
 
         /// <summary>
+        /// Cloud PACS-only: fetch the report written directly against an
+        /// ImagingStudy (no appointment).
+        /// </summary>
+        [HttpGet("report/by-study/{studyId:guid}")]
+        public async Task<IActionResult> GetReportByStudy(Guid studyId)
+        {
+            try
+            {
+                var report = await _mediator.Send(new GetReportQuery { ImagingStudyId = studyId });
+                return Ok(new { success = true, data = report });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, error = $"Failed to retrieve report: {ex.Message}" });
+            }
+        }
+
+        /// <summary>
         /// Bulk delta-pull of diagnostic reports for the Phase B1 offline cache.
         /// Returns a flat list (no nested fields) filtered by UpdatedAt > updatedAfter.
         /// Pass includeDeleted=true to receive tombstones.

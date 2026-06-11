@@ -19,7 +19,10 @@ public record GetReportsDeltaQuery(
 // the narrative payload to render an existing report.
 public record ReportDeltaDto(
     Guid Id,
-    Guid AppointmentId,
+    // Nullable since the PACS-only split: a report belongs to an appointment
+    // XOR an imaging study.
+    Guid? AppointmentId,
+    Guid? ImagingStudyId,
     Guid? DoctorId,
     Guid? TemplateId,
     string Findings,
@@ -75,6 +78,7 @@ public class GetReportsDeltaQueryHandler : IRequestHandler<GetReportsDeltaQuery,
             .Select(r => new ReportDeltaDto(
                 r.Id,
                 r.AppointmentId,
+                r.ImagingStudyId,
                 r.DoctorId,
                 r.TemplateId,
                 r.Findings,

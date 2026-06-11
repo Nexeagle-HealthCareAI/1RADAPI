@@ -22,6 +22,7 @@ namespace _1RadAPI.Controllers;
 [Authorize]
 [ApiController]
 [Route("api/v1/appointments")]
+[_1RadAPI.Authorization.RequiresModule(_1Rad.Domain.Constants.ModuleConstants.Ris)]
 public class AppointmentsController : ControllerBase
 {
     private readonly IMediator _mediator;

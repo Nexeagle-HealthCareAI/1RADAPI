@@ -32,6 +32,26 @@ namespace _1Rad.Application.Interfaces
         /// the browser actually uploaded what it claimed.
         /// </summary>
         Task<bool> BlobExistsAsync(string blobPath, string containerName);
+
+        /// <summary>
+        /// Canonical read URL for a blob, derived from container + path against OUR
+        /// storage account. Use this instead of trusting a client-echoed "public
+        /// read URL", so a caller can't have us store a URL pointing at someone
+        /// else's blob.
+        /// </summary>
+        string GetBlobReadUrl(string blobPath, string containerName);
+
+        /// <summary>
+        /// Size in bytes of the blob at the given container-relative path, or 0 if it
+        /// doesn't exist. Used by storage metering (Phase 3 of the RIS/PACS split).
+        /// </summary>
+        Task<long> GetBlobSizeAsync(string blobPath, string containerName);
+
+        /// <summary>
+        /// Size in bytes of the blob at the given full HTTPS URL, or 0 if it doesn't
+        /// exist / the URL can't be parsed. Used by storage metering.
+        /// </summary>
+        Task<long> GetBlobSizeByUrlAsync(string fileUrl);
     }
 
     public class SasUploadTarget

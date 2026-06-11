@@ -46,6 +46,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<ReportingKeyword> ReportingKeywords => Set<ReportingKeyword>();
     public DbSet<DiagnosticReportField> DiagnosticReportFields => Set<DiagnosticReportField>();
     public DbSet<StudyAsset> StudyAssets => Set<StudyAsset>();
+    public DbSet<ImagingStudy> ImagingStudies => Set<ImagingStudy>();
     public DbSet<StudySliceIndex> StudySliceIndexes => Set<StudySliceIndex>();
     public DbSet<PrescriptionProtocol> PrescriptionProtocols => Set<PrescriptionProtocol>();
     public DbSet<ReferralCommission> ReferralCommissions => Set<ReferralCommission>();
@@ -455,6 +456,22 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
                 .WithMany()
                 .HasForeignKey(e => e.TemplateId)
                 .OnDelete(DeleteBehavior.SetNull);
+
+            // PACS-only reports key off an ImagingStudy instead of an
+            // appointment (a report belongs to exactly one of the two). NO
+            // ACTION — deleting a study is an explicit, blob-aware operation,
+            // never a silent cascade through reports.
+            entity.HasOne(e => e.ImagingStudy)
+                .WithMany()
+                .HasForeignKey(e => e.ImagingStudyId)
+                .OnDelete(DeleteBehavior.NoAction);
+
+            // One report per study — the study-based analogue of the
+            // appointment upsert key. Filtered so the many appointment-based
+            // rows (NULL ImagingStudyId) don't collide.
+            entity.HasIndex(e => e.ImagingStudyId)
+                .IsUnique()
+                .HasFilter("[ImagingStudyId] IS NOT NULL");
         });
 
         // DiagnosticReportField Configuration
@@ -503,6 +520,53 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
                 .OnDelete(DeleteBehavior.Restrict);
         });
 
+        // ImagingStudy Configuration — the PACS-side aggregate (Phase 1 of the
+        // RIS/PACS SKU split). One row per DICOM study; appointment optional.
+        modelBuilder.Entity<ImagingStudy>(entity =>
+        {
+            entity.ToTable("ImagingStudies", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.StudyInstanceUID).HasMaxLength(128);
+            entity.Property(e => e.PatientName).HasMaxLength(255);
+            entity.Property(e => e.DicomPatientId).HasMaxLength(128);
+            entity.Property(e => e.Modality).HasMaxLength(32);
+            entity.Property(e => e.StudyDescription).HasMaxLength(255);
+            entity.Property(e => e.AccessionNumber).HasMaxLength(64);
+            entity.Property(e => e.Status).IsRequired().HasMaxLength(20)
+                .HasDefaultValue(ImagingStudyStatus.Received);
+            entity.Property(e => e.MatchStatus).IsRequired().HasMaxLength(20)
+                .HasDefaultValue(ImagingStudyMatchStatus.Unmatched);
+            entity.Property(e => e.Source).HasMaxLength(32);
+
+            // DICOM identity: unique per tenant when known. Filtered so the
+            // many legacy/unparsed rows with NULL UID don't collide.
+            entity.HasIndex(e => new { e.HospitalId, e.StudyInstanceUID })
+                .IsUnique()
+                .HasFilter("[StudyInstanceUID] IS NOT NULL");
+
+            entity.HasOne(e => e.Appointment)
+                .WithMany()
+                .HasForeignKey(e => e.AppointmentId)
+                // Keep the study when a visit is deleted — the archive is the
+                // PACS product; orphaning the link is correct, deleting PHI
+                // imaging as a side effect of RIS cleanup is not.
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.Patient)
+                .WithMany()
+                .HasForeignKey(e => e.PatientId)
+                .OnDelete(DeleteBehavior.NoAction);
+
+            entity.HasIndex(e => e.AppointmentId).HasFilter("[AppointmentId] IS NOT NULL");
+            // Study-browser worklist: newest studies for a hospital.
+            entity.HasIndex(e => new { e.HospitalId, e.CreatedAt });
+            // PACS-only inbox slice: unassigned studies for a hospital.
+            entity.HasIndex(e => new { e.HospitalId, e.MatchStatus });
+            // Accession lookup for server-side matching / reconciliation.
+            entity.HasIndex(e => new { e.HospitalId, e.AccessionNumber })
+                .HasFilter("[AccessionNumber] IS NOT NULL");
+        });
+
         // StudyAsset Configuration
         modelBuilder.Entity<StudyAsset>(entity =>
         {
@@ -514,10 +578,23 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.ExtractionStatus).HasMaxLength(20);
             entity.Property(e => e.ExtractionError).HasMaxLength(2000);
 
+            // Optional since the RIS/PACS SKU split (Phase 1) — PACS-only
+            // assets carry only the ImagingStudy link.
             entity.HasOne(e => e.Appointment)
                 .WithMany(a => a.StudyAssets)
                 .HasForeignKey(e => e.AppointmentId)
                 .OnDelete(DeleteBehavior.Cascade);
+
+            // The imaging aggregate. NO ACTION: deleting a study must be an
+            // explicit operation that handles blobs + slices, never a silent
+            // cascade (and SQL Server would reject another cascade path here
+            // anyway, alongside Appointment → StudyAssets).
+            entity.HasOne(e => e.ImagingStudy)
+                .WithMany(s => s.Assets)
+                .HasForeignKey(e => e.ImagingStudyId)
+                .OnDelete(DeleteBehavior.NoAction);
+
+            entity.HasIndex(e => e.ImagingStudyId).HasFilter("[ImagingStudyId] IS NOT NULL");
 
             // Multi-service link (migration 57). For a multi-modality visit
             // (X-ray + CT) each acquisition's assets route to the right
@@ -672,6 +749,10 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.Status).IsRequired().HasMaxLength(50);
             entity.Property(e => e.BillingCycle).IsRequired().HasMaxLength(20).HasDefaultValue("Trial");
             entity.Property(e => e.LockReason).HasMaxLength(100);
+            // SQL default covers legacy rows (backfilled by the migration) and
+            // any insert path that doesn't set Modules explicitly.
+            entity.Property(e => e.Modules).IsRequired().HasMaxLength(200)
+                .HasDefaultValue(Domain.Constants.ModuleConstants.DefaultModules);
 
             entity.HasOne(e => e.Hospital)
                 .WithMany(h => h.Subscriptions)

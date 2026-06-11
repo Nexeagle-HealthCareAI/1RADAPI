@@ -59,8 +59,21 @@ public static class DependencyInjection
         services.AddScoped<IPasswordHasher, PasswordHasher>();
         services.AddScoped<IOtpService, OtpService>();
         services.AddScoped<IBlobService, AzureBlobService>();
+        // Signs short-lived capability URLs for proxy-asset reads of the private
+        // PHI container (stateless — singleton).
+        services.AddSingleton<IAssetUrlSigner, AssetUrlSigner>();
         services.AddHttpContextAccessor();
         services.AddScoped<IUserContext, UserContext>();
+
+        // Product-module entitlements (RIS / PACS SKUs). Scoped because it
+        // reads through the scoped DbContext; the cache behind it is shared.
+        services.AddScoped<IModuleEntitlementService, ModuleEntitlementService>();
+
+        // PACS storage metering (Phase 3) — usage sums + quota checks.
+        services.AddScoped<IStorageMeteringService, StorageMeteringService>();
+
+        // PACS-only server-side study↔patient/appointment matching.
+        services.AddScoped<IStudyMatchingService, StudyMatchingService>();
 
         // DICOM viewer Option C: per-slice extraction pipeline.
         services.AddSingleton<IDicomExtractionQueue, DicomExtractionQueue>();

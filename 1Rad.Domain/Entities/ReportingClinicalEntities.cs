@@ -36,7 +36,16 @@ namespace _1Rad.Domain.Entities
     public class DiagnosticReport : BaseEntity, IHospitalContext
     {
         public Guid Id { get; set; } = Guid.NewGuid();
-        public Guid AppointmentId { get; set; }
+
+        // A report belongs to exactly ONE of: an appointment (RIS / RIS+PACS)
+        // XOR an imaging study (Cloud PACS-only, no visit). Both are nullable;
+        // exactly one is set. AppointmentId became nullable in the PACS-only
+        // split — legacy rows always have it.
+        public Guid? AppointmentId { get; set; }
+
+        /// <summary>Set instead of <see cref="AppointmentId"/> for appointment-free
+        /// (PACS-only) reports written directly against an <see cref="ImagingStudy"/>.</summary>
+        public Guid? ImagingStudyId { get; set; }
 
         // Multi-service support (migration 57). Each AppointmentService
         // (line item of work) has its own report. NULL on legacy rows
@@ -78,7 +87,9 @@ namespace _1Rad.Domain.Entities
         
         // Navigation
         [JsonIgnore]
-        public Appointment Appointment { get; set; } = null!;
+        public Appointment? Appointment { get; set; }
+        [JsonIgnore]
+        public ImagingStudy? ImagingStudy { get; set; }
         [JsonIgnore]
         public User Doctor { get; set; } = null!;
         [JsonIgnore]

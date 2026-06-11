@@ -18,6 +18,10 @@ public record GenerateVoiceReportCommand : IRequest<GenerateVoiceReportResult>
     public Guid? AppointmentServiceId { get; init; }
     public Guid? TemplateId { get; init; }
     public string Transcript { get; init; } = string.Empty;
+
+    // PACS-only: dictate against an ImagingStudy with no visit. When set, the
+    // dictation context is built from the study's denormalized demographics.
+    public Guid? ImagingStudyId { get; init; }
 }
 
 public record GenerateVoiceReportResult(bool Success, string? Html, string? Error);
@@ -39,42 +43,56 @@ public class GenerateVoiceReportCommandHandler
         if (string.IsNullOrWhiteSpace(request.Transcript))
             return new GenerateVoiceReportResult(false, null, "Dictation transcript is empty.");
 
-        // ── Patient / appointment context ────────────────────────────────
-        Guid.TryParse(request.AppointmentId, out var apptGuid);
-        var appt = await _context.Appointments
-            .Include(a => a.Patient)
-            .FirstOrDefaultAsync(a =>
-                (apptGuid != Guid.Empty && a.AppointmentId == apptGuid) ||
-                a.DisplayId == request.AppointmentId,
-                cancellationToken);
-
-        // Service-scoped context. When the caller passed an
-        // AppointmentServiceId, name THAT service in the dictation
-        // context — so a CT report dictation reads
-        // "Study/Service: CT Head Plain (CT)" rather than the visit's
-        // primary X-ray scalar. Falls back to the parent's scalar
-        // fields when no service id is supplied (single-service /
-        // legacy / v1 client).
-        string studyLabel = appt?.Service ?? string.Empty;
-        string modalityLabel = appt?.Modality ?? string.Empty;
-        if (appt != null && request.AppointmentServiceId.HasValue)
+        // ── Patient context — from the study (PACS-only) or the appointment ─
+        string patientCtx;
+        if (request.ImagingStudyId is Guid studyId && studyId != Guid.Empty)
         {
-            var svc = await _context.AppointmentServices
+            // PACS-only: no visit; context comes from the study's demographics.
+            var study = await _context.ImagingStudies
                 .AsNoTracking()
-                .FirstOrDefaultAsync(s =>
-                    s.Id == request.AppointmentServiceId.Value &&
-                    s.AppointmentId == appt.AppointmentId,
-                    cancellationToken);
-            if (svc != null)
-            {
-                studyLabel    = svc.ServiceName ?? studyLabel;
-                modalityLabel = svc.Modality    ?? modalityLabel;
-            }
+                .FirstOrDefaultAsync(s => s.Id == studyId, cancellationToken);
+            patientCtx = study != null
+                ? $"Patient: {study.PatientName}; Study/Service: {study.StudyDescription} ({study.Modality})."
+                : "Patient context unavailable.";
         }
+        else
+        {
+            Guid.TryParse(request.AppointmentId, out var apptGuid);
+            var appt = await _context.Appointments
+                .Include(a => a.Patient)
+                .FirstOrDefaultAsync(a =>
+                    (apptGuid != Guid.Empty && a.AppointmentId == apptGuid) ||
+                    a.DisplayId == request.AppointmentId,
+                    cancellationToken);
 
-        var patientCtx = appt?.Patient != null
-            ? $"Patient: {appt.Patient.FullName}; Age: {appt.Patient.Age}; Gender: {appt.Patient.Gender}; Study/Service: {studyLabel} ({modalityLabel})."
-            : "Patient context unavailable.";
+            // Service-scoped context. When the caller passed an
+            // AppointmentServiceId, name THAT service in the dictation
+            // context — so a CT report dictation reads
+            // "Study/Service: CT Head Plain (CT)" rather than the visit's
+            // primary X-ray scalar. Falls back to the parent's scalar
+            // fields when no service id is supplied (single-service /
+            // legacy / v1 client).
+            string studyLabel = appt?.Service ?? string.Empty;
+            string modalityLabel = appt?.Modality ?? string.Empty;
+            if (appt != null && request.AppointmentServiceId.HasValue)
+            {
+                var svc = await _context.AppointmentServices
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(s =>
+                        s.Id == request.AppointmentServiceId.Value &&
+                        s.AppointmentId == appt.AppointmentId,
+                        cancellationToken);
+                if (svc != null)
+                {
+                    studyLabel    = svc.ServiceName ?? studyLabel;
+                    modalityLabel = svc.Modality    ?? modalityLabel;
+                }
+            }
+
+            patientCtx = appt?.Patient != null
+                ? $"Patient: {appt.Patient.FullName}; Age: {appt.Patient.Age}; Gender: {appt.Patient.Gender}; Study/Service: {studyLabel} ({modalityLabel})."
+                : "Patient context unavailable.";
+        }
 
         // ── Template HTML (the EXACT structure to preserve) ──────────────
         // We pass the template's HTML through to Haiku unchanged so the

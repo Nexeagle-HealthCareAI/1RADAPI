@@ -14,6 +14,10 @@ public record GetReportQuery : IRequest<DiagnosticReport?>
     // ignoring service Id — keeps single-service / v1-client flows
     // unchanged.
     public Guid? AppointmentServiceId { get; init; }
+
+    // Cloud PACS-only: fetch the report written against an ImagingStudy
+    // (no visit). Mutually exclusive with AppointmentId.
+    public Guid? ImagingStudyId { get; init; }
 }
 
 public class GetReportQueryHandler : IRequestHandler<GetReportQuery, DiagnosticReport?>
@@ -27,6 +31,13 @@ public class GetReportQueryHandler : IRequestHandler<GetReportQuery, DiagnosticR
 
     public async Task<DiagnosticReport?> Handle(GetReportQuery request, CancellationToken cancellationToken)
     {
+        // Study-based (PACS-only) report — one per study.
+        if (request.ImagingStudyId is Guid studyId && studyId != Guid.Empty)
+        {
+            return await _context.DiagnosticReports
+                .FirstOrDefaultAsync(r => r.ImagingStudyId == studyId, cancellationToken);
+        }
+
         Guid.TryParse(request.AppointmentId, out var guidId);
 
         if (request.AppointmentServiceId.HasValue)

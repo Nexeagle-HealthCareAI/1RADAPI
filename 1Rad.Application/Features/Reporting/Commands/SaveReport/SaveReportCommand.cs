@@ -9,6 +9,12 @@ namespace _1Rad.Application.Features.Reporting.Commands.SaveReport;
 public record SaveReportCommand : IRequest<DiagnosticReport>
 {
     public string AppointmentId { get; init; } = string.Empty;
+
+    // Cloud PACS-only: report written directly against an ImagingStudy with no
+    // visit. Mutually exclusive with AppointmentId — when set, the report is
+    // upserted by ImagingStudyId and the appointment/service status rollup is
+    // skipped (there is no appointment to advance).
+    public Guid? ImagingStudyId { get; init; }
     // Multi-service rollout (step 6). When provided, the upsert is keyed
     // to this specific AppointmentService row so different services on
     // the same visit (X-ray + CT + USG) each get their own report with
@@ -43,36 +49,55 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
         var hospitalId = _context.UserContext.HospitalId;
         var doctorId = _context.UserContext.UserId;
 
-        // Validate required fields
-        if (string.IsNullOrWhiteSpace(request.AppointmentId))
-        {
-            throw new ArgumentException("Appointment ID is required.", nameof(request.AppointmentId));
-        }
-
         if (string.IsNullOrWhiteSpace(request.Findings))
         {
             throw new ArgumentException("Findings are required.", nameof(request.Findings));
         }
 
-        _ = Guid.TryParse(request.AppointmentId, out var guidId);
-        
-        // Fetch the appointment to ensure correct context (HospitalId)
-        var appointment = await _context.Appointments
-            .FirstOrDefaultAsync(a => 
-                a.AppointmentId == guidId || 
-                a.DisplayId == request.AppointmentId, 
-                cancellationToken);
-        
-        if (appointment == null)
+        // A report is owned by exactly one of: an ImagingStudy (Cloud PACS-only)
+        // XOR an appointment (RIS / RIS+PACS). Resolve the owner up front and
+        // tenant-check it; everything below branches on which one we have.
+        Appointment? appointment = null;
+        ImagingStudy? study = null;
+
+        if (request.ImagingStudyId is Guid studyId && studyId != Guid.Empty)
         {
-            throw new KeyNotFoundException($"Appointment with ID '{request.AppointmentId}' not found.");
+            study = await _context.ImagingStudies
+                .FirstOrDefaultAsync(s => s.Id == studyId, cancellationToken);
+            if (study == null)
+            {
+                throw new KeyNotFoundException($"Imaging study with ID '{studyId}' not found.");
+            }
+            if (study.HospitalId != hospitalId)
+            {
+                throw new UnauthorizedAccessException("You do not have permission to create a report for this study.");
+            }
+        }
+        else
+        {
+            if (string.IsNullOrWhiteSpace(request.AppointmentId))
+            {
+                throw new ArgumentException("Either an Appointment ID or an Imaging Study ID is required.", nameof(request.AppointmentId));
+            }
+
+            _ = Guid.TryParse(request.AppointmentId, out var guidId);
+            appointment = await _context.Appointments
+                .FirstOrDefaultAsync(a =>
+                    a.AppointmentId == guidId ||
+                    a.DisplayId == request.AppointmentId,
+                    cancellationToken);
+
+            if (appointment == null)
+            {
+                throw new KeyNotFoundException($"Appointment with ID '{request.AppointmentId}' not found.");
+            }
+            if (appointment.HospitalId != hospitalId)
+            {
+                throw new UnauthorizedAccessException("You do not have permission to create a report for this appointment.");
+            }
         }
 
-        // Verify hospital context
-        if (appointment.HospitalId != hospitalId)
-        {
-            throw new UnauthorizedAccessException("You do not have permission to create a report for this appointment.");
-        }
+        var ownerHospitalId = appointment?.HospitalId ?? study!.HospitalId;
 
         // Upsert keyed by (AppointmentId, AppointmentServiceId). The
         // service-scoped lookup is the multi-service path; the fallback
@@ -82,12 +107,19 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
         // PWA build that doesn't know about services can still write
         // to the same row it always did.
         DiagnosticReport? report;
-        if (request.AppointmentServiceId.HasValue)
+        if (study != null)
+        {
+            // Study-based: one report per study (no service scoping).
+            report = await _context.DiagnosticReports
+                .Include(r => r.Fields)
+                .FirstOrDefaultAsync(r => r.ImagingStudyId == study.Id, cancellationToken);
+        }
+        else if (request.AppointmentServiceId.HasValue)
         {
             report = await _context.DiagnosticReports
                 .Include(r => r.Fields)
                 .FirstOrDefaultAsync(r =>
-                    r.AppointmentId == appointment.AppointmentId &&
+                    r.AppointmentId == appointment!.AppointmentId &&
                     r.AppointmentServiceId == request.AppointmentServiceId,
                     cancellationToken);
         }
@@ -98,7 +130,7 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
             // for legacy clients.
             report = await _context.DiagnosticReports
                 .Include(r => r.Fields)
-                .Where(r => r.AppointmentId == appointment.AppointmentId)
+                .Where(r => r.AppointmentId == appointment!.AppointmentId)
                 .OrderBy(r => r.CreatedAt)
                 .FirstOrDefaultAsync(cancellationToken);
         }
@@ -109,10 +141,12 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
             report = new DiagnosticReport
             {
                 Id = Guid.NewGuid(),
-                AppointmentId = appointment.AppointmentId,
-                AppointmentServiceId = request.AppointmentServiceId,
+                AppointmentId = appointment?.AppointmentId,
+                ImagingStudyId = study?.Id,
+                // Service scoping is an appointment-only concept.
+                AppointmentServiceId = study != null ? null : request.AppointmentServiceId,
                 DoctorId = doctorId,
-                HospitalId = appointment.HospitalId,
+                HospitalId = ownerHospitalId,
                 TemplateId = request.TemplateId,
                 Findings = request.Findings,
                 Impression = request.Impression,
@@ -201,7 +235,9 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
         // live service on the visit has a finalised report — otherwise
         // the worklist would prematurely flip a 1-of-3-reported visit
         // into the green-finalised state.
-        if (request.IsFinalized)
+        // Study-based reports have no visit to advance — the appointment/
+        // service status rollup is appointment-only.
+        if (request.IsFinalized && appointment != null)
         {
             if (request.AppointmentServiceId.HasValue)
             {
@@ -275,12 +311,18 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
             // visit-level report when the client didn't scope by
             // service).
             DiagnosticReport? canonical;
-            if (request.AppointmentServiceId.HasValue)
+            if (study != null)
+            {
+                canonical = await _context.DiagnosticReports
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(r => r.ImagingStudyId == study.Id, cancellationToken);
+            }
+            else if (request.AppointmentServiceId.HasValue)
             {
                 canonical = await _context.DiagnosticReports
                     .AsNoTracking()
                     .FirstOrDefaultAsync(r =>
-                        r.AppointmentId == appointment.AppointmentId &&
+                        r.AppointmentId == appointment!.AppointmentId &&
                         r.AppointmentServiceId == request.AppointmentServiceId,
                         cancellationToken);
             }
@@ -288,7 +330,7 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
             {
                 canonical = await _context.DiagnosticReports
                     .AsNoTracking()
-                    .Where(r => r.AppointmentId == appointment.AppointmentId)
+                    .Where(r => r.AppointmentId == appointment!.AppointmentId)
                     .OrderBy(r => r.CreatedAt)
                     .FirstOrDefaultAsync(cancellationToken);
             }
@@ -296,11 +338,13 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
                 "This report was updated by another user since you opened it.");
         }
 
-        // TACTICAL: Break circular references for serialization without relying on attributes
-        report.Appointment = null!;
-        report.Doctor = null!;
-        report.Hospital = null!;
-        report.Template = null!;
+        // Break the Fields -> Report cycle for serialization. The principal
+        // navigations (Appointment, ImagingStudy, Doctor, Hospital, Template)
+        // are all [JsonIgnore], so they don't need nulling here — and nulling
+        // them now WOULD be harmful: with these relationships optional, EF
+        // relationship fixup would null the matching FK on the returned entity
+        // (e.g. clearing ImagingStudy would null ImagingStudyId), corrupting the
+        // response the client just saved.
         if (report.Fields != null)
         {
             foreach (var f in report.Fields)

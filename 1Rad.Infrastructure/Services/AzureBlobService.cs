@@ -197,6 +197,50 @@ namespace _1Rad.Infrastructure.Services
             return await blobClient.ExistsAsync();
         }
 
+        public string GetBlobReadUrl(string blobPath, string containerName)
+        {
+            if (string.IsNullOrWhiteSpace(blobPath) || string.IsNullOrWhiteSpace(containerName))
+                return string.Empty;
+            // Resolve against our own account client so the returned URL always
+            // points at the verified blob, regardless of any host the caller sent.
+            return _blobServiceClient.GetBlobContainerClient(containerName).GetBlobClient(blobPath).Uri.ToString();
+        }
+
+        public async Task<long> GetBlobSizeAsync(string blobPath, string containerName)
+        {
+            if (string.IsNullOrWhiteSpace(blobPath) || string.IsNullOrWhiteSpace(containerName))
+                return 0;
+            try
+            {
+                var blobClient = _blobServiceClient.GetBlobContainerClient(containerName).GetBlobClient(blobPath);
+                var props = await blobClient.GetPropertiesAsync();
+                return props.Value.ContentLength;
+            }
+            catch
+            {
+                return 0; // missing blob / transient failure — metering treats it as unknown
+            }
+        }
+
+        public async Task<long> GetBlobSizeByUrlAsync(string fileUrl)
+        {
+            if (string.IsNullOrEmpty(fileUrl)) return 0;
+            try
+            {
+                // Same URL shape DownloadFileAsync parses: /{container}/{blob}
+                var uri = new Uri(fileUrl);
+                var segments = uri.Segments;
+                if (segments.Length < 3) return 0;
+                var containerName = segments[1].TrimEnd('/');
+                var blobName = Uri.UnescapeDataString(string.Join("", segments.Skip(2)));
+                return await GetBlobSizeAsync(blobName, containerName);
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
         public async Task<Stream> DownloadFileAsync(string fileUrl)
         {
             if (string.IsNullOrEmpty(fileUrl)) throw new ArgumentException("URL is required");

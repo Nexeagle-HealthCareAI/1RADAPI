@@ -25,6 +25,9 @@ public record AiAssistCommand : IRequest<AiAssistResult>
     // When present, the appointment's patient identifiers (name / PTID / phone)
     // are de-identified before the text is sent to the AI provider.
     public Guid? AppointmentId { get; init; }
+    // PACS-only alternative: redact the study's denormalized demographics
+    // (patient name / DICOM patient id) instead of an appointment's.
+    public Guid? ImagingStudyId { get; init; }
 }
 
 public record AiAssistResult(bool Success, string? Html, string? Error);
@@ -57,7 +60,15 @@ public class AiAssistCommandHandler : IRequestHandler<AiAssistCommand, AiAssistR
         // provider). Mask the patient's name / PTID / phone, then re-insert them
         // into the model's response so the radiologist still sees real names.
         var phi = new List<string?>();
-        if (request.AppointmentId is Guid aid && aid != Guid.Empty)
+        if (request.ImagingStudyId is Guid sid && sid != Guid.Empty)
+        {
+            var info = await _context.ImagingStudies
+                .Where(s => s.Id == sid)
+                .Select(s => new { s.PatientName, s.DicomPatientId })
+                .FirstOrDefaultAsync(cancellationToken);
+            if (info != null) { phi.Add(info.PatientName); phi.Add(info.DicomPatientId); }
+        }
+        else if (request.AppointmentId is Guid aid && aid != Guid.Empty)
         {
             var info = await _context.Appointments
                 .Where(a => a.AppointmentId == aid)

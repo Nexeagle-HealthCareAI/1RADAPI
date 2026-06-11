@@ -208,8 +208,10 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
             // subquery per appointment row. ───────────────────────────────
             var assetCountByAppointment = (await _context.StudyAssets
                 .AsNoTracking()
-                .Where(sa => appointmentIds.Contains(sa.AppointmentId))
-                .GroupBy(sa => sa.AppointmentId)
+                // AppointmentId is nullable since the RIS/PACS split — but every
+                // asset on this board belongs to a visit, so filter the nulls.
+                .Where(sa => sa.AppointmentId != null && appointmentIds.Contains(sa.AppointmentId.Value))
+                .GroupBy(sa => sa.AppointmentId!.Value)
                 .Select(g => new { AppointmentId = g.Key, Count = g.Count() })
                 .ToListAsync(cancellationToken))
                 .ToDictionary(x => x.AppointmentId, x => x.Count);
@@ -218,8 +220,10 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
             // in memory (mirrors the old per-row FirstOrDefault). ──────────
             var impressionByAppointment = (await _context.DiagnosticReports
                 .AsNoTracking()
-                .Where(dr => appointmentIds.Contains(dr.AppointmentId))
-                .Select(dr => new { dr.AppointmentId, dr.Impression })
+                // AppointmentId is nullable since the PACS-only split (study-based
+                // reports have none) — filter those out of the visit join.
+                .Where(dr => dr.AppointmentId != null && appointmentIds.Contains(dr.AppointmentId.Value))
+                .Select(dr => new { AppointmentId = dr.AppointmentId!.Value, dr.Impression })
                 .ToListAsync(cancellationToken))
                 .GroupBy(r => r.AppointmentId)
                 .ToDictionary(g => g.Key, g => g.Select(r => r.Impression).FirstOrDefault());

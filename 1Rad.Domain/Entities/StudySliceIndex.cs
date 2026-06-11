@@ -17,7 +17,9 @@ public class StudySliceIndex : BaseEntity, IHospitalContext
 
     /// <summary>The original ZIP asset this slice was extracted from.</summary>
     public Guid AssetId { get; set; }
-    public Guid AppointmentId { get; set; }
+    // Nullable since the RIS/PACS SKU split: PACS-only studies have no
+    // appointment. Denormalised from the asset at extraction time.
+    public Guid? AppointmentId { get; set; }
     public Guid HospitalId { get; set; }
 
     /// <summary>DICOM tag (0020,000E) — groups slices into a series.</summary>

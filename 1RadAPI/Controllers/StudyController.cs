@@ -1,5 +1,7 @@
 using _1Rad.Application.Interfaces;
+using _1Rad.Domain.Constants;
 using _1Rad.Domain.Entities;
+using _1RadAPI.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -12,6 +14,11 @@ using System.Threading.Tasks;
 
 namespace _1RadAPI.Controllers
 {
+    // Module gating is per-ACTION here, not class-level: RIS-only centers may
+    // attach and view non-DICOM documents (PDF/JPG) on a visit, so the generic
+    // upload/asset endpoints stay open and enforce a file-type rule instead
+    // (RequireDicomCapabilityAsync), while the DICOM-only surfaces (manifest,
+    // viewer, per-instance upload) carry [RequiresModule(PACS)].
     [Route("api/v1/[controller]")]
     [ApiController]
     [Microsoft.AspNetCore.Authorization.Authorize]
@@ -23,6 +30,10 @@ namespace _1RadAPI.Controllers
         private readonly IDicomExtractionQueue _extractionQueue;
         private readonly IDicomExtractionService _extractionService;
         private readonly IConfiguration _configuration;
+        private readonly IModuleEntitlementService _modules;
+        private readonly IStorageMeteringService _storage;
+        private readonly IAssetUrlSigner _signer;
+        private readonly IStudyMatchingService _matching;
 
         public StudyController(
             IApplicationDbContext context,
@@ -30,7 +41,11 @@ namespace _1RadAPI.Controllers
             IUserContext userContext,
             IDicomExtractionQueue extractionQueue,
             IDicomExtractionService extractionService,
-            IConfiguration configuration)
+            IConfiguration configuration,
+            IModuleEntitlementService modules,
+            IStorageMeteringService storage,
+            IAssetUrlSigner signer,
+            IStudyMatchingService matching)
         {
             _context = context;
             _blobService = blobService;
@@ -38,6 +53,155 @@ namespace _1RadAPI.Controllers
             _extractionQueue = extractionQueue;
             _extractionService = extractionService;
             _configuration = configuration;
+            _modules = modules;
+            _storage = storage;
+            _signer = signer;
+            _matching = matching;
+        }
+
+        // Container holding PHI (DICOM). Reads of it require a capability: a
+        // valid signature OR an authenticated, tenant-entitled Bearer.
+        private const string PhiContainer = "dicom-files";
+
+        // Containers whose blobs are intentionally public (clinic branding shown
+        // on the unauthenticated patient-tracking page) and may be proxied with
+        // no credentials. NOT PHI.
+        private static readonly string[] OpenProxyContainers = { "prescriptions" };
+
+        // How long a signed read URL stays valid. Long enough to outlast a
+        // reporting/viewing session (the manifest is re-fetched per page load,
+        // minting fresh signatures), short enough that a leaked URL expires.
+        private TimeSpan SignedUrlTtl =>
+            TimeSpan.FromHours(_configuration.GetValue("AssetProxy:SignedUrlTtlHours", 8));
+
+        // Wraps a dicom-files blob URL as a signed, absolute proxy URL the
+        // browser can fetch with no Bearer (the DICOM viewer's bare fetch). The
+        // signature is the capability; see <see cref="IAssetUrlSigner"/>.
+        private string? SignedProxyUrl(string? blobUrl)
+        {
+            if (string.IsNullOrEmpty(blobUrl)) return blobUrl;
+            var (exp, sig) = _signer.Sign(blobUrl, SignedUrlTtl);
+            var baseUrl = $"{Request.Scheme}://{Request.Host}{Request.PathBase}";
+            return $"{baseUrl}/api/v1/Study/proxy-asset" +
+                   $"?url={Uri.EscapeDataString(blobUrl)}&exp={exp}&sig={Uri.EscapeDataString(sig)}";
+        }
+
+        // First path segment of a blob URL = the container name.
+        private static string ContainerOf(string url)
+        {
+            try
+            {
+                var segs = new Uri(url).AbsolutePath.TrimStart('/').Split('/', 2);
+                return segs.Length > 0 ? segs[0] : string.Empty;
+            }
+            catch { return string.Empty; }
+        }
+
+        // True if a present Bearer belongs to a user entitled to the blob's
+        // hospital. dicom-files blob paths are "/{container}/{hospitalId:N}/...",
+        // so the hospital is the segment after the container.
+        private bool IsBearerEntitledToBlob(string url)
+        {
+            if (User?.Identity?.IsAuthenticated != true) return false;
+            try
+            {
+                var segs = new Uri(url).AbsolutePath.TrimStart('/').Split('/');
+                if (segs.Length < 2 || !Guid.TryParse(segs[1], out var hid)) return false;
+                return hid == _userContext.HospitalId || _userContext.AuthorizedHospitalIds.Contains(hid);
+            }
+            catch { return false; }
+        }
+
+        // File extensions that imply DICOM content and therefore the PACS
+        // module: raw instances and whole-study ZIPs. PDF/JPG/PNG documents
+        // are allowed in every SKU (RIS-only "attach report scan" flow).
+        private static readonly string[] DicomExtensions = { ".zip", ".dcm", ".dicom" };
+
+        // Imaging (vs. visit-document) file types — these get an ImagingStudy
+        // aggregate row. "instances" is the per-instance bridge upload.
+        private static bool IsImagingFileType(string? fileType)
+        {
+            var t = (fileType ?? string.Empty).Trim().TrimStart('.').ToLowerInvariant();
+            return t is "zip" or "dcm" or "dicom" or "instances";
+        }
+
+        // Storage quota gate (Phase 3): over-quota centers can't ingest NEW
+        // DICOM — returns the 403 to send, or null when there's headroom.
+        // Viewing existing studies is never blocked by quota.
+        private async Task<IActionResult?> RequireStorageHeadroomAsync(Guid hospitalId)
+        {
+            if (!await _storage.IsOverQuotaAsync(hospitalId)) return null;
+            var usage = await _storage.GetUsageAsync(hospitalId);
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                success = false,
+                error = $"Storage quota exceeded ({usage.UsedBytes / (1024.0 * 1024 * 1024):F1} GB used of {usage.IncludedStorageGb} GB included). New DICOM uploads are blocked — free up space or upgrade the plan. Existing studies remain viewable.",
+                errorCode = "STORAGE_QUOTA_EXCEEDED",
+            });
+        }
+
+        // Phase 1 of the RIS/PACS split: every DICOM-bearing asset belongs to
+        // an ImagingStudy aggregate. Re-uploads keep the asset's existing
+        // study; otherwise one is created seeded from the appointment —
+        // extraction later refines it with the real DICOM tags
+        // (StudyInstanceUID, modality, description) and flips its Status.
+        // `directlyViewable` = single .dcm files that skip extraction.
+        private void EnsureImagingStudy(StudyAsset asset, Appointment appointment, string source, bool directlyViewable)
+        {
+            if (asset.ImagingStudyId != null) return;
+            var study = new ImagingStudy
+            {
+                Id = Guid.NewGuid(),
+                HospitalId = appointment.HospitalId,
+                PatientId = appointment.PatientId,
+                PatientName = appointment.PatientName,
+                Modality = appointment.Modality,
+                StudyDate = appointment.DateTime,
+                Status = directlyViewable ? ImagingStudyStatus.Ready : ImagingStudyStatus.Received,
+                ReadyAt = directlyViewable ? DateTime.UtcNow : null,
+                Source = source,
+                AppointmentId = appointment.AppointmentId,
+                AppointmentServiceId = asset.AppointmentServiceId,
+            };
+            _context.ImagingStudies.Add(study);
+            asset.ImagingStudyId = study.Id;
+        }
+
+        // Returns null when the upload is allowed; otherwise the 403 to return.
+        // DICOM-typed files require the PACS module on the active center.
+        private async Task<IActionResult?> RequireDicomCapabilityAsync(string fileName)
+        {
+            var ext = Path.GetExtension(fileName ?? string.Empty).ToLowerInvariant();
+            if (!DicomExtensions.Contains(ext)) return null;
+            if (await _modules.HasModuleAsync(_userContext.HospitalId, ModuleConstants.Pacs))
+                return null;
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                success = false,
+                error = "DICOM upload requires the PACS module, which is not part of this center's subscription. Only document attachments (PDF/JPG/PNG) are available on a RIS-only plan.",
+                errorCode = "MODULE_NOT_ENABLED",
+                module = ModuleConstants.Pacs,
+            });
+        }
+
+        // Tenant guard for the upload paths. Those endpoints deliberately load
+        // the appointment with IgnoreQueryFilters() — in a multi-hospital group
+        // the active center (UserContext.HospitalId) can legitimately differ
+        // from the appointment's center — which also disables the global
+        // HospitalId isolation filter. Without this check any authenticated
+        // user could attach assets to ANY hospital's appointment by guessing an
+        // id. Allow the caller's own active center, or any group center carried
+        // in the token's "hubs" claim. Returns null when allowed, else the 403.
+        private IActionResult? EnsureHospitalAccess(Guid hospitalId)
+        {
+            if (hospitalId == _userContext.HospitalId) return null;
+            if (_userContext.AuthorizedHospitalIds.Contains(hospitalId)) return null;
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                success = false,
+                error = "This appointment belongs to a center you are not authorized to access.",
+                errorCode = "HOSPITAL_FORBIDDEN",
+            });
         }
 
         /// <summary>
@@ -121,6 +285,7 @@ namespace _1RadAPI.Controllers
         /// back to ZIP-load for.
         /// </summary>
         [HttpGet("{appointmentId}/manifest")]
+        [RequiresModule(ModuleConstants.Pacs)]
         public async Task<IActionResult> GetManifest(string appointmentId, CancellationToken cancellationToken)
         {
             Guid.TryParse(appointmentId, out var guidId);
@@ -164,18 +329,104 @@ namespace _1RadAPI.Controllers
                 .OrderByDescending(a => a.UploadedAt)
                 .ToListAsync(cancellationToken);
 
-            var assetDtos = assets.Select(a =>
+            var assetDtos = BuildManifestAssetDtos(assets);
+
+            return Ok(new
             {
-                if (!(a.FileType ?? "").Equals("zip", StringComparison.OrdinalIgnoreCase))
+                success = true,
+                data = new
                 {
-                    // Pass-through for non-ZIP attachments (single DCM, JPG, PNG).
+                    appointmentId = appointment.AppointmentId,
+                    patientName = appointment.PatientName,
+                    modality = appointment.Modality,
+                    studyDate = appointment.DateTime,
+                    assets = assetDtos,
+                },
+            });
+        }
+
+        /// <summary>
+        /// Manifest keyed by ImagingStudy (Phase 1 of the RIS/PACS split) —
+        /// the appointment-free entry point PACS-only surfaces will use. Same
+        /// payload shape as the by-appointment manifest, so the viewer's
+        /// loader is shared; appointment fields are null for unlinked studies.
+        /// </summary>
+        [HttpGet("by-study/{imagingStudyId:guid}/manifest")]
+        [RequiresModule(ModuleConstants.Pacs)]
+        public async Task<IActionResult> GetManifestByStudy(Guid imagingStudyId, CancellationToken cancellationToken)
+        {
+            var study = await _context.ImagingStudies
+                .FirstOrDefaultAsync(st => st.Id == imagingStudyId, cancellationToken);
+            if (study == null)
+                return NotFound(new { success = false, error = "Imaging study not found." });
+
+            var assets = await _context.StudyAssets
+                .Where(a => a.ImagingStudyId == study.Id)
+                .Include(a => a.Slices)
+                .OrderByDescending(a => a.UploadedAt)
+                .ToListAsync(cancellationToken);
+
+            // Same lazy-extraction fallback as the by-appointment route:
+            // legacy ZIPs without an ExtractionStatus extract on first view.
+            var needsLazy = assets.Any(a =>
+                (a.FileType ?? "").Equals("zip", StringComparison.OrdinalIgnoreCase) &&
+                string.IsNullOrEmpty(a.ExtractionStatus));
+            if (needsLazy)
+            {
+                foreach (var a in assets.Where(a =>
+                             (a.FileType ?? "").Equals("zip", StringComparison.OrdinalIgnoreCase) &&
+                             string.IsNullOrEmpty(a.ExtractionStatus)))
+                {
+                    try { await _extractionService.ExtractAsync(a.Id, cancellationToken); }
+                    catch { /* flagged on the asset; fall back to ZIP below */ }
+                }
+                assets = await _context.StudyAssets
+                    .Where(a => a.ImagingStudyId == study.Id)
+                    .Include(a => a.Slices)
+                    .OrderByDescending(a => a.UploadedAt)
+                    .ToListAsync(cancellationToken);
+            }
+
+            return Ok(new
+            {
+                success = true,
+                data = new
+                {
+                    imagingStudyId = study.Id,
+                    studyInstanceUID = study.StudyInstanceUID,
+                    status = study.Status,
+                    appointmentId = study.AppointmentId,
+                    patientName = study.PatientName,
+                    modality = study.Modality,
+                    studyDate = study.StudyDate,
+                    studyDescription = study.StudyDescription,
+                    assets = BuildManifestAssetDtos(assets),
+                },
+            });
+        }
+
+        // Per-asset manifest DTOs — shared by the by-appointment and by-study
+        // manifest endpoints so the viewer consumes one shape everywhere.
+        private List<object> BuildManifestAssetDtos(List<StudyAsset> assets)
+        {
+            return assets.Select(a =>
+            {
+                // ZIPs and per-instance ("instances") uploads both extract into
+                // the slice index. (Previously only "zip" was checked, which sent
+                // instances-assets down the passthrough branch — handing the
+                // viewer the staging _manifest.json URL instead of the series.)
+                var t = (a.FileType ?? "").Trim().ToLowerInvariant();
+                var extractable = t == "zip" || t == "instances";
+                if (!extractable)
+                {
+                    // Pass-through for non-extractable attachments (single DCM, JPG, PNG).
                     return new
                     {
                         assetId = a.Id,
                         appointmentServiceId = a.AppointmentServiceId,
                         fileName = a.FileName,
                         fileType = a.FileType,
-                        blobUrl = ToCdn(a.BlobUrl),
+                        blobUrl = SignedProxyUrl(a.BlobUrl),
                         extractionStatus = "NotApplicable",
                         series = (object?)null,
                     };
@@ -191,7 +442,7 @@ namespace _1RadAPI.Controllers
                         appointmentServiceId = a.AppointmentServiceId,
                         fileName = a.FileName,
                         fileType = a.FileType,
-                        blobUrl = ToCdn(a.BlobUrl),
+                        blobUrl = SignedProxyUrl(a.BlobUrl),
                         extractionStatus = a.ExtractionStatus ?? "Pending",
                         series = (object?)null,
                     };
@@ -207,14 +458,14 @@ namespace _1RadAPI.Controllers
                             seriesUID = g.Key,
                             seriesDescription = first.SeriesDescription,
                             modality = first.Modality,
-                            thumbnailUrl = ToCdn(first.ThumbnailUrl),
+                            thumbnailUrl = SignedProxyUrl(first.ThumbnailUrl),
                             slices = g.OrderBy(s => s.InstanceNumber ?? int.MaxValue)
                                       .ThenBy(s => s.SopInstanceUID)
                                       .Select(s => new
                                       {
                                           sopInstanceUID = s.SopInstanceUID,
                                           instanceNumber = s.InstanceNumber,
-                                          url = ToCdn(s.BlobUrl),
+                                          url = SignedProxyUrl(s.BlobUrl),
                                           metadata = s.MetadataJson,
                                       })
                                       .ToList(),
@@ -234,27 +485,15 @@ namespace _1RadAPI.Controllers
                     appointmentServiceId = a.AppointmentServiceId,
                     fileName = a.FileName,
                     fileType = a.FileType,
-                    blobUrl = ToCdn(a.BlobUrl), // kept for fallback compat
+                    blobUrl = SignedProxyUrl(a.BlobUrl), // kept for fallback compat
                     extractionStatus = "Extracted",
                     series = (object?)seriesGroups,
                 };
-            }).ToList();
-
-            return Ok(new
-            {
-                success = true,
-                data = new
-                {
-                    appointmentId = appointment.AppointmentId,
-                    patientName = appointment.PatientName,
-                    modality = appointment.Modality,
-                    studyDate = appointment.DateTime,
-                    assets = assetDtos,
-                },
-            });
+            }).Cast<object>().ToList();
         }
 
         [HttpGet("{appointmentId}/viewer")]
+        [RequiresModule(ModuleConstants.Pacs)]
         public async Task<IActionResult> GetDicomViewerConfig(string appointmentId)
         {
             try
@@ -287,7 +526,7 @@ namespace _1RadAPI.Controllers
                         id = a.Id,
                         fileName = a.FileName,
                         fileType = a.FileType,
-                        blobUrl = ToCdn(a.BlobUrl),
+                        blobUrl = SignedProxyUrl(a.BlobUrl),
                         uploadedAt = a.UploadedAt
                     }),
                     deviceInfo = deviceInfo,
@@ -374,6 +613,18 @@ namespace _1RadAPI.Controllers
                 if (request.File == null || request.File.Length == 0)
                     return BadRequest(new { success = false, error = "PROTOCOL FAILURE: No clinical binary stream detected." });
 
+                // RIS-only centers can attach documents but not DICOM.
+                var moduleBlock = await RequireDicomCapabilityAsync(request.File.FileName);
+                if (moduleBlock != null) return moduleBlock;
+
+                // Quota applies to DICOM ingestion only (documents are tiny).
+                var uploadExt = Path.GetExtension(request.File.FileName ?? string.Empty).ToLowerInvariant();
+                if (DicomExtensions.Contains(uploadExt))
+                {
+                    var quotaBlock = await RequireStorageHeadroomAsync(_userContext.HospitalId);
+                    if (quotaBlock != null) return quotaBlock;
+                }
+
                 using var stream = request.File.OpenReadStream();
                 var fileName = request.File.FileName;
                 var contentType = request.File.ContentType;
@@ -400,6 +651,9 @@ namespace _1RadAPI.Controllers
                 if (appointment == null)
                     return NotFound(new { success = false, error = "MISSION NOT FOUND: Target appointment does not exist." });
 
+                var tenantBlock = EnsureHospitalAccess(appointment.HospitalId);
+                if (tenantBlock != null) return tenantBlock;
+
                 // Tactical: Check for existing asset to prevent duplicates (Upsert logic)
                 var existingAsset = await _context.StudyAssets
                     .IgnoreQueryFilters()
@@ -411,6 +665,7 @@ namespace _1RadAPI.Controllers
                     existingAsset.BlobUrl = blobUrl;
                     existingAsset.FileType = extension.Replace(".", "");
                     existingAsset.UploadedAt = DateTime.UtcNow;
+                    existingAsset.StorageBytes = request.File.Length; // re-upload replaces the blob
                     // Multi-service rollout — adopt a freshly-supplied service id
                     // even on the upsert path so re-uploading after a booking
                     // gained services correctly attaches to the right line.
@@ -429,6 +684,7 @@ namespace _1RadAPI.Controllers
                         FileName = fileName,
                         FileType = extension.Replace(".", ""),
                         UploadedAt = DateTime.UtcNow,
+                        StorageBytes = request.File.Length,
                         HospitalId = appointment.HospitalId // Inherit from appointment to prevent FK conflict
                     };
                     _context.StudyAssets.Add(asset);
@@ -447,7 +703,12 @@ namespace _1RadAPI.Controllers
                     asset.ExtractionStatus = "Queued";
                 }
 
+                if (IsImagingFileType(asset.FileType))
+                    EnsureImagingStudy(asset, appointment, "api-upload",
+                        directlyViewable: !"zip".Equals(asset.FileType, StringComparison.OrdinalIgnoreCase));
+
                 await _context.SaveChangesAsync(default);
+                _storage.Invalidate(appointment.HospitalId);
 
                 if (asset.ExtractionStatus == "Queued")
                     _extractionQueue.Enqueue(asset.Id);
@@ -501,6 +762,20 @@ namespace _1RadAPI.Controllers
                 if (string.IsNullOrWhiteSpace(request.FileName))
                     return BadRequest(new { success = false, error = "FileName is required." });
 
+                // RIS-only centers can SAS-upload documents but not DICOM/ZIP.
+                // Gating the token is sufficient for the whole SAS flow: without
+                // a token nothing can be staged, so /upload-complete can't be
+                // reached for a blocked file type.
+                var moduleBlock = await RequireDicomCapabilityAsync(request.FileName);
+                if (moduleBlock != null) return moduleBlock;
+
+                var tokenExt = Path.GetExtension(request.FileName).ToLowerInvariant();
+                if (DicomExtensions.Contains(tokenExt))
+                {
+                    var quotaBlock = await RequireStorageHeadroomAsync(_userContext.HospitalId);
+                    if (quotaBlock != null) return quotaBlock;
+                }
+
                 // Hard size cap — adjust if you ever need bigger studies.
                 const long MaxBytes = 1_073_741_824L; // 1 GB
                 if (request.FileSize > MaxBytes)
@@ -512,6 +787,9 @@ namespace _1RadAPI.Controllers
 
                 if (appointment == null)
                     return NotFound(new { success = false, error = "Appointment not found." });
+
+                var tenantBlock = EnsureHospitalAccess(appointment.HospitalId);
+                if (tenantBlock != null) return tenantBlock;
 
                 var fileName = Path.GetFileName(request.FileName);
                 // Foldered path keeps blobs organised + easy to delete by appointment.
@@ -567,10 +845,12 @@ namespace _1RadAPI.Controllers
                     || request.AppointmentId == Guid.Empty
                     || string.IsNullOrWhiteSpace(request.BlobPath)
                     || string.IsNullOrWhiteSpace(request.ContainerName)
-                    || string.IsNullOrWhiteSpace(request.PublicReadUrl)
                     || string.IsNullOrWhiteSpace(request.FileName))
                 {
-                    return BadRequest(new { success = false, error = "AssetId, AppointmentId, BlobPath, ContainerName, PublicReadUrl and FileName are all required." });
+                    // PublicReadUrl is no longer required — it's a client-echoed
+                    // value we deliberately don't trust (see below); the read URL
+                    // is derived server-side from the verified container + path.
+                    return BadRequest(new { success = false, error = "AssetId, AppointmentId, BlobPath, ContainerName and FileName are all required." });
                 }
 
                 var appointment = await _context.Appointments
@@ -578,6 +858,21 @@ namespace _1RadAPI.Controllers
                     .FirstOrDefaultAsync(a => a.AppointmentId == request.AppointmentId);
                 if (appointment == null)
                     return NotFound(new { success = false, error = "Appointment not found." });
+
+                var tenantBlock = EnsureHospitalAccess(appointment.HospitalId);
+                if (tenantBlock != null) return tenantBlock;
+
+                // Bind the blob to this appointment's tenant. The path we minted
+                // in /upload-token is "{hospitalId:N}/{appointmentId:N}/...";
+                // requiring that prefix stops a caller from confirming against an
+                // existing blob that belongs to another center (which would then
+                // be stored as this appointment's asset and served to its users).
+                var expectedPrefix = $"{appointment.HospitalId:N}/{appointment.AppointmentId:N}/";
+                if (!request.BlobPath.Replace('\\', '/').TrimStart('/')
+                        .StartsWith(expectedPrefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    return BadRequest(new { success = false, error = "BlobPath does not belong to this appointment." });
+                }
 
                 // Verify the blob actually exists in Azure before we write any DB row.
                 var exists = await _blobService.BlobExistsAsync(request.BlobPath, request.ContainerName);
@@ -593,6 +888,11 @@ namespace _1RadAPI.Controllers
                 var fileName = Path.GetFileName(request.FileName);
                 var extension = Path.GetExtension(fileName).ToLower().TrimStart('.');
 
+                // Canonical read URL derived from the verified container + path on
+                // OUR account — never the client-echoed PublicReadUrl, which the
+                // caller could point at someone else's blob.
+                var readUrl = _blobService.GetBlobReadUrl(request.BlobPath, request.ContainerName);
+
                 // Idempotent: if this AssetId was already inserted (retry / double-tap),
                 // just bump UploadedAt instead of duplicating.
                 var asset = await _context.StudyAssets
@@ -605,7 +905,7 @@ namespace _1RadAPI.Controllers
                         Id = request.AssetId,
                         AppointmentId = request.AppointmentId,
                         AppointmentServiceId = request.AppointmentServiceId,
-                        BlobUrl = request.PublicReadUrl,
+                        BlobUrl = readUrl,
                         FileName = fileName,
                         FileType = string.IsNullOrEmpty(extension) ? "bin" : extension,
                         UploadedAt = DateTime.UtcNow,
@@ -615,11 +915,16 @@ namespace _1RadAPI.Controllers
                 }
                 else
                 {
-                    asset.BlobUrl = request.PublicReadUrl;
+                    asset.BlobUrl = readUrl;
                     asset.UploadedAt = DateTime.UtcNow;
                     if (request.AppointmentServiceId.HasValue)
                         asset.AppointmentServiceId = request.AppointmentServiceId;
                 }
+
+                // Meter the verified blob (Phase 3). Extraction recomputes the
+                // durable total (blob + slices) for ZIPs later.
+                asset.StorageBytes = await _blobService.GetBlobSizeAsync(request.BlobPath, request.ContainerName);
+                _storage.Invalidate(appointment.HospitalId);
 
                 if (appointment.Status != "SCANNED" && appointment.Status != "REPORTED")
                 {
@@ -631,6 +936,10 @@ namespace _1RadAPI.Controllers
                 {
                     asset.ExtractionStatus = "Queued";
                 }
+
+                if (IsImagingFileType(asset.FileType))
+                    EnsureImagingStudy(asset, appointment, "sas-upload",
+                        directlyViewable: !"zip".Equals(asset.FileType, StringComparison.OrdinalIgnoreCase));
 
                 await _context.SaveChangesAsync(default);
 
@@ -652,6 +961,7 @@ namespace _1RadAPI.Controllers
         // instances to HTJ2K and builds the slice index exactly as for a ZIP.
 
         [HttpPost("instance-upload/request-sas")]
+        [RequiresModule(ModuleConstants.Pacs)]
         public async Task<IActionResult> RequestInstanceUploadSas([FromBody] InstanceUploadSasRequest request)
         {
             try
@@ -666,6 +976,12 @@ namespace _1RadAPI.Controllers
                     .FirstOrDefaultAsync(a => a.AppointmentId == request.AppointmentId);
                 if (appointment == null)
                     return NotFound(new { success = false, error = "Appointment not found." });
+
+                var tenantBlock = EnsureHospitalAccess(appointment.HospitalId);
+                if (tenantBlock != null) return tenantBlock;
+
+                var quotaBlock = await RequireStorageHeadroomAsync(appointment.HospitalId);
+                if (quotaBlock != null) return quotaBlock;
 
                 // Mint the asset id now so staging blobs live under it; /register
                 // and the worker find + reference them deterministically.
@@ -688,6 +1004,7 @@ namespace _1RadAPI.Controllers
         }
 
         [HttpPost("instance-upload/register")]
+        [RequiresModule(ModuleConstants.Pacs)]
         public async Task<IActionResult> RegisterInstanceUpload([FromBody] InstanceUploadRegisterRequest request)
         {
             try
@@ -702,6 +1019,25 @@ namespace _1RadAPI.Controllers
                     .FirstOrDefaultAsync(a => a.AppointmentId == request.AppointmentId);
                 if (appointment == null)
                     return NotFound(new { success = false, error = "Appointment not found." });
+
+                var tenantBlock = EnsureHospitalAccess(appointment.HospitalId);
+                if (tenantBlock != null) return tenantBlock;
+
+                // Bind every staged instance to this appointment + asset. The SAS
+                // paths we minted in /instance-upload/request-sas all live under
+                // "{hospitalId:N}/{appointmentId:N}/staging/{assetId:N}/". Without
+                // this check a caller could register blob URLs pointing at another
+                // center's data and have the worker fold them into this study.
+                var stagingPrefix = $"{appointment.HospitalId:N}/{appointment.AppointmentId:N}/staging/{request.AssetId:N}/";
+                foreach (var url in request.InstanceUrls)
+                {
+                    var p = BlobPathFromUrl(url, "dicom-files");
+                    if (p == null || !p.Replace('\\', '/').TrimStart('/')
+                            .StartsWith(stagingPrefix, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return BadRequest(new { success = false, error = "One or more instance URLs do not belong to this appointment's staging area." });
+                    }
+                }
 
                 // Parity with /upload-complete — verify the staged blobs actually
                 // landed before creating an asset that references them. Sample
@@ -765,6 +1101,8 @@ namespace _1RadAPI.Controllers
                         asset.AppointmentServiceId = request.AppointmentServiceId;
                 }
 
+                EnsureImagingStudy(asset, appointment, "bridge", directlyViewable: false);
+
                 if (appointment.Status != "SCANNED" && appointment.Status != "REPORTED")
                     appointment.Status = "IN_PROGRESS";
 
@@ -779,10 +1117,535 @@ namespace _1RadAPI.Controllers
             }
         }
 
+        // ── Cloud PACS-only: appointment-free study ingestion ───────────────
+        // These mirror the appointment-based endpoints above, but a study —
+        // not an appointment — is the owner. Assets are stamped with
+        // ImagingStudyId and AppointmentId = null; blobs are foldered by
+        // {hospital}/{study}/... which the extraction worker already handles
+        // (it scopes by AppointmentId ?? ImagingStudyId ?? assetId). All are
+        // PACS-only surfaces, so they carry [RequiresModule(PACS)].
+
+        // Loads a study for a write and tenant-guards it. IgnoreQueryFilters so
+        // a group user's active center can differ from the study's center (the
+        // guard, not the filter, enforces access — same pattern as uploads).
+        private async Task<(ImagingStudy? study, IActionResult? error)> LoadStudyForWriteAsync(Guid studyId)
+        {
+            var study = await _context.ImagingStudies
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(s => s.Id == studyId);
+            if (study == null)
+                return (null, NotFound(new { success = false, error = "Imaging study not found." }));
+            var block = EnsureHospitalAccess(study.HospitalId);
+            if (block != null) return (null, block);
+            return (study, null);
+        }
+
+        [HttpPost("studies/register")]
+        [RequiresModule(ModuleConstants.Pacs)]
+        public async Task<IActionResult> RegisterStudy([FromBody] StudyRegisterRequest request)
+        {
+            try
+            {
+                if (request == null) return BadRequest(new { success = false, error = "Request body is required." });
+                var hospitalId = _userContext.HospitalId;
+
+                // Upsert by (HospitalId, StudyInstanceUID) when the UID is known
+                // (the web Upload Center supplies it). Otherwise always a new row.
+                ImagingStudy? study = null;
+                var uid = string.IsNullOrWhiteSpace(request.StudyInstanceUID) ? null : request.StudyInstanceUID.Trim();
+                if (uid != null)
+                {
+                    study = await _context.ImagingStudies
+                        .IgnoreQueryFilters()
+                        .FirstOrDefaultAsync(s => s.HospitalId == hospitalId && s.StudyInstanceUID == uid);
+                }
+
+                if (study == null)
+                {
+                    study = new ImagingStudy
+                    {
+                        Id = Guid.NewGuid(),
+                        HospitalId = hospitalId,
+                        StudyInstanceUID = uid,
+                        PatientName = request.PatientName,
+                        DicomPatientId = request.DicomPatientId,
+                        AccessionNumber = request.AccessionNumber,
+                        Modality = request.Modality,
+                        StudyDate = request.StudyDate,
+                        StudyDescription = request.StudyDescription,
+                        Source = string.IsNullOrWhiteSpace(request.Source) ? "web-upload" : request.Source,
+                        Status = ImagingStudyStatus.Received,
+                        MatchStatus = ImagingStudyMatchStatus.Unmatched,
+                        CreatedAt = DateTime.UtcNow,
+                    };
+                    _context.ImagingStudies.Add(study);
+                    await _context.SaveChangesAsync(default);
+                    // Server-side matching is applied here (and again after
+                    // extraction refines the real DICOM tags) — see
+                    // IStudyMatchingService wiring.
+                    await _matching.TryMatchAsync(study, default);
+                    await _context.SaveChangesAsync(default);
+                }
+                else
+                {
+                    // Fill any demographics the caller now supplies (don't clobber).
+                    study.PatientName ??= request.PatientName;
+                    study.DicomPatientId ??= request.DicomPatientId;
+                    study.AccessionNumber ??= request.AccessionNumber;
+                    study.Modality ??= request.Modality;
+                    study.StudyDate ??= request.StudyDate;
+                    study.StudyDescription ??= request.StudyDescription;
+                    await _context.SaveChangesAsync(default);
+                }
+
+                return Ok(new
+                {
+                    success = true,
+                    data = new { imagingStudyId = study.Id, status = study.Status, matchStatus = study.MatchStatus },
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, error = $"STUDY_REGISTER_FAILURE: {ex.Message}" });
+            }
+        }
+
+        [HttpPost("studies/{studyId:guid}/upload-token")]
+        [RequiresModule(ModuleConstants.Pacs)]
+        public async Task<IActionResult> RequestStudyUploadToken(Guid studyId, [FromBody] StudyUploadTokenRequest request)
+        {
+            try
+            {
+                if (request == null || string.IsNullOrWhiteSpace(request.FileName))
+                    return BadRequest(new { success = false, error = "FileName is required." });
+
+                var (study, error) = await LoadStudyForWriteAsync(studyId);
+                if (error != null) return error;
+
+                var quotaBlock = await RequireStorageHeadroomAsync(study!.HospitalId);
+                if (quotaBlock != null) return quotaBlock;
+
+                const long MaxBytes = 1_073_741_824L; // 1 GB
+                if (request.FileSize > MaxBytes)
+                    return BadRequest(new { success = false, error = $"File too large. Maximum allowed is {MaxBytes / (1024 * 1024)} MB." });
+
+                var fileName = Path.GetFileName(request.FileName);
+                var stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
+                var assetId = Guid.NewGuid();
+                var blobPath = $"{study.HospitalId:N}/{study.Id:N}/{stamp}_{assetId:N}_{fileName}";
+
+                SasUploadTarget target;
+                try
+                {
+                    target = await _blobService.GenerateSasUploadUrlAsync(
+                        blobPath, "dicom-files", TimeSpan.FromMinutes(30), request.ContentType);
+                }
+                catch (Exception ex)
+                {
+                    return StatusCode(500, new { success = false, error = $"SAS_GENERATION_FAILURE: {ex.Message}" });
+                }
+
+                return Ok(new
+                {
+                    success = true,
+                    data = new
+                    {
+                        assetId,
+                        sasUrl = target.SasUrl,
+                        publicReadUrl = target.PublicReadUrl,
+                        blobPath = target.BlobPath,
+                        containerName = target.ContainerName,
+                        expiresAt = target.ExpiresAt,
+                    },
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, error = $"STUDY_UPLOAD_TOKEN_FAILURE: {ex.Message}" });
+            }
+        }
+
+        [HttpPost("studies/{studyId:guid}/upload-complete")]
+        [RequiresModule(ModuleConstants.Pacs)]
+        public async Task<IActionResult> CompleteStudyUpload(Guid studyId, [FromBody] StudyUploadCompleteRequest request)
+        {
+            try
+            {
+                if (request == null
+                    || request.AssetId == Guid.Empty
+                    || string.IsNullOrWhiteSpace(request.BlobPath)
+                    || string.IsNullOrWhiteSpace(request.ContainerName)
+                    || string.IsNullOrWhiteSpace(request.FileName))
+                {
+                    return BadRequest(new { success = false, error = "AssetId, BlobPath, ContainerName and FileName are all required." });
+                }
+
+                var (study, error) = await LoadStudyForWriteAsync(studyId);
+                if (error != null) return error;
+
+                // Bind the blob to this study's tenant + id (see upload-complete).
+                var expectedPrefix = $"{study!.HospitalId:N}/{study.Id:N}/";
+                if (!request.BlobPath.Replace('\\', '/').TrimStart('/')
+                        .StartsWith(expectedPrefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    return BadRequest(new { success = false, error = "BlobPath does not belong to this study." });
+                }
+
+                if (!await _blobService.BlobExistsAsync(request.BlobPath, request.ContainerName))
+                {
+                    return BadRequest(new { success = false, error = "Blob not found in Azure. The PUT may have failed or the SAS expired before upload finished." });
+                }
+
+                var fileName = Path.GetFileName(request.FileName);
+                var extension = Path.GetExtension(fileName).ToLower().TrimStart('.');
+                var readUrl = _blobService.GetBlobReadUrl(request.BlobPath, request.ContainerName);
+
+                var asset = await _context.StudyAssets
+                    .IgnoreQueryFilters()
+                    .FirstOrDefaultAsync(a => a.Id == request.AssetId);
+                if (asset == null)
+                {
+                    asset = new StudyAsset
+                    {
+                        Id = request.AssetId,
+                        ImagingStudyId = study.Id,
+                        AppointmentId = null,
+                        BlobUrl = readUrl,
+                        FileName = fileName,
+                        FileType = string.IsNullOrEmpty(extension) ? "bin" : extension,
+                        UploadedAt = DateTime.UtcNow,
+                        HospitalId = study.HospitalId,
+                    };
+                    _context.StudyAssets.Add(asset);
+                }
+                else
+                {
+                    asset.BlobUrl = readUrl;
+                    asset.UploadedAt = DateTime.UtcNow;
+                    asset.ImagingStudyId = study.Id;
+                }
+
+                asset.StorageBytes = await _blobService.GetBlobSizeAsync(request.BlobPath, request.ContainerName);
+                _storage.Invalidate(study.HospitalId);
+
+                if (asset.FileType?.Equals("zip", StringComparison.OrdinalIgnoreCase) == true)
+                    asset.ExtractionStatus = "Queued";
+
+                // A directly-viewable single instance (.dcm) is Ready immediately;
+                // ZIP/instances flip to Processing→Ready in the extraction worker.
+                if (IsImagingFileType(asset.FileType)
+                    && !"zip".Equals(asset.FileType, StringComparison.OrdinalIgnoreCase)
+                    && study.Status == ImagingStudyStatus.Received)
+                {
+                    study.Status = ImagingStudyStatus.Ready;
+                    study.ReadyAt = DateTime.UtcNow;
+                }
+
+                await _context.SaveChangesAsync(default);
+
+                if (asset.ExtractionStatus == "Queued")
+                    _extractionQueue.Enqueue(asset.Id);
+
+                return Ok(new { success = true, data = asset });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, error = $"STUDY_UPLOAD_COMPLETE_FAILURE: {ex.Message}" });
+            }
+        }
+
+        [HttpPost("studies/{studyId:guid}/instance-upload/request-sas")]
+        [RequiresModule(ModuleConstants.Pacs)]
+        public async Task<IActionResult> RequestStudyInstanceSas(Guid studyId, [FromBody] StudyInstanceSasRequest request)
+        {
+            try
+            {
+                if (request == null || request.Count <= 0 || request.Count > 5000)
+                    return BadRequest(new { success = false, error = "Count must be between 1 and 5000." });
+
+                var (study, error) = await LoadStudyForWriteAsync(studyId);
+                if (error != null) return error;
+
+                var quotaBlock = await RequireStorageHeadroomAsync(study!.HospitalId);
+                if (quotaBlock != null) return quotaBlock;
+
+                var assetId = Guid.NewGuid();
+                var targets = new List<object>(request.Count);
+                for (int i = 0; i < request.Count; i++)
+                {
+                    var blobPath = $"{study.HospitalId:N}/{study.Id:N}/staging/{assetId:N}/{i:D5}.dcm";
+                    var t = await _blobService.GenerateSasUploadUrlAsync(
+                        blobPath, "dicom-files", TimeSpan.FromHours(2), "application/dicom");
+                    targets.Add(new { index = i, sasUrl = t.SasUrl, publicReadUrl = t.PublicReadUrl, blobPath = t.BlobPath });
+                }
+
+                return Ok(new { success = true, data = new { assetId, containerName = "dicom-files", targets } });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, error = $"STUDY_INSTANCE_SAS_FAILURE: {ex.Message}" });
+            }
+        }
+
+        [HttpPost("studies/{studyId:guid}/instance-upload/register")]
+        [RequiresModule(ModuleConstants.Pacs)]
+        public async Task<IActionResult> RegisterStudyInstanceUpload(Guid studyId, [FromBody] StudyInstanceRegisterRequest request)
+        {
+            try
+            {
+                if (request == null || request.AssetId == Guid.Empty)
+                    return BadRequest(new { success = false, error = "AssetId is required." });
+                if (request.InstanceUrls == null || request.InstanceUrls.Count == 0)
+                    return BadRequest(new { success = false, error = "At least one staged instance URL is required." });
+
+                var (study, error) = await LoadStudyForWriteAsync(studyId);
+                if (error != null) return error;
+
+                var stagingPrefix = $"{study!.HospitalId:N}/{study.Id:N}/staging/{request.AssetId:N}/";
+                foreach (var url in request.InstanceUrls)
+                {
+                    var p = BlobPathFromUrl(url, "dicom-files");
+                    if (p == null || !p.Replace('\\', '/').TrimStart('/')
+                            .StartsWith(stagingPrefix, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return BadRequest(new { success = false, error = "One or more instance URLs do not belong to this study's staging area." });
+                    }
+                }
+
+                var sampleUrls = new List<string> { request.InstanceUrls[0] };
+                if (request.InstanceUrls.Count > 1)
+                    sampleUrls.Add(request.InstanceUrls[request.InstanceUrls.Count - 1]);
+                foreach (var url in sampleUrls)
+                {
+                    var path = BlobPathFromUrl(url, "dicom-files");
+                    if (path == null || !await _blobService.BlobExistsAsync(path, "dicom-files"))
+                        return BadRequest(new { success = false, error = "Staged instance blob not found in Azure — re-upload the instances and retry." });
+                }
+
+                var manifestJson = System.Text.Json.JsonSerializer.Serialize(new { Instances = request.InstanceUrls });
+                var manifestPath = $"{study.HospitalId:N}/{study.Id:N}/staging/{request.AssetId:N}/_manifest.json";
+                string manifestUrl;
+                using (var ms = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(manifestJson)))
+                {
+                    manifestUrl = await _blobService.UploadFileAtPathAsync(ms, manifestPath, "application/json", "dicom-files");
+                }
+
+                var asset = await _context.StudyAssets
+                    .IgnoreQueryFilters()
+                    .FirstOrDefaultAsync(a => a.Id == request.AssetId);
+                if (asset == null)
+                {
+                    asset = new StudyAsset
+                    {
+                        Id = request.AssetId,
+                        ImagingStudyId = study.Id,
+                        AppointmentId = null,
+                        BlobUrl = manifestUrl,
+                        FileName = $"study_{request.InstanceUrls.Count}_instances",
+                        FileType = "instances",
+                        UploadedAt = DateTime.UtcNow,
+                        HospitalId = study.HospitalId,
+                        ExtractionStatus = "Queued",
+                    };
+                    _context.StudyAssets.Add(asset);
+                }
+                else
+                {
+                    asset.BlobUrl = manifestUrl;
+                    asset.FileType = "instances";
+                    asset.UploadedAt = DateTime.UtcNow;
+                    asset.ExtractionStatus = "Queued";
+                    asset.ImagingStudyId = study.Id;
+                }
+
+                await _context.SaveChangesAsync(default);
+                _extractionQueue.Enqueue(asset.Id);
+
+                return Ok(new { success = true, data = asset });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, error = $"STUDY_INSTANCE_REGISTER_FAILURE: {ex.Message}" });
+            }
+        }
+
+        // ── Study browser / inbox / assign (PACS-only worklist) ─────────────
+
+        [HttpGet("studies")]
+        [RequiresModule(ModuleConstants.Pacs)]
+        public async Task<IActionResult> ListStudies(
+            [FromQuery] string? status = null,
+            [FromQuery] bool? assigned = null,
+            [FromQuery] string? modality = null,
+            [FromQuery] string? q = null,
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = 50)
+        {
+            try
+            {
+                if (page < 1) page = 1;
+                pageSize = Math.Clamp(pageSize, 1, 200);
+
+                // Tenant-scoped by the global query filter (HospitalId == active center).
+                var query = _context.ImagingStudies.AsNoTracking();
+
+                if (!string.IsNullOrWhiteSpace(status))
+                    query = query.Where(s => s.Status == status);
+                if (!string.IsNullOrWhiteSpace(modality))
+                    query = query.Where(s => s.Modality == modality);
+                // The inbox is studies linked to neither a patient nor an
+                // appointment — robust regardless of MatchStatus, so RIS+PACS
+                // appointment-linked studies are never wrongly inboxed.
+                if (assigned == false)
+                    query = query.Where(s => s.AppointmentId == null && s.PatientId == null);
+                else if (assigned == true)
+                    query = query.Where(s => s.AppointmentId != null || s.PatientId != null);
+                if (!string.IsNullOrWhiteSpace(q))
+                {
+                    var term = q.Trim();
+                    query = query.Where(s =>
+                        (s.PatientName != null && s.PatientName.Contains(term)) ||
+                        (s.DicomPatientId != null && s.DicomPatientId.Contains(term)) ||
+                        (s.AccessionNumber != null && s.AccessionNumber.Contains(term)));
+                }
+
+                var total = await query.CountAsync();
+                var items = await query
+                    .OrderByDescending(s => s.CreatedAt)
+                    .Skip((page - 1) * pageSize)
+                    .Take(pageSize)
+                    .Select(s => new
+                    {
+                        imagingStudyId = s.Id,
+                        s.StudyInstanceUID,
+                        s.PatientName,
+                        s.DicomPatientId,
+                        s.AccessionNumber,
+                        s.Modality,
+                        s.StudyDate,
+                        s.StudyDescription,
+                        s.Status,
+                        s.MatchStatus,
+                        s.AppointmentId,
+                        s.PatientId,
+                        s.CreatedAt,
+                        assetCount = _context.StudyAssets.Count(a => a.ImagingStudyId == s.Id),
+                    })
+                    .ToListAsync();
+
+                return Ok(new { success = true, data = new { total, page, pageSize, items } });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, error = $"STUDY_LIST_FAILURE: {ex.Message}" });
+            }
+        }
+
+        [HttpGet("studies/{studyId:guid}")]
+        [RequiresModule(ModuleConstants.Pacs)]
+        public async Task<IActionResult> GetStudyDetail(Guid studyId)
+        {
+            try
+            {
+                // Tenant-scoped by the global query filter.
+                var study = await _context.ImagingStudies
+                    .FirstOrDefaultAsync(s => s.Id == studyId);
+                if (study == null)
+                    return NotFound(new { success = false, error = "Imaging study not found." });
+
+                var assets = await _context.StudyAssets
+                    .Where(a => a.ImagingStudyId == study.Id)
+                    .Include(a => a.Slices)
+                    .OrderByDescending(a => a.UploadedAt)
+                    .ToListAsync();
+
+                return Ok(new
+                {
+                    success = true,
+                    data = new
+                    {
+                        imagingStudyId = study.Id,
+                        study.StudyInstanceUID,
+                        study.PatientName,
+                        study.DicomPatientId,
+                        study.AccessionNumber,
+                        study.Modality,
+                        study.StudyDate,
+                        study.StudyDescription,
+                        study.Status,
+                        study.MatchStatus,
+                        study.AppointmentId,
+                        study.PatientId,
+                        study.CreatedAt,
+                        assets = BuildManifestAssetDtos(assets),
+                    },
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, error = $"STUDY_DETAIL_FAILURE: {ex.Message}" });
+            }
+        }
+
+        [HttpPost("studies/{studyId:guid}/assign")]
+        [RequiresModule(ModuleConstants.Pacs)]
+        public async Task<IActionResult> AssignStudy(Guid studyId, [FromBody] StudyAssignRequest request)
+        {
+            try
+            {
+                if (request == null || (request.PatientId == null && request.AppointmentId == null))
+                    return BadRequest(new { success = false, error = "Provide a PatientId and/or an AppointmentId." });
+
+                var (study, error) = await LoadStudyForWriteAsync(studyId);
+                if (error != null) return error;
+
+                if (request.AppointmentId is Guid aid && aid != Guid.Empty)
+                {
+                    var appt = await _context.Appointments
+                        .IgnoreQueryFilters()
+                        .FirstOrDefaultAsync(a => a.AppointmentId == aid);
+                    if (appt == null)
+                        return NotFound(new { success = false, error = "Appointment not found." });
+                    var apptBlock = EnsureHospitalAccess(appt.HospitalId);
+                    if (apptBlock != null) return apptBlock;
+
+                    study!.AppointmentId = appt.AppointmentId;
+                    if (request.PatientId == null && appt.PatientId != Guid.Empty)
+                        study.PatientId = appt.PatientId;
+                }
+
+                if (request.PatientId is Guid pid && pid != Guid.Empty)
+                {
+                    var patient = await _context.Patients
+                        .IgnoreQueryFilters()
+                        .FirstOrDefaultAsync(p => p.PatientId == pid);
+                    if (patient == null)
+                        return NotFound(new { success = false, error = "Patient not found." });
+                    var pBlock = EnsureHospitalAccess(patient.HospitalId);
+                    if (pBlock != null) return pBlock;
+
+                    study!.PatientId = patient.PatientId;
+                }
+
+                study!.MatchStatus = ImagingStudyMatchStatus.ManuallyAssigned;
+                await _context.SaveChangesAsync(default);
+
+                return Ok(new
+                {
+                    success = true,
+                    data = new { imagingStudyId = study.Id, study.PatientId, study.AppointmentId, study.MatchStatus },
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, error = $"STUDY_ASSIGN_FAILURE: {ex.Message}" });
+            }
+        }
+
         [HttpGet("proxy-asset")]
         [HttpHead("proxy-asset")]
         [Microsoft.AspNetCore.Authorization.AllowAnonymous]
-        public async Task<IActionResult> ProxyAsset([FromQuery] string url)
+        public async Task<IActionResult> ProxyAsset([FromQuery] string url, [FromQuery] long? exp, [FromQuery] string? sig)
         {
             try
             {
@@ -795,6 +1658,23 @@ namespace _1RadAPI.Controllers
                 // every production asset as "Unauthorized asset origin".
                 if (!url.Contains("1radstorage") || !url.Contains(".blob.core.windows.net"))
                     return BadRequest("Unauthorized asset origin");
+
+                // Authorization. This endpoint is [AllowAnonymous] because the
+                // DICOM viewer fetches slices with no Bearer and the public
+                // tracking page renders branding with no session — but it must
+                // NOT be an open account-wide reader. A request is authorized if:
+                //   • it carries a valid signature for this exact blob (the
+                //     capability the backend minted for an already-authorized
+                //     viewer), OR
+                //   • it carries a Bearer whose user is entitled to the blob's
+                //     hospital (the apiClient download/fallback paths), OR
+                //   • the blob is in an intentionally-public branding container.
+                // Anything else (anonymous, no signature, PHI container) is denied.
+                var container = ContainerOf(url);
+                var signed = exp.HasValue && !string.IsNullOrEmpty(sig) && _signer.Validate(url, exp.Value, sig);
+                var open = OpenProxyContainers.Contains(container, StringComparer.OrdinalIgnoreCase);
+                if (!(signed || open || IsBearerEntitledToBlob(url)))
+                    return StatusCode(StatusCodes.Status403Forbidden, "Asset access requires a valid signature or authorization.");
 
                 // Use Uri to strip query parameters for extension checking
                 var cleanPath = new Uri(url).AbsolutePath;
@@ -881,5 +1761,55 @@ namespace _1RadAPI.Controllers
         public string PublicReadUrl { get; set; } = string.Empty;
         public string FileName { get; set; } = string.Empty;
         public long? ActualSize { get; set; } // optional integrity check hint
+    }
+
+    // ── Cloud PACS-only (appointment-free) ingestion DTOs ───────────────────
+
+    public class StudyRegisterRequest
+    {
+        // Supplied by the web Upload Center at upload time; null for bridge
+        // pushes (extraction discovers it later and refines the study).
+        public string? StudyInstanceUID { get; set; }
+        public string? PatientName { get; set; }
+        public string? DicomPatientId { get; set; }
+        public string? AccessionNumber { get; set; }
+        public string? Modality { get; set; }
+        public DateTime? StudyDate { get; set; }
+        public string? StudyDescription { get; set; }
+        // web-upload | bridge | api-upload. Defaults to web-upload.
+        public string? Source { get; set; }
+    }
+
+    public class StudyUploadTokenRequest
+    {
+        public string FileName { get; set; } = string.Empty;
+        public long FileSize { get; set; }
+        public string? ContentType { get; set; }
+    }
+
+    public class StudyUploadCompleteRequest
+    {
+        public Guid AssetId { get; set; }
+        public string BlobPath { get; set; } = string.Empty;
+        public string ContainerName { get; set; } = string.Empty;
+        public string FileName { get; set; } = string.Empty;
+        public long? ActualSize { get; set; }
+    }
+
+    public class StudyInstanceSasRequest
+    {
+        public int Count { get; set; }
+    }
+
+    public class StudyInstanceRegisterRequest
+    {
+        public Guid AssetId { get; set; }
+        public List<string> InstanceUrls { get; set; } = new();
+    }
+
+    public class StudyAssignRequest
+    {
+        public Guid? PatientId { get; set; }
+        public Guid? AppointmentId { get; set; }
     }
 }

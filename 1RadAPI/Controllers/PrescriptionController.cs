@@ -13,6 +13,7 @@ namespace _1RadAPI.Controllers
     [Route("api/v1/[controller]")]
     [ApiController]
     [Authorize] // All endpoints require a valid JWT. Hospital isolation is enforced via HospitalId claim in the DB query.
+    [_1RadAPI.Authorization.RequiresModule(_1Rad.Domain.Constants.ModuleConstants.Ris)]
     public class PrescriptionController : ControllerBase
     {
         private readonly IApplicationDbContext _context;

@@ -44,15 +44,18 @@ public class DicomExtractionService : IDicomExtractionService
     private readonly IApplicationDbContext _db;
     private readonly IBlobService _blob;
     private readonly ILogger<DicomExtractionService> _logger;
+    private readonly IStudyMatchingService _matching;
 
     public DicomExtractionService(
         IApplicationDbContext db,
         IBlobService blob,
-        ILogger<DicomExtractionService> logger)
+        ILogger<DicomExtractionService> logger,
+        IStudyMatchingService matching)
     {
         _db = db;
         _blob = blob;
         _logger = logger;
+        _matching = matching;
 
         // fo-dicom uses a manager pattern — wire ImageSharp + native codecs
         // (JPEG-LS, JPEG2000, JPEG-baseline transcoders) once. Idempotent
@@ -120,6 +123,13 @@ public class DicomExtractionService : IDicomExtractionService
             return 0;
         }
 
+        // The imaging aggregate this asset feeds (Phase 1 of the RIS/PACS
+        // split). Null only for legacy rows uploaded before the backfill ran.
+        var study = asset.ImagingStudyId != null
+            ? await _db.ImagingStudies.IgnoreQueryFilters()
+                .FirstOrDefaultAsync(st => st.Id == asset.ImagingStudyId, cancellationToken)
+            : null;
+
         // Only ZIP archives and per-instance ("instances") uploads get
         // extracted into per-slice blobs. Single attachments (dcm/jpg/png)
         // load directly in the viewer.
@@ -128,6 +138,11 @@ public class DicomExtractionService : IDicomExtractionService
         {
             asset.ExtractionStatus = "NotApplicable";
             asset.ExtractionCompletedAt = DateTime.UtcNow;
+            if (study != null && study.Status != ImagingStudyStatus.Ready)
+            {
+                study.Status = ImagingStudyStatus.Ready;   // directly viewable
+                study.ReadyAt = DateTime.UtcNow;
+            }
             await _db.SaveChangesAsync(cancellationToken);
             return 0;
         }
@@ -135,6 +150,7 @@ public class DicomExtractionService : IDicomExtractionService
         asset.ExtractionStatus = "Running";
         asset.ExtractionStartedAt = DateTime.UtcNow;
         asset.ExtractionError = null;
+        if (study != null) study.Status = ImagingStudyStatus.Processing;
         await _db.SaveChangesAsync(cancellationToken);
 
         // Wipe any prior slice index so re-runs are clean. Blobs from a prior
@@ -179,7 +195,9 @@ public class DicomExtractionService : IDicomExtractionService
 
             var assetIdN       = asset.Id.ToString("N");
             var hospitalIdN    = asset.HospitalId.ToString("N");
-            var appointmentIdN = asset.AppointmentId.ToString("N");
+            // PACS-only assets have no appointment — scope their blobs by the
+            // study id instead (legacy appointment-scoped paths are unchanged).
+            var appointmentIdN = (asset.AppointmentId ?? asset.ImagingStudyId ?? asset.Id).ToString("N");
             var sliceCount     = 0;
 
             // Compression-stats accumulators — logged at end of extraction so
@@ -264,6 +282,19 @@ public class DicomExtractionService : IDicomExtractionService
             asset.ExtractionSliceCount  = sliceCount;
             asset.ExtractionCompletedAt = DateTime.UtcNow;
             asset.ExtractionError       = null;
+
+            // Storage metering (Phase 3): the asset's durable footprint is the
+            // retained original blob (ZIPs are kept; per-instance staging gets
+            // swept) plus the transcoded slices. Recomputed in full, so
+            // re-extractions don't double-count.
+            var originalBlobBytes = ext == "zip"
+                ? await _blob.GetBlobSizeByUrlAsync(asset.BlobUrl)
+                : 0L;
+            asset.StorageBytes = originalBlobBytes + totalUploadedBytes;
+
+            if (study != null)
+                await RefineStudyFromDicomAsync(study, parsedSlices[0], cancellationToken);
+
             await _db.SaveChangesAsync(cancellationToken);
 
             // Compression summary — only useful when transcoding ran for >0
@@ -285,10 +316,56 @@ public class DicomExtractionService : IDicomExtractionService
             asset.ExtractionStatus      = "Failed";
             asset.ExtractionError       = Truncate(ex.Message, 2000);
             asset.ExtractionCompletedAt = DateTime.UtcNow;
+            if (study != null) study.Status = ImagingStudyStatus.Failed;
             await _db.SaveChangesAsync(CancellationToken.None);
             _logger.LogError(ex, "[DICOM_EXTRACT] Asset {AssetId} extraction failed.", assetId);
             throw;
         }
+    }
+
+    /// <summary>
+    /// Refine the ImagingStudy aggregate with the REAL DICOM tags once
+    /// extraction has parsed the pixels (until now the row only carried what
+    /// the appointment knew). Sets StudyInstanceUID under the per-hospital
+    /// unique constraint: if another study in this hospital already owns the
+    /// UID (same study uploaded twice against different appointments), the
+    /// UID is left null and a warning logged — merging duplicates is the
+    /// Phase 2 Upload Center's job, and a null UID only means "no dedup",
+    /// never a broken viewer.
+    /// </summary>
+    private async Task RefineStudyFromDicomAsync(ImagingStudy study, ParsedSlice first, CancellationToken ct)
+    {
+        if (!string.IsNullOrEmpty(first.StudyUid) && string.IsNullOrEmpty(study.StudyInstanceUID))
+        {
+            var uidTaken = await _db.ImagingStudies.IgnoreQueryFilters().AnyAsync(
+                st => st.HospitalId == study.HospitalId
+                      && st.StudyInstanceUID == first.StudyUid
+                      && st.Id != study.Id, ct);
+            if (uidTaken)
+                _logger.LogWarning(
+                    "[DICOM_EXTRACT] Study {StudyId}: StudyInstanceUID {Uid} already exists for this hospital — leaving UID null (duplicate upload?).",
+                    study.Id, first.StudyUid);
+            else
+                study.StudyInstanceUID = Truncate(first.StudyUid, 128);
+        }
+
+        if (!string.IsNullOrEmpty(first.StudyDescription)) study.StudyDescription = Truncate(first.StudyDescription, 255);
+        if (!string.IsNullOrEmpty(first.AccessionNumber))  study.AccessionNumber  = Truncate(first.AccessionNumber, 64);
+        if (!string.IsNullOrEmpty(first.Modality))         study.Modality         = Truncate(first.Modality, 32);
+        // Demographics: prefer what the modality wrote over the appointment
+        // denorm only when present — DICOM is authoritative for the pixels.
+        if (!string.IsNullOrEmpty(first.PatientName))      study.PatientName      = Truncate(first.PatientName, 255);
+        if (!string.IsNullOrEmpty(first.DicomPatientId))   study.DicomPatientId   = Truncate(first.DicomPatientId, 128);
+
+        study.Status  = ImagingStudyStatus.Ready;
+        study.ReadyAt = DateTime.UtcNow;
+
+        // PACS-only studies arrive with no appointment; now that the real DICOM
+        // identifiers (accession / patient id / name) are known, try to
+        // reconcile them to a patient/visit. Appointment-linked (RIS+PACS)
+        // studies are already assigned — skip. The caller owns SaveChanges.
+        if (study.AppointmentId == null)
+            await _matching.TryMatchAsync(study, ct);
     }
 
     // Parse one downloaded DICOM byte stream into a ParsedSlice, or null if it
@@ -310,6 +387,11 @@ public class DicomExtractionService : IDicomExtractionService
             return new ParsedSlice
             {
                 EntryName         = label,
+                StudyUid          = ds.GetSingleValueOrDefault<string?>(DicomTag.StudyInstanceUID, null),
+                StudyDescription  = ds.GetSingleValueOrDefault<string?>(DicomTag.StudyDescription, null),
+                AccessionNumber   = ds.GetSingleValueOrDefault<string?>(DicomTag.AccessionNumber, null),
+                PatientName       = ds.GetSingleValueOrDefault<string?>(DicomTag.PatientName, null),
+                DicomPatientId    = ds.GetSingleValueOrDefault<string?>(DicomTag.PatientID, null),
                 SeriesUid         = seriesUid,
                 SopUid            = sopUid,
                 InstanceNumber    = ds.GetSingleValueOrDefault<int?>(DicomTag.InstanceNumber, null),
@@ -479,6 +561,11 @@ public class DicomExtractionService : IDicomExtractionService
     private sealed class ParsedSlice
     {
         public string EntryName         { get; set; } = string.Empty;
+        public string? StudyUid         { get; set; }
+        public string? StudyDescription { get; set; }
+        public string? AccessionNumber  { get; set; }
+        public string? PatientName      { get; set; }
+        public string? DicomPatientId   { get; set; }
         public string SeriesUid         { get; set; } = string.Empty;
         public string SopUid            { get; set; } = string.Empty;
         public int? InstanceNumber      { get; set; }

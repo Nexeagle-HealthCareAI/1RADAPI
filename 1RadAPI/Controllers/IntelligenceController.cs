@@ -9,6 +9,7 @@ namespace _1RadAPI.Controllers;
 [Authorize]
 [ApiController]
 [Route("api/v1/intelligence")]
+[_1RadAPI.Authorization.RequiresModule(_1Rad.Domain.Constants.ModuleConstants.Ris)]
 public class IntelligenceController : ControllerBase
 {
     private readonly IMediator _mediator;
