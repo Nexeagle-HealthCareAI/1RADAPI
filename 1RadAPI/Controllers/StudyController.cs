@@ -1485,6 +1485,8 @@ namespace _1RadAPI.Controllers
             [FromQuery] bool? assigned = null,
             [FromQuery] string? modality = null,
             [FromQuery] string? q = null,
+            [FromQuery] DateTime? from = null,
+            [FromQuery] DateTime? to = null,
             [FromQuery] int page = 1,
             [FromQuery] int pageSize = 50)
         {
@@ -1500,6 +1502,19 @@ namespace _1RadAPI.Controllers
                     query = query.Where(s => s.Status == status);
                 if (!string.IsNullOrWhiteSpace(modality))
                     query = query.Where(s => s.Modality == modality);
+                // Date filter on the study date, falling back to upload time for
+                // legacy rows without a DICOM study date. `to` is inclusive
+                // (covers the whole day).
+                if (from.HasValue)
+                {
+                    var f = from.Value.Date;
+                    query = query.Where(s => (s.StudyDate ?? s.CreatedAt) >= f);
+                }
+                if (to.HasValue)
+                {
+                    var t = to.Value.Date.AddDays(1);
+                    query = query.Where(s => (s.StudyDate ?? s.CreatedAt) < t);
+                }
                 // The inbox is studies linked to neither a patient nor an
                 // appointment — robust regardless of MatchStatus, so RIS+PACS
                 // appointment-linked studies are never wrongly inboxed.
