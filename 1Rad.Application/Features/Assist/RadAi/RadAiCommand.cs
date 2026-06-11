@@ -8,6 +8,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using _1Rad.Application.Interfaces;
+using _1Rad.Domain.Entities;
 using MediatR;
 
 namespace _1Rad.Application.Features.Assist.RadAi;
@@ -47,12 +48,14 @@ public class RadAiCommandHandler : IRequestHandler<RadAiCommand, RadAiResult>
     private readonly IReportAiService _gemini;
     private readonly IAnthropicService _claude;
     private readonly IRadAiKnowledge _knowledge;
+    private readonly IApplicationDbContext _db;
 
-    public RadAiCommandHandler(IReportAiService gemini, IAnthropicService claude, IRadAiKnowledge knowledge)
+    public RadAiCommandHandler(IReportAiService gemini, IAnthropicService claude, IRadAiKnowledge knowledge, IApplicationDbContext db)
     {
         _gemini = gemini;
         _claude = claude;
         _knowledge = knowledge;
+        _db = db;
     }
 
     public async Task<RadAiResult> Handle(RadAiCommand request, CancellationToken cancellationToken)
@@ -117,7 +120,41 @@ public class RadAiCommandHandler : IRequestHandler<RadAiCommand, RadAiResult>
         var followups = (parsed.SuggestedFollowups ?? new List<string>())
             .Where(s => !string.IsNullOrWhiteSpace(s)).Take(3).ToList();
 
+        // Capture the question for the "retrain" loop (most-asked + uncovered
+        // questions drive what to add to app_knowledge.json). Best-effort: it
+        // must never break or delay the user's answer.
+        await LogQuestionAsync(request, hasAudio, parsed.Answer, lang, parsed.Covered, cancellationToken);
+
         return new RadAiResult(true, parsed.Answer.Trim(), lang, followups, parsed.Covered, null);
+    }
+
+    private async Task LogQuestionAsync(RadAiCommand req, bool wasVoice, string? answer, string lang, bool covered, CancellationToken ct)
+    {
+        try
+        {
+            var uc = _db.UserContext;
+            var snippet = string.IsNullOrWhiteSpace(answer)
+                ? null
+                : (answer.Length > 480 ? answer[..480] : answer);
+
+            _db.RadAiQuestionLogs.Add(new RadAiQuestionLog
+            {
+                HospitalId    = uc.HospitalId,
+                AskedByUserId = uc.UserId == Guid.Empty ? (Guid?)null : uc.UserId,
+                SessionId     = uc.SessionId,
+                Question      = wasVoice ? null : req.Question?.Trim(),
+                WasVoice      = wasVoice,
+                Page          = string.IsNullOrWhiteSpace(req.Page) ? null : req.Page!.Trim(),
+                ReplyLanguage = lang,
+                Covered       = covered,
+                AnswerSnippet = snippet,
+            });
+            await _db.SaveChangesAsync(ct);
+        }
+        catch
+        {
+            // Logging is best-effort; never surface a failure to the user.
+        }
     }
 
     private static RadAiResult Fail(string msg) => new(false, null, null, null, false, msg);

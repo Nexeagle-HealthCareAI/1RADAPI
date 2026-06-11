@@ -1,4 +1,6 @@
+using System.Linq;
 using _1Rad.Application.Interfaces;
+using _1Rad.Domain.Constants;
 using _1Rad.Domain.Entities;
 using _1Rad.Domain.Enums;
 using _1Rad.Domain.Events;
@@ -78,6 +80,15 @@ public class DeployInfrastructureCommandHandler : IRequestHandler<DeployInfrastr
 
             await _context.SaveChangesAsync(cancellationToken);
 
+            // Resolve the chosen product package. Only RIS/PACS are valid codes;
+            // an empty/garbage value defaults to the full product so a bad client
+            // never locks a new center out of everything.
+            var chosen = ModuleConstants.Parse(request.Modules);
+            var valid = new[] { ModuleConstants.Ris, ModuleConstants.Pacs };
+            var modules = (chosen.Count > 0 && chosen.All(m => valid.Contains(m, StringComparer.OrdinalIgnoreCase)))
+                ? string.Join(",", chosen.OrderBy(m => m))
+                : ModuleConstants.DefaultModules;
+
             // Auto-activate 14-day free trial for newly registered hospital
             var trialSubscription = new HospitalSubscription
             {
@@ -85,6 +96,7 @@ public class DeployInfrastructureCommandHandler : IRequestHandler<DeployInfrastr
                 PlanId = null,
                 IsTrial = true,
                 BillingCycle = "Trial",
+                Modules = modules,
                 StartDate = DateTime.UtcNow,
                 EndDate = DateTime.UtcNow.AddDays(14),
                 Status = "Active",

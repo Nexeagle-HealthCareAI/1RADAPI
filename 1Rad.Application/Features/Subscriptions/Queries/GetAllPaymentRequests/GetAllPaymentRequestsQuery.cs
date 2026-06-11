@@ -14,5 +14,10 @@ public record PaymentRequestDto(
     string? ReviewNote,
     DateTime CreatedAt,
     string PaymentMode,
-    decimal Amount
+    decimal Amount,
+    // Edition being purchased + the metered storage overage in the amount, so
+    // the admin can verify what they're approving.
+    string? Modules,
+    int StorageOverageGb,
+    decimal StorageOverageAmount
 );

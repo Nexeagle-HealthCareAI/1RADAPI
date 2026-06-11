@@ -6,9 +6,17 @@ public class SubscriptionPaymentRequest : BaseEntity
 {
     public Guid RequestId { get; set; } = Guid.NewGuid();
     public Guid HospitalId { get; set; }
+    // The plan being purchased — resolves the edition + modules + storage.
+    public Guid? PlanId { get; set; }
     public string PlanName { get; set; } = string.Empty;          // Monthly | Yearly
     public string BillingCycle { get; set; } = string.Empty;
     public decimal Amount { get; set; }
+
+    // Edition record + the storage overage that made up Amount (server-computed
+    // at submission). Modules is applied to the subscription on approval.
+    public string? Modules { get; set; }
+    public int StorageOverageGb { get; set; }
+    public decimal StorageOverageAmount { get; set; }
     public string PayerName { get; set; } = string.Empty;
     public string PayerContact { get; set; } = string.Empty;
     public string TransactionReference { get; set; } = string.Empty; // UTR / Cheque / Bank Ref

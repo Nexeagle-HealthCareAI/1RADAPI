@@ -15,7 +15,10 @@ public record DeployInfrastructureCommand(
     string? NABHNumber = null,
     string? Specialization = null,
     string? Degree = null,
-    string? LicenseNo = null) : IRequest<DeployInfrastructureResponse>;
+    string? LicenseNo = null,
+    // Chosen product package at sign-up: "RIS", "PACS", or "RIS,PACS".
+    // Null/invalid falls back to the full product.
+    string? Modules = null) : IRequest<DeployInfrastructureResponse>;
 
 public class DeployInfrastructureResponse
 {

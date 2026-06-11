@@ -3,6 +3,8 @@ using _1Rad.Application.Features.Subscriptions.Commands.SetHospitalModules;
 using _1Rad.Application.Features.Subscriptions.Commands.SubmitPaymentRequest;
 using _1Rad.Application.Features.Subscriptions.Queries.GetSubscriptionStatus;
 using _1Rad.Application.Features.Subscriptions.Queries.GetAllPaymentRequests;
+using _1Rad.Application.Features.Subscriptions.Queries.GetPlans;
+using _1Rad.Application.Features.Subscriptions.Queries.GetBillingEstimate;
 using _1Rad.Domain.Constants;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
@@ -74,6 +76,31 @@ public class SubscriptionsController : ControllerBase
     {
         var result = await _mediator.Send(new _1Rad.Application.Features.Subscriptions.Queries.GetSubscriptionTransactions.GetSubscriptionTransactionsQuery());
         return Ok(new { success = true, data = result });
+    }
+
+    /// <summary>
+    /// Lists active subscription plans (edition × cycle) with pricing + storage.
+    /// Public so the registration package-picker and a pricing page can read it.
+    /// </summary>
+    [HttpGet("plans")]
+    [AllowAnonymous]
+    public async Task<IActionResult> GetPlans()
+    {
+        var result = await _mediator.Send(new GetPlansQuery());
+        return Ok(new { success = true, data = result });
+    }
+
+    /// <summary>
+    /// Amount due for a plan right now = base price + metered PACS storage
+    /// overage from the authenticated center's current usage.
+    /// </summary>
+    [HttpGet("estimate")]
+    public async Task<IActionResult> GetEstimate([FromQuery] Guid planId)
+    {
+        var result = await _mediator.Send(new GetBillingEstimateQuery { PlanId = planId });
+        return result.Found
+            ? Ok(new { success = true, data = result })
+            : BadRequest(new { success = false, error = result.Error });
     }
 
     /// <summary>

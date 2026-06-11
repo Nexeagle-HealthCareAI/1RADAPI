@@ -44,6 +44,7 @@ public interface IApplicationDbContext
     DbSet<StaffAttendance> StaffAttendances { get; }
     DbSet<StaffLeaveRequest> StaffLeaveRequests { get; }
     DbSet<ApprovalRequest> ApprovalRequests { get; }
+    DbSet<RadAiQuestionLog> RadAiQuestionLogs { get; }
     IUserContext UserContext { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken);

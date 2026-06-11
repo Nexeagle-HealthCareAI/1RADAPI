@@ -2,6 +2,7 @@ using System.Data;
 using System.Data.Common;
 using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Common;
+using _1Rad.Domain.Constants;
 using _1Rad.Domain.Entities;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
@@ -63,10 +64,25 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<StaffLeaveRequest> StaffLeaveRequests => Set<StaffLeaveRequest>();
     public DbSet<ApprovalRequest> ApprovalRequests => Set<ApprovalRequest>();
     public DbSet<IdempotencyRecord> IdempotencyKeys => Set<IdempotencyRecord>();
+    public DbSet<RadAiQuestionLog> RadAiQuestionLogs => Set<RadAiQuestionLog>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+
+        // RadAI question log — capture for the "retrain" loop. Scoped to a
+        // hospital by the global query filter at the end of this method.
+        modelBuilder.Entity<RadAiQuestionLog>(entity =>
+        {
+            entity.ToTable("RadAiQuestionLogs", "dbo");
+            entity.HasKey(e => e.RadAiQuestionLogId);
+            entity.Property(e => e.Question).HasMaxLength(2000);
+            entity.Property(e => e.Page).HasMaxLength(200);
+            entity.Property(e => e.ReplyLanguage).HasMaxLength(8);
+            entity.Property(e => e.AnswerSnippet).HasMaxLength(500);
+            entity.HasIndex(e => new { e.HospitalId, e.CreatedAt });
+            entity.HasIndex(e => new { e.HospitalId, e.Covered });
+        });
 
         // User Configuration
         modelBuilder.Entity<User>(entity =>
@@ -739,6 +755,9 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.Name).IsRequired().HasMaxLength(50);
             entity.Property(e => e.Price).HasPrecision(18, 2);
             entity.Property(e => e.DiscountPercentage).HasPrecision(18, 2);
+            entity.Property(e => e.Edition).IsRequired().HasMaxLength(20).HasDefaultValue("RIS+PACS");
+            entity.Property(e => e.Modules).IsRequired().HasMaxLength(50).HasDefaultValue(ModuleConstants.DefaultModules);
+            entity.Property(e => e.PerGbOveragePrice).HasPrecision(18, 2);
         });
 
         // HospitalSubscription Configuration
@@ -955,25 +974,61 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.HasIndex(e => e.SourceDisbursementId);
         });
 
-        // Seed Subscription Plans
+        // Seed Subscription Plans — one per (edition × billing cycle).
+        // PRICES + storage allowances below are PLACEHOLDERS; the business sets
+        // real values (the existing two GUIDs are kept as RIS+PACS so paid
+        // subscriptions already pointing at them stay valid).
         modelBuilder.Entity<SubscriptionPlan>().HasData(
-            new SubscriptionPlan 
-            { 
-                PlanId = Guid.Parse("A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D"), 
-                Name = "Monthly", 
-                Price = 4999, 
-                DurationInDays = 30, 
-                DiscountPercentage = 0,
-                PerAdditionalDoctorPrice = 1000
+            // ── RIS + Cloud PACS (full) ──────────────────────────────────────
+            new SubscriptionPlan
+            {
+                PlanId = Guid.Parse("A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D"),
+                Name = "Monthly", Edition = "RIS+PACS", Modules = "RIS,PACS",
+                Price = 4999, DurationInDays = 30, DiscountPercentage = 0,
+                PerAdditionalDoctorPrice = 1000,
+                IncludedStorageGb = 50, PerGbOveragePrice = 50
             },
-            new SubscriptionPlan 
-            { 
-                PlanId = Guid.Parse("B2C3D4E5-F6A7-4B6C-9D0E-1F2A3B4C5D6E"), 
-                Name = "Yearly", 
-                Price = 53988, // 4499 x 12 (10% off monthly)
-                DurationInDays = 365, 
-                DiscountPercentage = 10,
-                PerAdditionalDoctorPrice = 10800 // 900 x 12
+            new SubscriptionPlan
+            {
+                PlanId = Guid.Parse("B2C3D4E5-F6A7-4B6C-9D0E-1F2A3B4C5D6E"),
+                Name = "Yearly", Edition = "RIS+PACS", Modules = "RIS,PACS",
+                Price = 53988, DurationInDays = 365, DiscountPercentage = 10,
+                PerAdditionalDoctorPrice = 10800,
+                IncludedStorageGb = 50, PerGbOveragePrice = 50
+            },
+            // ── RIS only (no cloud DICOM) ────────────────────────────────────
+            new SubscriptionPlan
+            {
+                PlanId = Guid.Parse("C3D4E5F6-A7B8-4C7D-AE1F-2A3B4C5D6E7F"),
+                Name = "Monthly", Edition = "RIS", Modules = "RIS",
+                Price = 2999, DurationInDays = 30, DiscountPercentage = 0,
+                PerAdditionalDoctorPrice = 1000,
+                IncludedStorageGb = null, PerGbOveragePrice = 0
+            },
+            new SubscriptionPlan
+            {
+                PlanId = Guid.Parse("D4E5F6A7-B8C9-4D8E-BF2A-3B4C5D6E7F80"),
+                Name = "Yearly", Edition = "RIS", Modules = "RIS",
+                Price = 32388, DurationInDays = 365, DiscountPercentage = 10,
+                PerAdditionalDoctorPrice = 10800,
+                IncludedStorageGb = null, PerGbOveragePrice = 0
+            },
+            // ── Cloud PACS only (teleradiology) ──────────────────────────────
+            new SubscriptionPlan
+            {
+                PlanId = Guid.Parse("E5F6A7B8-C9D0-4E9F-C03B-4C5D6E7F8091"),
+                Name = "Monthly", Edition = "PACS", Modules = "PACS",
+                Price = 3499, DurationInDays = 30, DiscountPercentage = 0,
+                PerAdditionalDoctorPrice = 1000,
+                IncludedStorageGb = 100, PerGbOveragePrice = 50
+            },
+            new SubscriptionPlan
+            {
+                PlanId = Guid.Parse("F6A7B8C9-D0E1-4F90-D14C-5D6E7F8091A2"),
+                Name = "Yearly", Edition = "PACS", Modules = "PACS",
+                Price = 37788, DurationInDays = 365, DiscountPercentage = 10,
+                PerAdditionalDoctorPrice = 10800,
+                IncludedStorageGb = 100, PerGbOveragePrice = 50
             }
         );
 

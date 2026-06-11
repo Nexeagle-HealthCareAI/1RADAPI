@@ -10,7 +10,11 @@ public record SubmitPaymentRequestCommand(
     string PayerContact,
     string TransactionReference,
     string PaymentMode,
-    DateTime PaidAt
+    DateTime PaidAt,
+    // Preferred: the chosen plan (edition × cycle). When set, the server derives
+    // the cycle, modules, storage overage and the authoritative Amount from the
+    // plan + current usage (the client Amount is ignored). Null = legacy path.
+    Guid? PlanId = null
 ) : IRequest<SubmitPaymentRequestResponse>;
 
 public class SubmitPaymentRequestResponse

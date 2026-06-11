@@ -2,54 +2,185 @@
   "_meta": {
     "purpose": "Grounding knowledge base for RadAI, the in-app help assistant in the 1rad application. RadAI answers user questions about HOW TO USE the app, using ONLY the content in this file. It must never invent features, buttons, or steps not described here. When a question is not covered, RadAI says it is not sure and points the user to support.",
     "how_to_use": "Inject the relevant parts of this file into the Flash system prompt (see assistant_system_prompt.md). For a small app the whole file fits in the prompt (cache it). As it grows, switch to retrieval: embed each entry in 'modules' and 'faqs' and fetch the top matches per question.",
-    "version": "1.0",
+    "version": "1.1",
     "maintenance": "GROW THIS FILE from real questions. Whenever a user asks something RadAI could not answer, add an entry. Whenever the app changes, update the affected module. Keep step numbers accurate to the live UI.",
-    "language_note": "Content is written in English. RadAI translates its answer into the user's language (Hindi or English) at response time; you do NOT need a separate Hindi copy of this file."
+    "language_note": "Content is written in English. RadAI translates its answer into the user's language (Hindi or English) at response time; you do NOT need a separate Hindi copy of this file.",
+    "last_expanded": "2026-06-11",
+    "expansion_note": "v1.1 added the imaging/PACS, DICOM Bridge + Worklist, AI reporting, staff & payroll, auth, roles and subscription areas. Earlier v1.0 front-desk/billing/approvals/reporting content is unchanged."
   },
-
   "app": {
     "name": "1rad",
     "type": "Diagnostic centre management application (appointments + billing + radiology reporting)",
     "one_line": "1rad runs the front desk and finance of a diagnostic/radiology centre: booking appointments, billing patients, tracking referral commissions, and producing radiology reports.",
-    "primary_users": ["Front-desk / reception staff", "Centre admin", "Admin doctor (can approve)", "Radiologist"],
+    "primary_users": [
+      "Front-desk / reception staff",
+      "Centre admin",
+      "Admin doctor (can approve)",
+      "Radiologist"
+    ],
     "design_principle": "Front-desk staff never decide sensitive money matters - they only record a reason. Admin approves everything sensitive from one queue. One popup style, one 'pending approval' badge, one approvals page."
   },
-
   "glossary": [
-    { "term": "Referred by / Referrer", "meaning": "The doctor who referred the patient to the centre. Mandatory on every booking. Drives referral commission." },
-    { "term": "Supported doctor", "meaning": "The centre's own doctor associated with the case. For self-referred patients this defaults to the current centre doctor." },
-    { "term": "Self (referral)", "meaning": "Used when the patient is not referred by an outside doctor. One click sets Referred-by = Self and supported doctor = current centre doctor (editable)." },
-    { "term": "Referral Hub", "meaning": "The page that tracks each referring doctor, their referred patients, and the commission owed to them - including any reason notes recorded against an entry." },
-    { "term": "Assigned discount limit", "meaning": "The maximum discount a staff member is allowed to give without admin approval. Exceeding it triggers a confirmation popup and a mandatory reason." },
-    { "term": "Commission", "meaning": "The amount payable to a referring doctor for a referred test. Recalculated whenever the bill or discount changes." },
-    { "term": "Centre commission", "meaning": "Amount retained by the centre. When a discount exceeds the referrer's commission, the user may push the excess here instead." },
-    { "term": "Free test", "meaning": "A test marked free: payable = 0, income = 0, referral commission = 0. Requires admin approval." },
-    { "term": "Concession", "meaning": "A discount applied AFTER payment is recorded. Requires admin approval." },
-    { "term": "Approval / Pending approval", "meaning": "A sensitive change (after payment) that an admin must approve before it takes effect. Shown as a 'Pending approval' badge until decided." },
-    { "term": "Modality", "meaning": "The imaging method/equipment type - e.g. X-ray, Ultrasound (USG), CT, MRI. Used as a filter on the admin board." },
-    { "term": "Token", "meaning": "The queue number issued to a patient on booking." }
+    {
+      "term": "Referred by / Referrer",
+      "meaning": "The doctor who referred the patient to the centre. Mandatory on every booking. Drives referral commission."
+    },
+    {
+      "term": "Supported doctor",
+      "meaning": "The centre's own doctor associated with the case. For self-referred patients this defaults to the current centre doctor."
+    },
+    {
+      "term": "Self (referral)",
+      "meaning": "Used when the patient is not referred by an outside doctor. One click sets Referred-by = Self and supported doctor = current centre doctor (editable)."
+    },
+    {
+      "term": "Referral Hub",
+      "meaning": "The page that tracks each referring doctor, their referred patients, and the commission owed to them - including any reason notes recorded against an entry."
+    },
+    {
+      "term": "Assigned discount limit",
+      "meaning": "The maximum discount a staff member is allowed to give without admin approval. Exceeding it triggers a confirmation popup and a mandatory reason."
+    },
+    {
+      "term": "Commission",
+      "meaning": "The amount payable to a referring doctor for a referred test. Recalculated whenever the bill or discount changes."
+    },
+    {
+      "term": "Centre commission",
+      "meaning": "Amount retained by the centre. When a discount exceeds the referrer's commission, the user may push the excess here instead."
+    },
+    {
+      "term": "Free test",
+      "meaning": "A test marked free: payable = 0, income = 0, referral commission = 0. Requires admin approval."
+    },
+    {
+      "term": "Concession",
+      "meaning": "A discount applied AFTER payment is recorded. Requires admin approval."
+    },
+    {
+      "term": "Approval / Pending approval",
+      "meaning": "A sensitive change (after payment) that an admin must approve before it takes effect. Shown as a 'Pending approval' badge until decided."
+    },
+    {
+      "term": "Modality",
+      "meaning": "The imaging method/equipment type - e.g. X-ray, Ultrasound (USG), CT, MRI. Used as a filter on the admin board."
+    },
+    {
+      "term": "Token",
+      "meaning": "The queue number issued to a patient on booking."
+    },
+    {
+      "term": "RIS / PACS modules",
+      "meaning": "The two product modules a centre can subscribe to. RIS covers appointments, billing, referrals and reporting; PACS covers DICOM image storage, the Studies worklist and the DICOM viewer. The sidebar hides items a centre hasn't bought."
+    },
+    {
+      "term": "Modality Worklist (MWL / DMWL)",
+      "meaning": "A list of today's scheduled patients that a scanner pulls from the centre's PACS so the machine knows who it is about to scan."
+    },
+    {
+      "term": "Accession Number",
+      "meaning": "A unique id stamped into each scan. 1rad uses the appointment's Display ID as the Accession Number so an arriving study matches the right appointment automatically."
+    },
+    {
+      "term": "Orthanc",
+      "meaning": "The small DICOM server that runs at the centre. Scanners send images to it, and it talks to the DICOM Bridge."
+    },
+    {
+      "term": "DICOM Bridge",
+      "meaning": "A background service installed at the centre that watches Orthanc and automatically uploads new studies into 1rad, matching each to a patient/appointment."
+    },
+    {
+      "term": "Study",
+      "meaning": "One imaging examination's set of images (e.g. one CT or one X-ray), made up of series and slices."
+    },
+    {
+      "term": "DICOM viewer",
+      "meaning": "The built-in image viewer used to scroll through a study's slices with window/level, pan, zoom and cine tools."
+    },
+    {
+      "term": "SCANNED status",
+      "meaning": "The point in a visit where imaging is finished and the case is handed to the radiologist for reporting."
+    },
+    {
+      "term": "Turnaround time (TAT)",
+      "meaning": "How long a service has taken so far. Shown as a chip on the Operations and Imaging boards so staff can spot cases running late."
+    },
+    {
+      "term": "Disbursement",
+      "meaning": "Marking a staff member's salary as paid out for a period."
+    },
+    {
+      "term": "Centre / Center switch",
+      "meaning": "Moving between the hospitals/branches a user is authorised for, without logging out. The active centre decides which data and which modules you see."
+    },
+    {
+      "term": "Report template",
+      "meaning": "A reusable report skeleton (sections like Technique, Findings, Impression) that a radiologist can load and fill instead of typing from scratch."
+    },
+    {
+      "term": "Keyword (macro)",
+      "meaning": "A personal text shortcut in the report editor: type a short trigger and it expands into a longer phrase."
+    }
   ],
-
   "roles": {
     "front_desk": {
       "label": "Front-desk / Reception",
-      "can": ["Book appointments", "Record payments", "Apply discounts up to the assigned limit", "Request sensitive changes (which create an approval for admin)", "Search the board"],
-      "cannot": ["Approve their own or others' sensitive changes", "Edit a payment after it is recorded without admin approval", "Mark a test free without admin approval", "Cancel a paid appointment without admin approval"]
+      "can": [
+        "Book appointments",
+        "Record payments",
+        "Apply discounts up to the assigned limit",
+        "Request sensitive changes (which create an approval for admin)",
+        "Search the board"
+      ],
+      "cannot": [
+        "Approve their own or others' sensitive changes",
+        "Edit a payment after it is recorded without admin approval",
+        "Mark a test free without admin approval",
+        "Cancel a paid appointment without admin approval"
+      ]
     },
     "admin": {
       "label": "Centre Admin",
-      "can": ["Everything front-desk can", "Open Admin Approval and approve/reject any request", "Set assigned discount limits", "View all reports and ledgers"]
+      "can": [
+        "Everything front-desk can",
+        "Open Admin Approval and approve/reject any request",
+        "Set assigned discount limits",
+        "View all reports and ledgers"
+      ]
     },
     "admin_doctor": {
       "label": "Admin Doctor",
-      "can": ["Approve edits and sensitive changes from the approvals page, same as admin"]
+      "can": [
+        "Approve edits and sensitive changes from the approvals page, same as admin"
+      ]
     },
     "radiologist": {
       "label": "Radiologist",
-      "can": ["Review and sign radiology report drafts produced by the report formatter", "Edit findings before signing"]
+      "can": [
+        "Review and sign radiology report drafts produced by the report formatter",
+        "Edit findings before signing"
+      ]
+    },
+    "technician": {
+      "label": "Technician / Imaging",
+      "can": [
+        "See today's imaging queue",
+        "Open a patient's workspace and review images in the DICOM viewer",
+        "Upload study images (DICOM ZIP, single DICOM, or PDF/JPG documents)",
+        "Add technician comments and mark a study SCANNED (ready for the radiologist)",
+        "Manage the DICOM Bridge and Worklist setup"
+      ]
+    },
+    "accountant": {
+      "label": "Accountant",
+      "can": [
+        "Open Billing: generate invoices, collect payments, apply discounts",
+        "Record and manage expenses",
+        "View finance statistics, the financial matrix and export to Excel",
+        "View and settle referral commissions"
+      ]
     }
   },
-
   "modules": [
     {
       "id": "booking",
@@ -75,7 +206,10 @@
         "Referred-by is mandatory - you cannot save a booking without it.",
         "Slots are capped per 30-minute window per modality to flatten the 10:30 AM to 1 PM rush; when full, the system offers another slot."
       ],
-      "tips": ["Always type the phone number first - it auto-fills returning patients and saves time.", "Use the test chips instead of searching for the common tests."]
+      "tips": [
+        "Always type the phone number first - it auto-fills returning patients and saves time.",
+        "Use the test chips instead of searching for the common tests."
+      ]
     },
     {
       "id": "referred_by",
@@ -88,8 +222,13 @@
         "If the patient was referred by a doctor, start typing the doctor's name. After 2 to 3 letters, suggestions appear; the centre's most-used doctors show at the top. Pick one.",
         "If the doctor is new, use 'Add new doctor' so booking is never blocked."
       ],
-      "rules": ["This field cannot be left empty.", "Getting the referrer right matters because commission is paid to this doctor."],
-      "faq_refs": ["how_change_referrer"]
+      "rules": [
+        "This field cannot be left empty.",
+        "Getting the referrer right matters because commission is paid to this doctor."
+      ],
+      "faq_refs": [
+        "how_change_referrer"
+      ]
     },
     {
       "id": "billing",
@@ -108,7 +247,10 @@
         "If the discount EXCEEDS your assigned limit, a popup appears asking you to confirm and to enter a REASON. The reason is mandatory; it is stored and shown in the Referral Hub against the referred doctor.",
         "If the discount also EXCEEDS the referrer's total commission, the popup gives a choice: (a) Continue anyway - the referrer's commission becomes 0; or (b) Add to centre - the referrer's commission becomes 0 and the leftover excess is added to the centre's commission."
       ],
-      "faq_refs": ["why_discount_popup", "what_is_add_to_centre"]
+      "faq_refs": [
+        "why_discount_popup",
+        "what_is_add_to_centre"
+      ]
     },
     {
       "id": "approvals",
@@ -138,7 +280,11 @@
         "Front-desk staff cannot approve - only admin or admin doctor.",
         "Records are never deleted; a cancelled paid appointment is voided/refunded and the commission reversed, keeping the audit trail."
       ],
-      "faq_refs": ["who_can_approve", "where_is_approvals", "how_long_approval"]
+      "faq_refs": [
+        "who_can_approve",
+        "where_is_approvals",
+        "how_long_approval"
+      ]
     },
     {
       "id": "cancel_paid",
@@ -162,7 +308,9 @@
         "If payment is NOT yet done, the change applies immediately.",
         "If payment IS already done, it creates an approval request with a mandatory reason; after admin approval the commission moves from the old doctor to the new one (a reversal plus a new entry, so history stays accurate)."
       ],
-      "faq_refs": ["how_change_referrer"]
+      "faq_refs": [
+        "how_change_referrer"
+      ]
     },
     {
       "id": "free_test",
@@ -220,7 +368,9 @@
         "Run the formatter - it returns a structured draft with corrections highlighted in yellow and anything uncertain flagged in red.",
         "The radiologist reviews the highlights, edits if needed, and signs. Nothing is finalized without the radiologist's sign-off."
       ],
-      "rules": ["The AI only reorganizes and corrects wording - it never adds, removes, or changes clinical findings or measurements."]
+      "rules": [
+        "The AI only reorganizes and corrects wording - it never adds, removes, or changes clinical findings or measurements."
+      ]
     },
     {
       "id": "radai",
@@ -232,29 +382,545 @@
         "Speak your question (in Hindi or English), tap a suggested question, or type it.",
         "RadAI answers in text and reads it aloud in the language you used. Tap stop to silence it, or replay to hear again."
       ]
+    },
+    {
+      "id": "imaging_queue",
+      "label": "Imaging queue (Technician)",
+      "summary": "Your list of today's patients waiting to be scanned, sorted by priority (STAT, then Urgent, then Routine).",
+      "where": "Imaging page (technician).",
+      "how_to": [
+        "Open the Imaging page.",
+        "Search by patient name, or filter by modality, priority, status or doctor.",
+        "Tap a patient card to open their workspace.",
+        "Switch to the Archive tab to see studies already done."
+      ],
+      "tips": [
+        "The most urgent (STAT) cases always sit at the top."
+      ]
+    },
+    {
+      "id": "imaging_upload",
+      "label": "Upload images and mark a study SCANNED",
+      "summary": "Attach the scanned images to the patient's visit, then hand the case to the radiologist.",
+      "where": "Imaging page, patient workspace.",
+      "how_to": [
+        "Open the patient's workspace from the queue.",
+        "Upload the file(s): a ZIP of DICOM images, a single DICOM file, or a document scan (PDF/JPG/PNG).",
+        "Wait for the upload to finish - large studies upload straight to cloud storage.",
+        "Add any technician comments for the radiologist.",
+        "Tap Complete / Mark Scanned - the visit becomes SCANNED and appears on the Reporting board."
+      ],
+      "rules": [
+        "Uploading DICOM images needs the PACS module. Centres without PACS can still attach PDF/JPG documents.",
+        "The visit moves to In Progress automatically as soon as the first file is attached."
+      ],
+      "faq_refs": [
+        "where_do_images_go",
+        "upload_doc_only"
+      ]
+    },
+    {
+      "id": "studies_worklist",
+      "label": "Studies (PACS worklist)",
+      "summary": "A worklist of imaging studies plus an Upload Center for studies that arrived without an appointment.",
+      "where": "Studies page (needs the PACS module).",
+      "how_to": [
+        "Open the Studies page.",
+        "Browse the studies and check each one's status and whether it is matched to a patient.",
+        "Use the Upload Center to add a ZIP or DICOM file as a standalone study.",
+        "Open any study to view it in the DICOM viewer."
+      ],
+      "faq_refs": [
+        "why_unmatched"
+      ]
+    },
+    {
+      "id": "dicom_viewer",
+      "label": "DICOM viewer",
+      "summary": "View a study's images slice-by-slice with radiology tools.",
+      "where": "Studies page, or a patient's workspace.",
+      "how_to": [
+        "Open a study from Studies or from the patient's workspace.",
+        "Scroll or swipe through the slices (grouped by series).",
+        "Use Window/Level, Pan, Zoom and Cine to review the images.",
+        "On a tablet/phone, pinch to zoom and drag to pan."
+      ],
+      "tips": [
+        "The viewer loads each slice on demand so big studies start fast."
+      ]
+    },
+    {
+      "id": "study_matching",
+      "label": "How studies match to patients",
+      "summary": "Arriving studies are linked to the right appointment automatically. With the Worklist set up, matching is exact; otherwise the system makes its best guess on name, date and modality.",
+      "where": "Studies page (match status).",
+      "how_to": [
+        "Studies match on their own when they arrive.",
+        "Check the match status on the Studies list.",
+        "If a study shows Unmatched, verify the patient details or set up the Worklist (MWL) for exact matching."
+      ],
+      "rules": [
+        "Exact match happens when the image's Accession Number equals the appointment's Display ID (this is what the Worklist provides).",
+        "Without that, the system falls back to matching on patient name + date + modality."
+      ],
+      "faq_refs": [
+        "why_unmatched",
+        "what_is_worklist"
+      ]
+    },
+    {
+      "id": "dicom_bridge",
+      "label": "DICOM Bridge monitor",
+      "summary": "The Bridge automatically uploads studies from the centre's Orthanc server into 1rad. The monitor shows whether it is online and the recent uploads.",
+      "where": "DICOM Bridge page (needs the PACS module).",
+      "how_to": [
+        "Open the DICOM Bridge page.",
+        "Check the status light - green means BRIDGE ONLINE.",
+        "Watch the activity list for uploaded, pending or failed studies.",
+        "Search by patient name or filter by status to find a specific study.",
+        "If a study is pending, tap its upload button to push it now."
+      ],
+      "rules": [
+        "The Bridge runs as a background service on the same computer as Orthanc. If it shows offline, that service is not running."
+      ],
+      "faq_refs": [
+        "bridge_offline"
+      ]
+    },
+    {
+      "id": "dicom_bridge_setup",
+      "label": "Set up the DICOM Bridge",
+      "summary": "Install the small bridge program at the centre so studies upload by themselves.",
+      "where": "DICOM Bridge page, Setup Guide tab.",
+      "how_to": [
+        "Open DICOM Bridge - Setup Guide.",
+        "Download the bridge software and create its .env settings file (the page gives you a ready file to fill in your password).",
+        "Install it as a Windows background service using the provided command so it auto-starts after reboots.",
+        "Go back to Activity Monitor - the status turns green when it connects."
+      ],
+      "tips": [
+        "Install the Bridge on the same computer that runs Orthanc."
+      ]
+    },
+    {
+      "id": "modality_worklist",
+      "label": "Modality Worklist (MWL) - scanners pull today's patients",
+      "summary": "Publish today's appointments to the scanners so each machine shows who it is about to scan, and stamps the patient + Accession Number into every image for exact matching.",
+      "where": "DICOM Bridge page, Worklist (MWL) tab.",
+      "how_to": [
+        "Open DICOM Bridge - Worklist (MWL).",
+        "Add the worklist settings to the bridge's .env (turn it on, set the Orthanc worklist folder and a sync interval).",
+        "Enable the worklist plugin in Orthanc and register each scanner.",
+        "On each scanner console, point its Worklist/MWL source at Orthanc (AE: ORTHANC, port 4242) and query by today's date - the page has a step-by-step for GE and Siemens consoles.",
+        "Keep each appointment's Display ID 16 characters or fewer so the Accession Number is not cut off."
+      ],
+      "rules": [
+        "Setting up the worklist is a separate machine setting from sending images - same Orthanc, different screen on the scanner.",
+        "Once set up, the front desk just books normally; the patient appears on the scanner within the sync interval (about 2 minutes)."
+      ],
+      "faq_refs": [
+        "what_is_worklist",
+        "worklist_empty"
+      ]
+    },
+    {
+      "id": "report_editor",
+      "label": "Write, save and finalize a report",
+      "summary": "The radiologist's report screen. Save drafts as you go, then finalize to lock the report and mark the visit Reported.",
+      "where": "Reporting page (Doctor Board), report editor.",
+      "how_to": [
+        "Open a SCANNED case from the Reporting board.",
+        "Type or dictate the Findings and Impression.",
+        "Press Ctrl+S (or Save) to keep a draft - you can come back later.",
+        "When done, press Ctrl+Shift+S (or Finalize) to lock it; the case becomes Reported."
+      ],
+      "rules": [
+        "Drafts autosave; if someone else edited the same report you'll see a notice with an Undo to re-apply your version.",
+        "Finalizing stops further autosave and signals the report is ready for delivery."
+      ],
+      "faq_refs": [
+        "save_vs_finalize"
+      ]
+    },
+    {
+      "id": "report_templates",
+      "label": "Report templates",
+      "summary": "Reusable report skeletons so you don't retype the same structure each time.",
+      "where": "Reporting page, report editor (template picker / manage templates).",
+      "how_to": [
+        "In the report editor, open the template picker.",
+        "Pick a template - a matching one is suggested from the service name.",
+        "To make your own, open Manage Templates, create or edit a template, set its name, modality and sections, and save."
+      ],
+      "tips": [
+        "Templates are saved per centre and doctor and can be tagged to a modality."
+      ]
+    },
+    {
+      "id": "report_keywords",
+      "label": "Keywords (text shortcuts) in reports",
+      "summary": "Personal shortcuts: type a short trigger and it expands into a longer phrase.",
+      "where": "Reporting page, report editor (keyword library).",
+      "how_to": [
+        "Open the keyword library in the report editor.",
+        "Add a keyword: the trigger word and the full text it should expand to.",
+        "While reporting, type the trigger to insert the expansion.",
+        "Edit or delete keywords any time."
+      ]
+    },
+    {
+      "id": "report_ai_format",
+      "label": "Format a report with AI",
+      "summary": "Cleans up a report for a known test - tidies structure, spelling and grammar, and flags anything uncertain - without changing clinical findings.",
+      "where": "Reporting page, report editor (Format).",
+      "how_to": [
+        "Open a case with a matching test/modality.",
+        "Tap Format (AI report).",
+        "Review the tidied draft: corrections are highlighted and uncertain items are flagged.",
+        "Accept it into the editor or keep editing - you always review before signing."
+      ],
+      "rules": [
+        "The AI only reorganises and corrects wording. It never adds, removes or changes findings, measurements or laterality."
+      ]
+    },
+    {
+      "id": "report_ai_assist",
+      "label": "AI co-pilot in the editor (improve / proofread / impression)",
+      "summary": "Select text and ask the AI to improve, proofread, expand shorthand, shorten, or build a numbered impression from the findings.",
+      "where": "Reporting page, report editor (AI tools).",
+      "how_to": [
+        "Select the text you want to work on (or the whole findings).",
+        "Choose an action: Improve, Proofread, Expand, Shorten, or Impression.",
+        "Review the result and drop it back into the report."
+      ],
+      "rules": [
+        "Patient identifiers are removed before anything goes to the AI and restored in the result, so identity stays private."
+      ]
+    },
+    {
+      "id": "voice_reporting",
+      "label": "Voice reporting (dictate to a draft)",
+      "summary": "Dictate your findings and the AI turns them into a structured, editor-ready draft.",
+      "where": "Reporting page, report editor (Voice Reporting).",
+      "how_to": [
+        "Open the Voice Reporting panel.",
+        "Dictate your findings.",
+        "Optionally pick a template to shape the output.",
+        "Generate the draft, then review and edit before saving."
+      ]
+    },
+    {
+      "id": "patient_timeline",
+      "label": "Patient history / timeline",
+      "summary": "See a patient's past visits, services and activity in date order, all in one place.",
+      "where": "Patient record, Timeline.",
+      "how_to": [
+        "Open the patient (search by name or phone).",
+        "Open their Timeline.",
+        "Scroll the dated history of visits and activity."
+      ]
+    },
+    {
+      "id": "operations_board",
+      "label": "Operations Board",
+      "summary": "One live board showing every visit and service with its current stage and how long it's taken, sorted by priority.",
+      "where": "Operations Board page.",
+      "how_to": [
+        "Open the Operations Board.",
+        "Read each row's stage (Booked, Arrived, Scanning, Acquired, Analyzing, Finalized, Delivered) and its turnaround-time chip.",
+        "Advance a service to its next stage from the row when the step is done.",
+        "Watch for items flagged overdue."
+      ],
+      "tips": [
+        "Status changes work offline and sync when you reconnect."
+      ]
+    },
+    {
+      "id": "configuration",
+      "label": "Configuration (services, templates, printing)",
+      "summary": "Where admins set up the catalog of services and charges, report templates, and printing/device settings.",
+      "where": "Configuration page.",
+      "how_to": [
+        "Open Configuration.",
+        "In Services/Charges, add or edit a service with its modality and price.",
+        "In Report Templates, manage the templates doctors can use.",
+        "In Printing & Devices, set how reports print."
+      ]
+    },
+    {
+      "id": "dashboard",
+      "label": "Dashboard (intelligence)",
+      "summary": "The admin analytics hub: volumes, finance and referral performance for a chosen timeframe.",
+      "where": "Dashboard page (admins).",
+      "how_to": [
+        "Open the Dashboard.",
+        "Pick a timeframe (Day, Week, Month, Year or All).",
+        "Review the cards and charts.",
+        "Use Export to download an Excel report for a date range."
+      ]
+    },
+    {
+      "id": "prescription_layout",
+      "label": "Report/prescription print layout",
+      "summary": "Set how a doctor's printed reports look - letterhead, margins, font, colour. If a doctor hasn't set their own, the centre default is used.",
+      "where": "Report layout / prescription settings.",
+      "how_to": [
+        "Open the report layout settings.",
+        "Upload a letterhead image (optional).",
+        "Set margins (at least 8mm) and font size (at least 8px), colour and family.",
+        "Save - it applies to that doctor's printed reports."
+      ],
+      "rules": [
+        "Only doctors and admins can change the layout."
+      ]
+    },
+    {
+      "id": "patient_tracking",
+      "label": "Patient tracking link / QR",
+      "summary": "Give the patient a secure link or QR to follow their visit status on their phone and get their report when it's finalized.",
+      "where": "Appointment, tracking QR/link.",
+      "how_to": [
+        "Open the appointment.",
+        "Generate the tracking QR/link.",
+        "Share it with the patient.",
+        "The patient scans it to see live status and, once finalized, their report - no login needed."
+      ]
+    },
+    {
+      "id": "staff_directory",
+      "label": "Staff & Payroll - manage staff",
+      "summary": "Add, edit and remove staff members and store their documents.",
+      "where": "Staff & Payroll page.",
+      "how_to": [
+        "Open Staff & Payroll.",
+        "Add a staff member with their name, role and contact (an employee code is generated).",
+        "Open a person to edit details, upload documents, or remove them.",
+        "Open a profile for their salary, attendance and leave."
+      ]
+    },
+    {
+      "id": "staff_attendance",
+      "label": "Attendance",
+      "summary": "Record and review staff attendance.",
+      "where": "Staff & Payroll, Attendance.",
+      "how_to": [
+        "Open Staff & Payroll - Attendance.",
+        "Mark or correct attendance for a staff member and date.",
+        "Review attendance over a period."
+      ]
+    },
+    {
+      "id": "staff_leave",
+      "label": "Leave (apply, review, policy)",
+      "summary": "Staff apply for leave; admins review it; the leave policy sets the allowances.",
+      "where": "Staff & Payroll, Leave.",
+      "how_to": [
+        "A staff member applies for leave with the type and dates.",
+        "An admin reviews and approves or rejects the request.",
+        "Admins set the leave types and yearly allowances in the Leave Policy."
+      ]
+    },
+    {
+      "id": "staff_salary",
+      "label": "Salary and disbursement",
+      "summary": "Set a staff member's salary, keep a history of revisions, and mark salary as paid for a period.",
+      "where": "Staff & Payroll, staff profile, Salary.",
+      "how_to": [
+        "Open the staff member's Salary section.",
+        "Save a salary revision (it keeps the history).",
+        "Mark the salary as disbursed (paid) for the period."
+      ]
+    },
+    {
+      "id": "login",
+      "label": "Sign in (password or OTP)",
+      "summary": "Log in with your password, or with a one-time code (OTP) sent to you.",
+      "where": "Login screen.",
+      "how_to": [
+        "Enter your email/identifier.",
+        "Sign in with your password, or choose to receive a one-time code (OTP) and enter it.",
+        "If you forgot your password, use Forgot Password to get a reset code and set a new one."
+      ],
+      "faq_refs": [
+        "forgot_password",
+        "otp_login"
+      ]
+    },
+    {
+      "id": "switch_centre",
+      "label": "Switch hospital / centre",
+      "summary": "Move between the branches you're authorised for without logging out. The active centre decides what data and which modules you see.",
+      "where": "Top bar / account menu.",
+      "how_to": [
+        "Open the centre switcher in the top bar.",
+        "Pick the hospital/branch you want to work in.",
+        "The app reloads that centre's data, menu and permissions."
+      ],
+      "faq_refs": [
+        "missing_menu_item"
+      ]
+    },
+    {
+      "id": "sessions",
+      "label": "Active sessions / sign out other devices",
+      "summary": "See where you're logged in and sign out a device you no longer use.",
+      "where": "Settings, Sessions.",
+      "how_to": [
+        "Open Settings - Sessions.",
+        "Review the list of active sessions/devices.",
+        "Revoke any session you don't recognise or no longer need."
+      ]
+    },
+    {
+      "id": "custom_roles",
+      "label": "Roles & Permissions (custom roles)",
+      "summary": "Beyond the built-in roles, admins can create custom roles and choose exactly which pages each can open.",
+      "where": "Configuration / Roles & Permissions (admins).",
+      "how_to": [
+        "Open Roles & Permissions.",
+        "Create a custom role and give it a name.",
+        "Tick the pages/areas that role may access.",
+        "Save - assign the role to staff. You can edit or delete custom roles later."
+      ]
+    },
+    {
+      "id": "subscription",
+      "label": "Subscription (RIS / PACS modules)",
+      "summary": "See and manage which product modules the centre has. RIS unlocks appointments/billing/referrals/reporting; PACS unlocks Studies, the DICOM viewer and the DICOM Bridge.",
+      "where": "Subscription page (admins).",
+      "how_to": [
+        "Open the Subscription page.",
+        "See which modules (RIS, PACS) are active for this centre.",
+        "Items a centre hasn't subscribed to are hidden from the sidebar."
+      ],
+      "faq_refs": [
+        "missing_menu_item",
+        "what_is_ris_pacs"
+      ]
     }
   ],
-
   "faqs": [
-    { "id": "why_discount_popup", "q": "Why did a popup appear when I gave a discount?", "a": "Because the discount was higher than your assigned limit. The popup asks you to confirm and give a reason. The reason is saved and shown in the Referral Hub against the referred doctor." },
-    { "id": "what_is_add_to_centre", "q": "What does 'Add to centre' mean in the discount popup?", "a": "It appears when the discount is larger than the referring doctor's total commission. Choosing 'Add to centre' sets the doctor's commission to 0 and adds the leftover excess to the centre's commission instead." },
-    { "id": "who_can_approve", "q": "Who can approve a change?", "a": "Only an admin or an admin doctor. Front-desk staff can request a change (with a reason) but cannot approve it." },
-    { "id": "where_is_approvals", "q": "Where do I approve pending changes?", "a": "Open the Admin Approval page. All pending requests appear there; you can filter by type." },
-    { "id": "how_long_approval", "q": "I submitted a change but nothing happened. Why?", "a": "Sensitive changes after payment need admin approval. Your request shows a 'Pending approval' badge and takes effect only after an admin approves it from Admin Approval. You can continue serving the next patient meanwhile." },
-    { "id": "how_change_referrer", "q": "How do I change who referred the patient?", "a": "Edit the Referred-by field on the appointment. Before payment it changes immediately. After payment it needs admin approval, and once approved the commission moves to the correct doctor." },
-    { "id": "referrer_mandatory", "q": "Why won't it let me book without a referrer?", "a": "Referred-by is mandatory on every booking. If the patient came on their own, click 'Self'. Otherwise type the referring doctor's name and pick from the list." },
-    { "id": "make_free", "q": "How do I make a test free?", "a": "Open the bill, choose Mark Free, and give a reason. It needs admin approval. After approval, payable, income and commission all become 0, and it still appears in reports as a free test." },
-    { "id": "edit_payment", "q": "Can I edit a payment after recording it?", "a": "Yes, but it needs admin approval. Make the edit, give a reason, and it waits as 'Pending approval' until an admin approves it from Admin Approval." },
-    { "id": "slot_full", "q": "The time slot I wanted is full. What do I do?", "a": "Slots are limited per modality to manage the rush. The system suggests the nearest available slot - pick one of those." },
-    { "id": "returning_patient", "q": "How do I book faster for a patient who has visited before?", "a": "Type their phone number first. The app fills in their name, age and history automatically." }
+    {
+      "id": "why_discount_popup",
+      "q": "Why did a popup appear when I gave a discount?",
+      "a": "Because the discount was higher than your assigned limit. The popup asks you to confirm and give a reason. The reason is saved and shown in the Referral Hub against the referred doctor."
+    },
+    {
+      "id": "what_is_add_to_centre",
+      "q": "What does 'Add to centre' mean in the discount popup?",
+      "a": "It appears when the discount is larger than the referring doctor's total commission. Choosing 'Add to centre' sets the doctor's commission to 0 and adds the leftover excess to the centre's commission instead."
+    },
+    {
+      "id": "who_can_approve",
+      "q": "Who can approve a change?",
+      "a": "Only an admin or an admin doctor. Front-desk staff can request a change (with a reason) but cannot approve it."
+    },
+    {
+      "id": "where_is_approvals",
+      "q": "Where do I approve pending changes?",
+      "a": "Open the Admin Approval page. All pending requests appear there; you can filter by type."
+    },
+    {
+      "id": "how_long_approval",
+      "q": "I submitted a change but nothing happened. Why?",
+      "a": "Sensitive changes after payment need admin approval. Your request shows a 'Pending approval' badge and takes effect only after an admin approves it from Admin Approval. You can continue serving the next patient meanwhile."
+    },
+    {
+      "id": "how_change_referrer",
+      "q": "How do I change who referred the patient?",
+      "a": "Edit the Referred-by field on the appointment. Before payment it changes immediately. After payment it needs admin approval, and once approved the commission moves to the correct doctor."
+    },
+    {
+      "id": "referrer_mandatory",
+      "q": "Why won't it let me book without a referrer?",
+      "a": "Referred-by is mandatory on every booking. If the patient came on their own, click 'Self'. Otherwise type the referring doctor's name and pick from the list."
+    },
+    {
+      "id": "make_free",
+      "q": "How do I make a test free?",
+      "a": "Open the bill, choose Mark Free, and give a reason. It needs admin approval. After approval, payable, income and commission all become 0, and it still appears in reports as a free test."
+    },
+    {
+      "id": "edit_payment",
+      "q": "Can I edit a payment after recording it?",
+      "a": "Yes, but it needs admin approval. Make the edit, give a reason, and it waits as 'Pending approval' until an admin approves it from Admin Approval."
+    },
+    {
+      "id": "slot_full",
+      "q": "The time slot I wanted is full. What do I do?",
+      "a": "Slots are limited per modality to manage the rush. The system suggests the nearest available slot - pick one of those."
+    },
+    {
+      "id": "returning_patient",
+      "q": "How do I book faster for a patient who has visited before?",
+      "a": "Type their phone number first. The app fills in their name, age and history automatically."
+    },
+    {
+      "id": "where_do_images_go",
+      "q": "Where do the images I upload go?",
+      "a": "They upload from the patient's workspace straight to secure cloud storage and attach to that visit. Once the first file is in, the visit moves to In Progress; when you mark it Scanned it goes to the radiologist."
+    },
+    {
+      "id": "upload_doc_only",
+      "q": "Can I attach a PDF or photo instead of DICOM images?",
+      "a": "Yes. Centres without the PACS module can still attach documents (PDF/JPG/PNG) to a visit. DICOM image upload and the viewer need the PACS module."
+    },
+    {
+      "id": "why_unmatched",
+      "q": "Why does a study show as Unmatched?",
+      "a": "It couldn't be linked to an appointment automatically. Check the patient name and date, or set up the Worklist (MWL) so scanners stamp the Accession Number for exact matching."
+    },
+    {
+      "id": "what_is_worklist",
+      "q": "What is the Modality Worklist?",
+      "a": "It publishes today's appointments to your scanners so each machine shows who it's about to scan. When the technician picks the patient, the machine stamps the patient and Accession Number into every image, so the study matches the right appointment automatically."
+    },
+    {
+      "id": "worklist_empty",
+      "q": "My scanner's worklist is empty. Why?",
+      "a": "Usually the scanner is filtering by its Station name. Either set that machine's station into the worklist settings, or set the scanner to query by date only. Also check the worklist is enabled in the bridge and Orthanc."
+    },
+    {
+      "id": "bridge_offline",
+      "q": "The DICOM Bridge shows offline. What do I do?",
+      "a": "The bridge is a background service on the computer that runs Orthanc. Make sure that computer is on and the bridge service is running; the Setup Guide tab shows how to start it. It turns green here once it connects."
+    },
+    {
+      "id": "save_vs_finalize",
+      "q": "What's the difference between Save and Finalize a report?",
+      "a": "Save keeps a draft you can return to. Finalize locks the report and marks the case Reported, ready for delivery. Use Ctrl+S to save and Ctrl+Shift+S to finalize."
+    },
+    {
+      "id": "forgot_password",
+      "q": "I forgot my password.",
+      "a": "On the login screen choose Forgot Password. You'll get a reset code; enter it and set a new password."
+    },
+    {
+      "id": "otp_login",
+      "q": "Can I log in without my password?",
+      "a": "Yes - choose to receive a one-time code (OTP) on the login screen and enter it instead of your password."
+    },
+    {
+      "id": "missing_menu_item",
+      "q": "A menu item I used to see is missing.",
+      "a": "Either your active centre hasn't subscribed to that module (e.g. PACS items like Studies/DICOM Bridge need PACS), or your role doesn't include that page. Check you're in the right centre using the centre switcher, or ask an admin about your role."
+    },
+    {
+      "id": "what_is_ris_pacs",
+      "q": "What are the RIS and PACS modules?",
+      "a": "They're the two parts of 1rad a centre can subscribe to. RIS handles appointments, billing, referrals and reporting. PACS handles imaging: the Studies worklist, the DICOM viewer and the DICOM Bridge. The menu only shows what your centre has."
+    },
+    {
+      "id": "how_finalize_voice",
+      "q": "How do I dictate a report?",
+      "a": "Open Voice Reporting in the report editor, dictate your findings, optionally pick a template, then generate the draft and review it before saving."
+    }
   ],
-
   "support_fallback": {
     "when": "Use this when the user's question is not answered by anything above, or is about a problem rather than how-to (errors, bugs, account access, billing disputes).",
     "message": "I'm not sure about that one. For this, please contact your centre admin or the 1rad support team so they can help you directly.",
     "never": "Never invent a feature, button, menu, or step that is not described in this file. If unsure, use the support fallback."
   },
-
   "suggested_chips": [
     "How do I book an appointment?",
     "How do I add a discount?",
@@ -263,6 +929,16 @@
     "How do I change who referred the patient?",
     "How do I mark a test as free?",
     "Where do I approve pending changes?",
-    "How do I search by doctor or modality?"
+    "How do I search by doctor or modality?",
+    "How do I upload a scan and mark it scanned?",
+    "Why is a study showing as unmatched?",
+    "What is the Modality Worklist and how do I set it up?",
+    "The DICOM Bridge is offline - what do I do?",
+    "How do I finalize a report?",
+    "How do I dictate a report by voice?",
+    "How do I switch to another centre?",
+    "A menu item is missing - why?",
+    "How do I apply for leave?",
+    "How do I set a staff member's salary?"
   ]
 }
