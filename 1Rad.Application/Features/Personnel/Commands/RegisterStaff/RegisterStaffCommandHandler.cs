@@ -10,11 +10,13 @@ public class RegisterStaffCommandHandler : IRequestHandler<RegisterStaffCommand,
 {
     private readonly IApplicationDbContext _context;
     private readonly IPasswordHasher _passwordHasher;
+    private readonly ISubscriptionLimitsService _limits;
 
-    public RegisterStaffCommandHandler(IApplicationDbContext _context, IPasswordHasher _passwordHasher)
+    public RegisterStaffCommandHandler(IApplicationDbContext _context, IPasswordHasher _passwordHasher, ISubscriptionLimitsService limits)
     {
         this._context = _context;
         this._passwordHasher = _passwordHasher;
+        this._limits = limits;
     }
 
     public async Task<(Guid UserId, string? Error)> Handle(RegisterStaffCommand request, CancellationToken cancellationToken)
@@ -98,6 +100,12 @@ public class RegisterStaffCommandHandler : IRequestHandler<RegisterStaffCommand,
         }
         else
         {
+            // New seat — enforce the plan's user cap (existing members can always
+            // have their roles updated above; only NET-NEW seats are capped).
+            var seats = await _limits.GetUserLimitAsync(request.HospitalId, cancellationToken);
+            if (seats.AtLimit)
+                return (Guid.Empty, $"USER_LIMIT_REACHED: Your plan includes {seats.Max} users ({seats.Current} in use). Upgrade your plan to add more staff.");
+
             var mapping = new UserHospitalMapping
             {
                 UserId = user.UserId,

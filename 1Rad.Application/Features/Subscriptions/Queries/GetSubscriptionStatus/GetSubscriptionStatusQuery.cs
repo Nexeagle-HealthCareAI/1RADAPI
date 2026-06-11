@@ -32,6 +32,12 @@ public class SubscriptionStatusResponse
     public int? IncludedStorageGb { get; set; }
     public double? StoragePercentUsed { get; set; }
     public bool StorageOverQuota { get; set; }
+
+    // PAYG (per-study) running charge for this cycle. BillingMode is
+    // "Subscription" for tier plans; "PerStudy" centers see the accruing amount.
+    public string BillingMode { get; set; } = "Subscription";
+    public int PaygStudiesThisCycle { get; set; }
+    public decimal PaygAmountDue { get; set; }
 }
 
 public class GetSubscriptionStatusQueryHandler : IRequestHandler<GetSubscriptionStatusQuery, SubscriptionStatusResponse>
@@ -111,6 +117,14 @@ public class GetSubscriptionStatusQueryHandler : IRequestHandler<GetSubscription
 
         var isActive = (effectiveStatus == "Active" || effectiveStatus == "Expiring") && !effectiveIsLocked;
 
+        // PAYG running charge: finalized reports since this cycle's start × rate.
+        var paygStudies = 0;
+        if (string.Equals(subscription.BillingMode, "PerStudy", StringComparison.OrdinalIgnoreCase))
+        {
+            paygStudies = await _1Rad.Application.Features.Subscriptions.Queries.GetBillingEstimate.PaygBilling
+                .CountFinalizedSinceAsync(_context, hospitalId, subscription.StartDate, cancellationToken);
+        }
+
         return new SubscriptionStatusResponse
         {
             IsActive = isActive,
@@ -131,7 +145,10 @@ public class GetSubscriptionStatusQueryHandler : IRequestHandler<GetSubscription
             StorageUsedBytes = storageUsage.UsedBytes,
             IncludedStorageGb = storageUsage.IncludedStorageGb,
             StoragePercentUsed = storageUsage.PercentUsed,
-            StorageOverQuota = storageUsage.IsOverQuota
+            StorageOverQuota = storageUsage.IsOverQuota,
+            BillingMode = subscription.BillingMode,
+            PaygStudiesThisCycle = paygStudies,
+            PaygAmountDue = paygStudies * subscription.PerStudyPrice
         };
     }
 }

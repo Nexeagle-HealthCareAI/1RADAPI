@@ -111,6 +111,11 @@ public class ApprovePaymentRequestHandler : IRequestHandler<ApprovePaymentReques
             BillingCycle = paymentRequest.BillingCycle,
             Modules = string.Join(",", newModuleSet.OrderBy(m => m)),
             IncludedStorageGb = plan.IncludedStorageGb,
+            // Tier billing mode + caps, copied so enforcement + PAYG billing read one row.
+            BillingMode = plan.BillingMode,
+            PerStudyPrice = plan.PerStudyPrice,
+            MaxUsers = plan.MaxUsers,
+            MaxSites = plan.MaxSites,
             // Dropping PACS starts the read-only grace; otherwise no grace.
             PacsRemovedAt = (!nowHasPacs && hadPacs) ? now : (DateTime?)null,
             IsTrial = false,

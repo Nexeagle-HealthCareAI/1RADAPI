@@ -26,6 +26,13 @@ public class HospitalSubscription : BaseEntity
     // auto-delete job removes the studies. NULL = PACS active or never had it.
     public DateTime? PacsRemovedAt { get; set; }
 
+    // Tier caps + billing mode, copied from the plan at activation so
+    // enforcement (user/site limits) and PAYG billing are single-row reads.
+    public string BillingMode { get; set; } = "Subscription"; // Subscription | PerStudy
+    public decimal PerStudyPrice { get; set; }                // PAYG rate per finalized report
+    public int? MaxUsers { get; set; }                        // NULL = unlimited
+    public int? MaxSites { get; set; }                        // NULL = unlimited
+
     // PACS storage allowance in GB for this center. NULL = unmetered (legacy
     // and RIS-only subscriptions). When the hospital's persisted bytes exceed
     // this, NEW DICOM uploads are rejected (STORAGE_QUOTA_EXCEEDED) — viewing

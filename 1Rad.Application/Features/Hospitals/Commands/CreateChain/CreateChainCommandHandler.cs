@@ -13,11 +13,13 @@ public class CreateChainCommandHandler : IRequestHandler<CreateChainCommand, Cre
 {
     private readonly IApplicationDbContext _context;
     private readonly IUserContext _userContext;
+    private readonly ISubscriptionLimitsService _limits;
 
-    public CreateChainCommandHandler(IApplicationDbContext context, IUserContext userContext)
+    public CreateChainCommandHandler(IApplicationDbContext context, IUserContext userContext, ISubscriptionLimitsService limits)
     {
         _context = context;
         _userContext = userContext;
+        _limits = limits;
     }
 
     public async Task<CreateChainResponse> Handle(CreateChainCommand request, CancellationToken cancellationToken)
@@ -66,6 +68,15 @@ public class CreateChainCommandHandler : IRequestHandler<CreateChainCommand, Cre
                     CreatedAt = DateTime.UtcNow
                 };
                 _context.HospitalGroups.Add(group);
+            }
+
+            // Enforce the plan's site cap (centers in the group) before adding
+            // another center. Resolved from the acting center's subscription.
+            if (_userContext.HospitalId != Guid.Empty)
+            {
+                var sites = await _limits.GetSiteLimitAsync(_userContext.HospitalId, cancellationToken);
+                if (sites.AtLimit)
+                    return new CreateChainResponse { Success = false, ErrorCode = "SITE_LIMIT_REACHED", Error = $"Your plan includes {sites.Max} site(s) ({sites.Current} in use). Upgrade your plan to add another centre." };
             }
 
             // Ensure changes to group (new or updated) are tracked

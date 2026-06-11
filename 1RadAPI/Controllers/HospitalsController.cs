@@ -61,7 +61,7 @@ public class HospitalsController : ControllerBase
             request.PAN,
             request.NABHNumber));
 
-        if (!result.Success) return BadRequest(new { message = result.Error });
+        if (!result.Success) return BadRequest(new { success = false, message = result.Error, errorCode = result.ErrorCode });
         return Ok(result);
     }
 

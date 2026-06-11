@@ -75,6 +75,9 @@ public static class DependencyInjection
         // PACS-only server-side study↔patient/appointment matching.
         services.AddScoped<IStudyMatchingService, StudyMatchingService>();
 
+        // Tier seat/site caps (Starter/Growth/Clinic enforcement).
+        services.AddScoped<ISubscriptionLimitsService, SubscriptionLimitsService>();
+
         // DICOM viewer Option C: per-slice extraction pipeline.
         services.AddSingleton<IDicomExtractionQueue, DicomExtractionQueue>();
         services.AddScoped<IDicomExtractionService, DicomExtractionService>();

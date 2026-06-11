@@ -28,6 +28,10 @@ public class BillingEstimateDto
     public decimal PerGbPrice { get; set; }
     public decimal OverageAmount { get; set; }
     public decimal Total { get; set; }
+    // PAYG (per-study) fields — populated when BillingMode == "PerStudy".
+    public string BillingMode { get; set; } = "Subscription";
+    public decimal PerStudyPrice { get; set; }
+    public int StudiesCount { get; set; }
 }
 
 public class GetBillingEstimateQueryHandler : IRequestHandler<GetBillingEstimateQuery, BillingEstimateDto>
@@ -51,8 +55,41 @@ public class GetBillingEstimateQueryHandler : IRequestHandler<GetBillingEstimate
         if (plan == null)
             return new BillingEstimateDto { Found = false, Error = "Plan not found." };
 
-        return BillingMath.Estimate(plan, await _storage.GetUsageAsync(_userContext.HospitalId, cancellationToken));
+        var hospitalId = _userContext.HospitalId;
+
+        // Pay-as-you-go: amount due = finalized reports in the current cycle ×
+        // the per-study rate (no base, no storage overage).
+        if (string.Equals(plan.BillingMode, "PerStudy", StringComparison.OrdinalIgnoreCase))
+        {
+            var cycleStart = await _context.HospitalSubscriptions
+                .AsNoTracking()
+                .Where(s => s.HospitalId == hospitalId && (s.Status == "Active" || s.Status == "Expiring"))
+                .OrderByDescending(s => s.CreatedAt)
+                .Select(s => (DateTime?)s.StartDate)
+                .FirstOrDefaultAsync(cancellationToken) ?? DateTime.UtcNow;
+
+            var studies = await PaygBilling.CountFinalizedSinceAsync(_context, hospitalId, cycleStart, cancellationToken);
+            return new BillingEstimateDto
+            {
+                Found = true, PlanId = plan.PlanId, Edition = plan.Edition, Cycle = "PAYG",
+                BillingMode = "PerStudy", PerStudyPrice = plan.PerStudyPrice,
+                StudiesCount = studies, Total = studies * plan.PerStudyPrice,
+            };
+        }
+
+        return BillingMath.Estimate(plan, await _storage.GetUsageAsync(hospitalId, cancellationToken));
     }
+}
+
+/// <summary>Shared PAYG metering so the estimate, the submit command and the
+/// monthly billing job all count "billable studies" the same way: distinct
+/// reports finalized in the period.</summary>
+public static class PaygBilling
+{
+    public static Task<int> CountFinalizedSinceAsync(IApplicationDbContext db, Guid hospitalId, DateTime since, CancellationToken ct) =>
+        db.DiagnosticReports
+            .AsNoTracking()
+            .CountAsync(r => r.HospitalId == hospitalId && r.IsFinalized && r.FinalizedAt != null && r.FinalizedAt >= since, ct);
 }
 
 /// <summary>Pure overage math — shared by the estimate query and the submit

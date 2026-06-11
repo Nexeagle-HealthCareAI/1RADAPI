@@ -758,6 +758,9 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.Edition).IsRequired().HasMaxLength(20).HasDefaultValue("RIS+PACS");
             entity.Property(e => e.Modules).IsRequired().HasMaxLength(50).HasDefaultValue(ModuleConstants.DefaultModules);
             entity.Property(e => e.PerGbOveragePrice).HasPrecision(18, 2);
+            entity.Property(e => e.Tier).IsRequired().HasMaxLength(20).HasDefaultValue("Starter");
+            entity.Property(e => e.BillingMode).IsRequired().HasMaxLength(20).HasDefaultValue("Subscription");
+            entity.Property(e => e.PerStudyPrice).HasPrecision(18, 2);
         });
 
         // HospitalSubscription Configuration
@@ -767,6 +770,8 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.HasKey(e => e.SubscriptionId);
             entity.Property(e => e.Status).IsRequired().HasMaxLength(50);
             entity.Property(e => e.BillingCycle).IsRequired().HasMaxLength(20).HasDefaultValue("Trial");
+            entity.Property(e => e.BillingMode).IsRequired().HasMaxLength(20).HasDefaultValue("Subscription");
+            entity.Property(e => e.PerStudyPrice).HasPrecision(18, 2);
             entity.Property(e => e.LockReason).HasMaxLength(100);
             // SQL default covers legacy rows (backfilled by the migration) and
             // any insert path that doesn't set Modules explicitly.
@@ -974,63 +979,82 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.HasIndex(e => e.SourceDisbursementId);
         });
 
-        // Seed Subscription Plans — one per (edition × billing cycle).
-        // PRICES + storage allowances below are PLACEHOLDERS; the business sets
-        // real values (the existing two GUIDs are kept as RIS+PACS so paid
-        // subscriptions already pointing at them stay valid).
-        modelBuilder.Entity<SubscriptionPlan>().HasData(
-            // ── RIS + Cloud PACS (full) ──────────────────────────────────────
-            new SubscriptionPlan
+        // Seed Subscription Plans — the full catalog: each edition × tier ×
+        // {Monthly,Yearly} subscription plan, plus a PAYG (per-study) and a Chain
+        // (custom) plan per edition. PRICES / allowances / caps are PLACEHOLDERS
+        // the business adjusts. PlanIds are deterministic (stable) from the
+        // natural key, so the seed is repeatable. (Prod keeps any legacy plan
+        // GUIDs via the hand-written SQL migration's natural-key merge.)
+        static Guid PlanGuid(string key)
+        {
+            using var md5 = System.Security.Cryptography.MD5.Create();
+            return new Guid(md5.ComputeHash(System.Text.Encoding.UTF8.GetBytes("plan|" + key)));
+        }
+
+        var editions = new[]
+        {
+            (Edition: "RIS", Modules: "RIS", PerGb: 0m, Payg: 8m, Tiers: new[]
             {
-                PlanId = Guid.Parse("A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D"),
-                Name = "Monthly", Edition = "RIS+PACS", Modules = "RIS,PACS",
-                Price = 4999, DurationInDays = 30, DiscountPercentage = 0,
-                PerAdditionalDoctorPrice = 1000,
-                IncludedStorageGb = 50, PerGbOveragePrice = 50
-            },
-            new SubscriptionPlan
+                (Tier: "Starter", M: 1999m,  Gb: (int?)null, U: (int?)2,  S: (int?)1),
+                (Tier: "Growth",  M: 4999m,  Gb: (int?)null, U: (int?)5,  S: (int?)1),
+                (Tier: "Clinic",  M: 9999m,  Gb: (int?)null, U: (int?)10, S: (int?)3),
+            }),
+            (Edition: "PACS", Modules: "PACS", PerGb: 50m, Payg: 15m, Tiers: new[]
             {
-                PlanId = Guid.Parse("B2C3D4E5-F6A7-4B6C-9D0E-1F2A3B4C5D6E"),
-                Name = "Yearly", Edition = "RIS+PACS", Modules = "RIS,PACS",
-                Price = 53988, DurationInDays = 365, DiscountPercentage = 10,
-                PerAdditionalDoctorPrice = 10800,
-                IncludedStorageGb = 50, PerGbOveragePrice = 50
-            },
-            // ── RIS only (no cloud DICOM) ────────────────────────────────────
-            new SubscriptionPlan
+                (Tier: "Starter", M: 2999m,  Gb: (int?)100,  U: (int?)5,  S: (int?)1),
+                (Tier: "Growth",  M: 6999m,  Gb: (int?)500,  U: (int?)10, S: (int?)1),
+                (Tier: "Clinic",  M: 14999m, Gb: (int?)1024, U: (int?)20, S: (int?)3),
+            }),
+            (Edition: "RIS+PACS", Modules: "RIS,PACS", PerGb: 50m, Payg: 25m, Tiers: new[]
             {
-                PlanId = Guid.Parse("C3D4E5F6-A7B8-4C7D-AE1F-2A3B4C5D6E7F"),
-                Name = "Monthly", Edition = "RIS", Modules = "RIS",
-                Price = 2999, DurationInDays = 30, DiscountPercentage = 0,
-                PerAdditionalDoctorPrice = 1000,
-                IncludedStorageGb = null, PerGbOveragePrice = 0
-            },
-            new SubscriptionPlan
+                (Tier: "Starter", M: 3999m,  Gb: (int?)100,  U: (int?)2,  S: (int?)1),
+                (Tier: "Growth",  M: 9999m,  Gb: (int?)500,  U: (int?)5,  S: (int?)1),
+                (Tier: "Clinic",  M: 19999m, Gb: (int?)1024, U: (int?)10, S: (int?)3),
+            }),
+        };
+
+        var seedPlans = new List<SubscriptionPlan>();
+        foreach (var e in editions)
+        {
+            foreach (var t in e.Tiers)
             {
-                PlanId = Guid.Parse("D4E5F6A7-B8C9-4D8E-BF2A-3B4C5D6E7F80"),
-                Name = "Yearly", Edition = "RIS", Modules = "RIS",
-                Price = 32388, DurationInDays = 365, DiscountPercentage = 10,
-                PerAdditionalDoctorPrice = 10800,
-                IncludedStorageGb = null, PerGbOveragePrice = 0
-            },
-            // ── Cloud PACS only (teleradiology) ──────────────────────────────
-            new SubscriptionPlan
-            {
-                PlanId = Guid.Parse("E5F6A7B8-C9D0-4E9F-C03B-4C5D6E7F8091"),
-                Name = "Monthly", Edition = "PACS", Modules = "PACS",
-                Price = 3499, DurationInDays = 30, DiscountPercentage = 0,
-                PerAdditionalDoctorPrice = 1000,
-                IncludedStorageGb = 100, PerGbOveragePrice = 50
-            },
-            new SubscriptionPlan
-            {
-                PlanId = Guid.Parse("F6A7B8C9-D0E1-4F90-D14C-5D6E7F8091A2"),
-                Name = "Yearly", Edition = "PACS", Modules = "PACS",
-                Price = 37788, DurationInDays = 365, DiscountPercentage = 10,
-                PerAdditionalDoctorPrice = 10800,
-                IncludedStorageGb = 100, PerGbOveragePrice = 50
+                seedPlans.Add(new SubscriptionPlan
+                {
+                    PlanId = PlanGuid($"{e.Edition}|{t.Tier}|Monthly"),
+                    Name = "Monthly", Edition = e.Edition, Modules = e.Modules, Tier = t.Tier,
+                    Price = t.M, DurationInDays = 30, DiscountPercentage = 0, PerAdditionalDoctorPrice = 1000,
+                    IncludedStorageGb = t.Gb, PerGbOveragePrice = e.PerGb,
+                    BillingMode = "Subscription", PerStudyPrice = 0, MaxUsers = t.U, MaxSites = t.S,
+                });
+                seedPlans.Add(new SubscriptionPlan
+                {
+                    PlanId = PlanGuid($"{e.Edition}|{t.Tier}|Yearly"),
+                    Name = "Yearly", Edition = e.Edition, Modules = e.Modules, Tier = t.Tier,
+                    Price = Math.Round(t.M * 12 * 0.9m, 0), DurationInDays = 365, DiscountPercentage = 10, PerAdditionalDoctorPrice = 10800,
+                    IncludedStorageGb = t.Gb, PerGbOveragePrice = e.PerGb,
+                    BillingMode = "Subscription", PerStudyPrice = 0, MaxUsers = t.U, MaxSites = t.S,
+                });
             }
-        );
+            // Pay-as-you-go (monthly arrears, no base, no caps).
+            seedPlans.Add(new SubscriptionPlan
+            {
+                PlanId = PlanGuid($"{e.Edition}|PAYG"),
+                Name = "PAYG", Edition = e.Edition, Modules = e.Modules, Tier = "PAYG",
+                Price = 0, DurationInDays = 30, DiscountPercentage = 0, PerAdditionalDoctorPrice = 0,
+                IncludedStorageGb = null, PerGbOveragePrice = 0,
+                BillingMode = "PerStudy", PerStudyPrice = e.Payg, MaxUsers = null, MaxSites = null,
+            });
+            // Chain / enterprise — bespoke, not self-serve.
+            seedPlans.Add(new SubscriptionPlan
+            {
+                PlanId = PlanGuid($"{e.Edition}|Chain"),
+                Name = "Custom", Edition = e.Edition, Modules = e.Modules, Tier = "Chain",
+                Price = 0, DurationInDays = 30, DiscountPercentage = 0, PerAdditionalDoctorPrice = 0,
+                IncludedStorageGb = null, PerGbOveragePrice = e.PerGb,
+                BillingMode = "Subscription", PerStudyPrice = 0, MaxUsers = null, MaxSites = null, IsCustom = true,
+            });
+        }
+        modelBuilder.Entity<SubscriptionPlan>().HasData(seedPlans);
 
 
 

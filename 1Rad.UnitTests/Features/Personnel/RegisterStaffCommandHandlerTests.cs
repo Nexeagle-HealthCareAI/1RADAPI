@@ -17,11 +17,16 @@ public class RegisterStaffCommandHandlerTests
     private readonly Mock<IUserContext> _userContextMock;
     private readonly Mock<IPublisher> _publisherMock;
     private readonly Mock<ILogger<RegisterStaffCommandHandler>> _loggerMock;
+    private readonly Mock<ISubscriptionLimitsService> _limitsMock;
     private readonly ApplicationDbContext _context;
 
     public RegisterStaffCommandHandlerTests()
     {
         _hasherMock = new Mock<IPasswordHasher>();
+        // No seat cap by default so existing tests are unaffected.
+        _limitsMock = new Mock<ISubscriptionLimitsService>();
+        _limitsMock.Setup(x => x.GetUserLimitAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new LimitStatus(null, 0));
         _userContextMock = new Mock<IUserContext>();
         _publisherMock = new Mock<IPublisher>();
         _loggerMock = new Mock<ILogger<RegisterStaffCommandHandler>>();
@@ -58,7 +63,7 @@ public class RegisterStaffCommandHandlerTests
         _userContextMock.Setup(x => x.HospitalId).Returns(hospitalId);
         _hasherMock.Setup(x => x.Hash("Password123!")).Returns("hashed_password");
 
-        var handler = new RegisterStaffCommandHandler(_context, _hasherMock.Object);
+        var handler = new RegisterStaffCommandHandler(_context, _hasherMock.Object, _limitsMock.Object);
         var command = new RegisterStaffCommand(
             hospitalId,
             "Dr. John Doe",
@@ -138,7 +143,7 @@ public class RegisterStaffCommandHandlerTests
 
         _userContextMock.Setup(x => x.HospitalId).Returns(hospitalId2);
 
-        var handler = new RegisterStaffCommandHandler(_context, _hasherMock.Object);
+        var handler = new RegisterStaffCommandHandler(_context, _hasherMock.Object, _limitsMock.Object);
         var command = new RegisterStaffCommand(
             hospitalId2,
             "Dr. John Doe",
@@ -201,7 +206,7 @@ public class RegisterStaffCommandHandlerTests
 
         _userContextMock.Setup(x => x.HospitalId).Returns(hospitalId);
 
-        var handler = new RegisterStaffCommandHandler(_context, _hasherMock.Object);
+        var handler = new RegisterStaffCommandHandler(_context, _hasherMock.Object, _limitsMock.Object);
         var command = new RegisterStaffCommand(
             hospitalId,
             "Dr. John Doe",
@@ -230,7 +235,7 @@ public class RegisterStaffCommandHandlerTests
         _userContextMock.Setup(x => x.HospitalId).Returns(hospitalId);
         _hasherMock.Setup(x => x.Hash(It.IsAny<string>())).Returns("hashed_password");
 
-        var handler = new RegisterStaffCommandHandler(_context, _hasherMock.Object);
+        var handler = new RegisterStaffCommandHandler(_context, _hasherMock.Object, _limitsMock.Object);
         var command = new RegisterStaffCommand(
             hospitalId,
             "Dr. John Doe",

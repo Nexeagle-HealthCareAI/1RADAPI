@@ -28,4 +28,23 @@ public class SubscriptionPlan : BaseEntity
     // Price per GB of PACS storage used beyond IncludedStorageGb, assessed at
     // each billing event (renew/upgrade). 0 for RIS-only.
     public decimal PerGbOveragePrice { get; set; }
+
+    // Pricing tier within the edition: Starter | Growth | Clinic | Chain | PAYG.
+    public string Tier { get; set; } = "Starter";
+
+    // Seat / site caps for this tier. NULL = unlimited. Enforced on
+    // staff-add (users) and center-add (sites).
+    public int? MaxUsers { get; set; }
+    public int? MaxSites { get; set; }
+
+    // Billing mode this plan sells. "Subscription" = flat monthly/yearly base
+    // (+ metered storage overage); "PerStudy" = pay-as-you-go, no base, billed
+    // monthly in arrears at PerStudyPrice per finalized report.
+    public string BillingMode { get; set; } = "Subscription";
+
+    // PAYG rate per finalized report. 0 for subscription plans.
+    public decimal PerStudyPrice { get; set; }
+
+    // Chain / enterprise tier — priced bespoke, not self-serve selectable.
+    public bool IsCustom { get; set; }
 }

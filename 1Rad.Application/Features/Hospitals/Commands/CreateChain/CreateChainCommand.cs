@@ -18,4 +18,5 @@ public class CreateChainResponse
     public bool Success { get; set; }
     public Guid? HospitalId { get; set; }
     public string? Error { get; set; }
+    public string? ErrorCode { get; set; }
 }
