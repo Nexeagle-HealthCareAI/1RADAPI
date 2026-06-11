@@ -1,83 +1,101 @@
-# Locking down the PHI blob container (`dicom-files`)
+# Securing PHI blob reads (`dicom-files`) — Front Door approach
 
-This is the **final** step of the finding 1/2 security fix (anonymous account-wide
-blob read + public containers). Do it **only after** the signed-capability read
-path has shipped and been verified, per the agreed "read-access first, then
-private" sequencing.
+This covers the finding 1/2 security fix (anonymous account-wide blob read +
+publicly-readable PHI). **Chosen approach (decided with the team): keep Azure
+Front Door in front of the blob for DICOM speed, lock the storage account so the
+blob is only reachable *via* Front Door, and enforce access at Front Door — do
+NOT route slice reads through the API.** This preserves the existing Front Door
+edge-cache that DICOM relies on.
 
-## What already shipped (code)
+## What shipped in code
 
-- `IAssetUrlSigner` / `AssetUrlSigner` — HMAC-SHA256 capability signatures bound
-  to a blob's path + expiry.
-- `Study/proxy-asset` no longer serves the PHI container anonymously. A request
-  is authorized only if it carries **a valid signature**, **a Bearer entitled to
-  the blob's hospital**, or targets an **intentionally-public branding container**
-  (`prescriptions`, used by the public patient-tracking letterhead).
-- The manifest (`{appt}/manifest`, `by-study/{id}/manifest`) and viewer-config
-  (`{appt}/viewer`) endpoints now hand the browser **signed** proxy URLs for
-  every `dicom-files` read (slices, thumbnails, blobUrl). The DICOM viewer's
-  bare `fetch(sliceUrl)` works with no Bearer because the signature is the
-  capability.
+- **`Study/proxy-asset` hardened (closes finding 1).** It is no longer an
+  anonymous account-wide reader. A request is authorized only if it carries a
+  valid signature, a Bearer entitled to the blob's hospital, or targets an
+  intentionally-public branding container (`prescriptions`, used by the public
+  patient-tracking letterhead). The proxy is now used only for letterhead and
+  the apiClient DICOM-download fallback — **not** the viewer's hot path.
+- **Read seams emit Front Door URLs.** The manifest (`{appt}/manifest`,
+  `by-study/{id}/manifest`), viewer-config, and study endpoints hand the browser
+  `ToCdn(blobUrl)` URLs (rewritten to `AzureBlobStorage:CdnBaseUrl`), so the
+  viewer's `fetch(sliceUrl)` hits the Front Door edge cache, not the API. This
+  is the original speed path, restored.
+- **`AssetUrlSigner` + the proxy's signature branch remain in place** but are
+  *unused by the read seams* under this approach. They're kept so an
+  app-minted-token path is available if Front Door token auth is adopted later
+  (see "Adding Front Door token auth" below) — `AssetUrlSigner` signs by blob
+  *path*, so the same signature validates a Front Door URL.
 
-No frontend change was required: the viewer fetches whatever URL the manifest
-returns, and the legacy-ZIP CORS fallback uses `apiClient` (Bearer), which the
-proxy's Bearer branch authorizes.
+`NOT SSRF`: `DownloadFileAsync` resolves container/path against our own account
+client and ignores the URL host.
 
-## Optional config
+## Infra steps (Azure — the actual finding-2 fix)
+
+The blob must not be reachable directly from the internet; Front Door must be the
+only ingress.
+
+1. **Restrict the storage account to Front Door.** Storage account → Networking →
+   set public network access to "Disabled" / "Selected networks", and allow only
+   Front Door — either via **Private Link** (Front Door Premium) or the storage
+   **resource-instance / `AzureFrontDoor.Backend` service-tag** rule. Direct blob
+   URLs (the old anonymous-read exposure, and any leaked URL) then fail; only
+   Front Door can read.
+2. **Front Door origin auth.** If you also tighten the container ACL, Front Door
+   reads the origin via **managed identity**. (If the ACL stays "Blob", the
+   firewall in step 1 is what provides isolation.)
+3. **Decide Front Door access control** — see the two postures below.
+
+### Posture A — storage firewall only (smallest change, what's coded today)
+
+Front Door serves any URL it's asked for; security rests on (a) the blob being
+unreachable except via Front Door, and (b) slice paths being high-entropy GUIDs
+(`{hospitalId:N}/{studyId|apptId:N}/extracted/...`). **Residual:** anyone who
+obtains a Front Door URL (shared link, logs) can read that one blob until it's
+deleted — capability-by-obscurity, no per-request auth. Acceptable as an interim
+posture; it removes account-wide enumeration and the public-container exposure.
+
+### Posture B — Front Door token auth (full access control)
+
+Add a Front Door **rules-engine / WAF token (signed-URL) rule** so only
+backend-minted URLs are served, validated at the edge on every request (cache key
+stays the path, so edge-cache is fully preserved). This needs **Front Door
+Premium** and a small app change: swap the read seams from `ToCdn(blobUrl)` to a
+`SignedCdnUrl(blobUrl)` that appends the token Front Door expects (reuse
+`AssetUrlSigner` — it already signs by path; align its HMAC with Front Door's
+token format). This is the proper end-state; budget a short spike to match the
+token formats.
+
+## Verify
+
+1. **Viewer speed** — open a study; slices load from the Front Door host (check
+   Network tab shows the CDN host, not `…/api/v1/Study/proxy-asset`).
+2. **Direct blob blocked** — `GET` a raw `…blob.core.windows.net/dicom-files/…`
+   URL from outside Azure → blocked by the storage firewall (403/timeout).
+3. **Proxy denies anonymous PHI** — `GET /api/v1/Study/proxy-asset?url=<a
+   dicom-files blob url>` with no token and no `sig` → **403**.
+4. **Letterhead still renders** — public patient-tracking page (`prescriptions`
+   stays open).
+5. (Posture B only) a Front Door URL **without** a valid token → rejected at the
+   edge.
+
+## Config
 
 | Key | Default | Notes |
 | --- | --- | --- |
-| `AssetProxy:SigningKey` | falls back to `Jwt:Secret` | Set a dedicated key to rotate signing independently of JWT. |
-| `AssetProxy:SignedUrlTtlHours` | `8` | How long a signed read URL stays valid. Must outlast a reporting/viewing session; the manifest re-mints on each load. |
-
-No new config is **required** — it works out of the box off `Jwt:Secret`.
-
-## Verify BEFORE flipping the container private
-
-With `dicom-files` still public-read, confirm every read surface works through
-the new signed path (i.e. it's the signature, not public-read, doing the work):
-
-1. Open a study in the DICOM viewer → slices + thumbnails load.
-2. Open a legacy (un-extracted ZIP) study → loads via the Bearer fallback.
-3. Patient tracking page (unauthenticated) → letterhead still renders
-   (`prescriptions` container stays open — unchanged).
-4. Report preview / Word export → letterhead renders.
-5. Sanity-check the proxy denies an anonymous PHI read **without** a signature:
-   `GET /api/v1/Study/proxy-asset?url=<a dicom-files blob url>` with no token and
-   no `sig` should return **403**.
-
-## Flip the container private (Azure)
-
-Once the above passes, set the `dicom-files` container access level to
-**Private (no anonymous access)**. Either:
-
-```bash
-az storage container set-permission \
-  --name dicom-files \
-  --account-name <storageAccount> \
-  --public-access off
-```
-
-or in the Portal: Storage account → Containers → `dicom-files` → Change access
-level → Private.
-
-Leave `prescriptions` (and any other branding container) as-is — it is
-intentionally public.
-
-## Re-verify after the flip
-
-Repeat steps 1–4 above. They must still pass (now genuinely depending on the
-signed/Bearer path). Step 5's 403 is now also enforced at the storage layer.
+| `AzureBlobStorage:CdnBaseUrl` | empty | Front Door base URL. Empty = `ToCdn` returns the raw blob URL (dev / no Front Door). |
+| `AssetProxy:SigningKey` | falls back to `Jwt:Secret` | Only used by the proxy signature branch / future Front Door token auth. |
+| `AssetProxy:SignedUrlTtlHours` | `8` | Ditto. |
 
 ## Notes / follow-ups
 
-- **CDN edge-cache tradeoff:** signed reads go through the API (`proxy-asset`),
-  not Front Door, so per-slice CDN edge caching is no longer in the read path.
-  The blobs still carry `Cache-Control: immutable`, so the browser caches them
-  locally. If edge caching becomes a perf need, configure Front Door token auth
-  against a private origin and sign CDN URLs instead — the URL shape can stay the
-  same.
-- `GetStudyAssets` (`{appt}/assets`) still returns raw blob URLs; its only
-  consumers (StudyPrefetcher, PatientTimeline) fetch through `apiClient` (Bearer)
-  and so are covered by the proxy's Bearer branch. Sign them too if a future
-  consumer fetches those URLs without a Bearer.
+- `GetStudyAssets` returns raw blob URLs; consumers (StudyPrefetcher,
+  PatientTimeline) fetch via `apiClient` (Bearer), covered by the proxy's Bearer
+  branch, or via Front Door once `ToCdn` is applied there if desired.
+- **Offline parity for PACS-only (study) reports — intentionally online-first.**
+  Saving offline already works (the autosave hook queues `addToOutbox('REPORT', payload)`
+  with `imagingStudyId`, replayed by `SyncEngine` to `POST /reporting/save`).
+  Crash-recovery on reload works (`fetchStudyReportingContext` restores the
+  `study_<id>` draft). Not supported: opening a study report while fully offline
+  (no IndexedDB cache / `pullReports` for studies) — add later by extending
+  `reportsRepo` + `SyncEngine.pullReports` and a cache fallback in
+  `fetchStudyReportingContext`.

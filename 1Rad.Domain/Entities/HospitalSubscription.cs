@@ -19,6 +19,13 @@ public class HospitalSubscription : BaseEntity
     // different SKUs. Legacy rows are backfilled to the full product.
     public string Modules { get; set; } = Constants.ModuleConstants.DefaultModules;
 
+    // Cloud PACS downgrade lifecycle. Stamped when PACS is removed from
+    // Modules; cleared when it's added back. While set and within the grace
+    // window the center keeps READ-ONLY access to its studies (view/browse/
+    // export/delete) but cannot ingest or report; after the window an
+    // auto-delete job removes the studies. NULL = PACS active or never had it.
+    public DateTime? PacsRemovedAt { get; set; }
+
     // PACS storage allowance in GB for this center. NULL = unmetered (legacy
     // and RIS-only subscriptions). When the hospital's persisted bytes exceed
     // this, NEW DICOM uploads are rejected (STORAGE_QUOTA_EXCEEDED) — viewing

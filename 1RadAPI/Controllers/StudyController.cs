@@ -75,8 +75,15 @@ namespace _1RadAPI.Controllers
             TimeSpan.FromHours(_configuration.GetValue("AssetProxy:SignedUrlTtlHours", 8));
 
         // Wraps a dicom-files blob URL as a signed, absolute proxy URL the
-        // browser can fetch with no Bearer (the DICOM viewer's bare fetch). The
-        // signature is the capability; see <see cref="IAssetUrlSigner"/>.
+        // browser can fetch with no Bearer (the signature is the capability;
+        // see <see cref="IAssetUrlSigner"/>).
+        //
+        // NOTE: currently UNUSED. The read seams emit ToCdn() Front Door URLs
+        // (Posture A — security via the storage firewall that locks the blob to
+        // Front Door). This helper + the proxy's signature branch are retained
+        // as the ready-made hook for Posture B (Front Door token auth): point it
+        // at the CDN host instead of the API and align the HMAC with Front Door.
+        // See docs/PACS_PRIVATE_CONTAINER_RUNBOOK.md.
         private string? SignedProxyUrl(string? blobUrl)
         {
             if (string.IsNullOrEmpty(blobUrl)) return blobUrl;
@@ -426,7 +433,7 @@ namespace _1RadAPI.Controllers
                         appointmentServiceId = a.AppointmentServiceId,
                         fileName = a.FileName,
                         fileType = a.FileType,
-                        blobUrl = SignedProxyUrl(a.BlobUrl),
+                        blobUrl = ToCdn(a.BlobUrl),
                         extractionStatus = "NotApplicable",
                         series = (object?)null,
                     };
@@ -442,7 +449,7 @@ namespace _1RadAPI.Controllers
                         appointmentServiceId = a.AppointmentServiceId,
                         fileName = a.FileName,
                         fileType = a.FileType,
-                        blobUrl = SignedProxyUrl(a.BlobUrl),
+                        blobUrl = ToCdn(a.BlobUrl),
                         extractionStatus = a.ExtractionStatus ?? "Pending",
                         series = (object?)null,
                     };
@@ -458,14 +465,14 @@ namespace _1RadAPI.Controllers
                             seriesUID = g.Key,
                             seriesDescription = first.SeriesDescription,
                             modality = first.Modality,
-                            thumbnailUrl = SignedProxyUrl(first.ThumbnailUrl),
+                            thumbnailUrl = ToCdn(first.ThumbnailUrl),
                             slices = g.OrderBy(s => s.InstanceNumber ?? int.MaxValue)
                                       .ThenBy(s => s.SopInstanceUID)
                                       .Select(s => new
                                       {
                                           sopInstanceUID = s.SopInstanceUID,
                                           instanceNumber = s.InstanceNumber,
-                                          url = SignedProxyUrl(s.BlobUrl),
+                                          url = ToCdn(s.BlobUrl),
                                           metadata = s.MetadataJson,
                                       })
                                       .ToList(),
@@ -485,7 +492,7 @@ namespace _1RadAPI.Controllers
                     appointmentServiceId = a.AppointmentServiceId,
                     fileName = a.FileName,
                     fileType = a.FileType,
-                    blobUrl = SignedProxyUrl(a.BlobUrl), // kept for fallback compat
+                    blobUrl = ToCdn(a.BlobUrl), // kept for fallback compat
                     extractionStatus = "Extracted",
                     series = (object?)seriesGroups,
                 };
@@ -526,7 +533,7 @@ namespace _1RadAPI.Controllers
                         id = a.Id,
                         fileName = a.FileName,
                         fileType = a.FileType,
-                        blobUrl = SignedProxyUrl(a.BlobUrl),
+                        blobUrl = ToCdn(a.BlobUrl),
                         uploadedAt = a.UploadedAt
                     }),
                     deviceInfo = deviceInfo,
@@ -1639,6 +1646,118 @@ namespace _1RadAPI.Controllers
             catch (Exception ex)
             {
                 return StatusCode(500, new { success = false, error = $"STUDY_ASSIGN_FAILURE: {ex.Message}" });
+            }
+        }
+
+        [HttpDelete("studies/{studyId:guid}")]
+        [RequiresModule(ModuleConstants.Pacs)]
+        public async Task<IActionResult> DeleteStudy(Guid studyId)
+        {
+            try
+            {
+                var (study, error) = await LoadStudyForWriteAsync(studyId);
+                if (error != null) return error;
+
+                // Only PACS-only studies are deletable here. A study linked to an
+                // appointment shares its assets with that visit (asset carries both
+                // FKs), so deleting it would wipe the visit's imaging — manage those
+                // through the appointment instead.
+                if (study!.AppointmentId != null)
+                    return BadRequest(new { success = false, error = "This study is linked to an appointment; manage its imaging from the appointment instead." });
+
+                var assets = await _context.StudyAssets
+                    .IgnoreQueryFilters()
+                    .Where(a => a.ImagingStudyId == study.Id)
+                    .Include(a => a.Slices)
+                    .ToListAsync();
+
+                // Every blob this study owns: original assets + extracted slices +
+                // thumbnails. Stored URLs are raw blob URLs (not CDN), so deleting
+                // by URL is precise regardless of the folder convention.
+                var urls = new List<string>();
+                foreach (var a in assets)
+                {
+                    if (!string.IsNullOrWhiteSpace(a.BlobUrl)) urls.Add(a.BlobUrl);
+                    foreach (var s in a.Slices)
+                    {
+                        if (!string.IsNullOrWhiteSpace(s.BlobUrl)) urls.Add(s.BlobUrl);
+                        if (!string.IsNullOrWhiteSpace(s.ThumbnailUrl)) urls.Add(s.ThumbnailUrl);
+                    }
+                }
+
+                // Best-effort blob deletion with bounded concurrency. A transient
+                // blob failure must not block the DB cleanup (a re-run finishes it).
+                var deleted = 0;
+                for (int i = 0; i < urls.Count; i += 16)
+                {
+                    var batch = urls.Skip(i).Take(16).Select(async u =>
+                    {
+                        try { await _blobService.DeleteFileAsync(u, "dicom-files"); System.Threading.Interlocked.Increment(ref deleted); }
+                        catch { /* best-effort; orphaned blob is harmless */ }
+                    });
+                    await Task.WhenAll(batch);
+                }
+
+                // DB cleanup: study-based reports (NoAction FK) → assets (cascade
+                // deletes their slices) → the study itself.
+                var reports = await _context.DiagnosticReports
+                    .IgnoreQueryFilters()
+                    .Where(r => r.ImagingStudyId == study.Id)
+                    .ToListAsync();
+                if (reports.Count > 0) _context.DiagnosticReports.RemoveRange(reports);
+                _context.StudyAssets.RemoveRange(assets);
+                _context.ImagingStudies.Remove(study);
+                await _context.SaveChangesAsync(default);
+                _storage.Invalidate(study.HospitalId);
+
+                return Ok(new
+                {
+                    success = true,
+                    data = new { imagingStudyId = study.Id, deletedAssets = assets.Count, deletedBlobs = deleted },
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, error = $"STUDY_DELETE_FAILURE: {ex.Message}" });
+            }
+        }
+
+        // Export = the original uploaded files for download (e.g. before a
+        // post-grace auto-delete). A GET, so it stays available during the PACS
+        // read-only grace window.
+        [HttpGet("studies/{studyId:guid}/export")]
+        [RequiresModule(ModuleConstants.Pacs)]
+        public async Task<IActionResult> ExportStudy(Guid studyId)
+        {
+            try
+            {
+                var study = await _context.ImagingStudies
+                    .FirstOrDefaultAsync(s => s.Id == studyId);
+                if (study == null)
+                    return NotFound(new { success = false, error = "Imaging study not found." });
+
+                var assets = await _context.StudyAssets
+                    .Where(a => a.ImagingStudyId == study.Id)
+                    .OrderByDescending(a => a.UploadedAt)
+                    .ToListAsync();
+
+                var files = assets.Select(a => new
+                {
+                    assetId = a.Id,
+                    fileName = a.FileName,
+                    fileType = a.FileType,
+                    downloadUrl = ToCdn(a.BlobUrl),
+                }).ToList();
+
+                return Ok(new
+                {
+                    success = true,
+                    data = new { imagingStudyId = study.Id, patientName = study.PatientName, files },
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, error = $"STUDY_EXPORT_FAILURE: {ex.Message}" });
             }
         }
 

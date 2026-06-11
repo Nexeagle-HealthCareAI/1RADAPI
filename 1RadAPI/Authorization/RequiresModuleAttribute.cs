@@ -54,16 +54,37 @@ public sealed class RequiresModuleAttribute : Attribute, IAsyncAuthorizationFilt
             return;
         }
 
-        if (!await entitlements.HasModuleAsync(hospitalId, _module, context.HttpContext.RequestAborted))
+        var access = await entitlements.GetModuleAccessAsync(hospitalId, _module, context.HttpContext.RequestAborted);
+        if (access == ModuleAccess.Full) return; // fully entitled — allow.
+
+        if (access == ModuleAccess.GraceRead)
         {
+            // PACS removed but inside the read-only grace window. Allow reads
+            // (view/browse/export = GET/HEAD) and cleanup (DELETE = export-or-
+            // delete); block ingestion/changes (POST/PUT/PATCH).
+            var method = context.HttpContext.Request.Method;
+            if (HttpMethods.IsGet(method) || HttpMethods.IsHead(method) || HttpMethods.IsDelete(method))
+                return;
+
             context.Result = new ObjectResult(new
             {
                 success = false,
-                error = $"This feature requires the {_module} module, which is not part of this center's subscription.",
-                errorCode = "MODULE_NOT_ENABLED",
+                error = $"The {_module} module was removed; your studies are in a read-only grace period. New uploads and changes are disabled — you can still view, export, or delete existing studies.",
+                errorCode = "MODULE_GRACE_READONLY",
                 module = _module,
             })
             { StatusCode = StatusCodes.Status403Forbidden };
+            return;
         }
+
+        // ModuleAccess.None — not entitled, no active grace.
+        context.Result = new ObjectResult(new
+        {
+            success = false,
+            error = $"This feature requires the {_module} module, which is not part of this center's subscription.",
+            errorCode = "MODULE_NOT_ENABLED",
+            module = _module,
+        })
+        { StatusCode = StatusCodes.Status403Forbidden };
     }
 }

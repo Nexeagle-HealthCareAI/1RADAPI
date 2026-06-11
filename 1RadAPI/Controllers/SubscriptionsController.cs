@@ -1,7 +1,9 @@
 using _1Rad.Application.Features.Subscriptions.Commands.ApprovePaymentRequest;
+using _1Rad.Application.Features.Subscriptions.Commands.SetHospitalModules;
 using _1Rad.Application.Features.Subscriptions.Commands.SubmitPaymentRequest;
 using _1Rad.Application.Features.Subscriptions.Queries.GetSubscriptionStatus;
 using _1Rad.Application.Features.Subscriptions.Queries.GetAllPaymentRequests;
+using _1Rad.Domain.Constants;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -73,6 +75,22 @@ public class SubscriptionsController : ControllerBase
         var result = await _mediator.Send(new _1Rad.Application.Features.Subscriptions.Queries.GetSubscriptionTransactions.GetSubscriptionTransactionsQuery());
         return Ok(new { success = true, data = result });
     }
+
+    /// <summary>
+    /// [ADMIN] Set the active center's product modules (RIS / PACS). Removing
+    /// PACS starts the read-only downgrade grace period (after which studies are
+    /// auto-deleted); re-adding it cancels the grace.
+    /// </summary>
+    [HttpPost("modules")]
+    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator}")]
+    public async Task<IActionResult> SetModules([FromBody] SetModulesBody body)
+    {
+        var result = await _mediator.Send(new SetHospitalModulesCommand(body?.Modules ?? string.Empty));
+        return result.Success
+            ? Ok(new { success = true, data = result })
+            : BadRequest(new { success = false, error = result.Error });
+    }
 }
 
 public record ApprovePaymentBody(string? ReviewNote);
+public record SetModulesBody(string? Modules);
