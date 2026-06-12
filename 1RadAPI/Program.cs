@@ -167,6 +167,18 @@ builder.Services.AddAuthorization(options =>
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
 
+// Response compression (Brotli + Gzip — added by default when no providers are
+// specified). The big win is the DICOM manifest JSON: a ~400-slice study ships
+// ~300 KB of metadata that compresses ~5-10x, so the viewer OPENS faster. Safe
+// over HTTPS here — the manifest has no attacker-controlled secret to leak
+// (BREACH N/A), and it's Bearer-authed, not cookie-reflected.
+builder.Services.AddResponseCompression(options =>
+{
+    options.EnableForHttps = true; // App Service serves over HTTPS
+    options.MimeTypes = Microsoft.AspNetCore.ResponseCompression.ResponseCompressionDefaults.MimeTypes
+        .Concat(new[] { "application/json" });
+});
+
 var app = builder.Build();
 
 // Ops guard: without CdnBaseUrl the viewer's slice URLs point straight at
@@ -194,6 +206,10 @@ else
 // exception handler can include the correlation ID in error responses.
 app.UseMiddleware<CorrelationIdMiddleware>();
 app.UseMiddleware<ExceptionHandlingMiddleware>(); // Custom Global Exception Handler
+
+// Compress responses early so it wraps every downstream response (esp. the
+// DICOM manifest JSON). Must precede the controllers that produce the bodies.
+app.UseResponseCompression();
 
 // Enable Swagger in all environments for testing on Azure
 app.UseSwagger();
