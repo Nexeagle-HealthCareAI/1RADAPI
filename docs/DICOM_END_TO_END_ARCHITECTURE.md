@@ -120,6 +120,13 @@ fo-dicom.Codecs 5.16 (native HTJ2K/JPEG-LS/J2K) + ImageSharp.
   host → the Front Door host (`AzureBlobStorage:CdnBaseUrl`).
 - **Lifecycle:** orphan-sweep job (staging blobs always; full reconcile opt-in
   dry-run); re-extraction self-cleans prior blobs; PACS-downgrade auto-delete.
+- **Source reclaim (opt-in, `Dicom:DeleteSourceAfterExtraction`):** the original
+  upload ZIP is retained by default (re-extraction safety net) — so a 100 MB
+  upload costs ~150–210 MB stored (ZIP + HTJ2K slices). With the flag on, the ZIP
+  is deleted **after** the slice index is durably committed and **only** on a
+  fully clean run; footprint collapses to just the slices (~50–110 MB). A
+  re-extract of a reclaimed study short-circuits to the committed slices instead
+  of failing.
 
 ---
 

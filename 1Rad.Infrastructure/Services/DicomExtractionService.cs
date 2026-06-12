@@ -55,6 +55,17 @@ public class DicomExtractionService : IDicomExtractionService
     // Flip Dicom:WriteProgressiveFrames=true once the frontend wadors path ships.
     private readonly bool _writeFrames;
 
+    // Whether to DELETE the original source ZIP after a fully clean extraction.
+    // OFF by default. The retained ZIP is a re-extraction safety net but is pure
+    // overhead once the per-slice HTJ2K blobs (which ARE the viewable study) are
+    // committed — keeping it makes a 100 MB upload cost ~150-210 MB stored. With
+    // this on, the footprint collapses to just the slices. Reclamation happens
+    // ONLY after the slice index is durably saved AND only when no slice was
+    // skipped, so a re-extract can never be left with neither source nor index.
+    // Re-extracting a study whose source was reclaimed short-circuits to the
+    // already-committed slices instead of failing. Dicom:DeleteSourceAfterExtraction.
+    private readonly bool _deleteSourceAfterExtraction;
+
     public DicomExtractionService(
         IApplicationDbContext db,
         IBlobService blob,
@@ -67,6 +78,7 @@ public class DicomExtractionService : IDicomExtractionService
         _logger = logger;
         _matching = matching;
         _writeFrames = configuration.GetValue("Dicom:WriteProgressiveFrames", false);
+        _deleteSourceAfterExtraction = configuration.GetValue("Dicom:DeleteSourceAfterExtraction", false);
 
         // fo-dicom uses a manager pattern — wire ImageSharp + native codecs
         // (JPEG-LS, JPEG2000, JPEG-baseline transcoders) once. Idempotent
@@ -243,6 +255,32 @@ public class DicomExtractionService : IDicomExtractionService
             .IgnoreQueryFilters()
             .Where(s => s.AssetId == assetId)
             .ToListAsync(cancellationToken);
+
+        // Source-reclaimed guard: in storage-saving mode the original ZIP is
+        // deleted after a clean extraction. A re-extract then has no source to
+        // re-gather from — but the committed per-slice blobs already ARE the
+        // study. Detect the missing source (size 0) with slices present and
+        // short-circuit to Extracted/Ready, rather than wiping good slices below
+        // and then failing the gather. (Only zip is ever reclaimed.)
+        if (ext == "zip" && prior.Count > 0
+            && await _blob.GetBlobSizeByUrlAsync(asset.BlobUrl) == 0)
+        {
+            _logger.LogInformation(
+                "[DICOM_EXTRACT] Asset {AssetId}: source ZIP already reclaimed and {N} slices exist — treating as already extracted (no re-gather).",
+                assetId, prior.Count);
+            asset.ExtractionStatus      = "Extracted";
+            asset.ExtractionSliceCount  = prior.Count;
+            asset.ExtractionCompletedAt = DateTime.UtcNow;
+            asset.ExtractionError       = null;
+            if (study != null)
+            {
+                study.Status   = ImagingStudyStatus.Ready;
+                study.ReadyAt ??= DateTime.UtcNow;
+            }
+            await _db.SaveChangesAsync(cancellationToken);
+            return prior.Count;
+        }
+
         if (prior.Count > 0)
         {
             foreach (var s in prior)
@@ -446,7 +484,33 @@ public class DicomExtractionService : IDicomExtractionService
             if (study != null)
                 await RefineStudyFromDicomAsync(study, parsedSlices[0], cancellationToken);
 
+            // Durable commit of the slice index + Extracted status BEFORE any
+            // source deletion — so a crash can never leave a study with neither a
+            // re-gatherable source nor a saved index.
             await _db.SaveChangesAsync(cancellationToken);
+
+            // Storage-saving (opt-in): the per-slice HTJ2K blobs are now committed
+            // and ARE the viewable study, so the original ZIP is redundant. Reclaim
+            // it — but only on a FULLY clean run (no skipped slices), so we never
+            // drop the one recoverable source for a partial study. Best-effort: a
+            // failed delete just leaves the ZIP for the orphan sweep / next run.
+            if (ext == "zip" && _deleteSourceAfterExtraction && failedSliceCount == 0 && originalBlobBytes > 0)
+            {
+                try
+                {
+                    await _blob.DeleteFileAsync(asset.BlobUrl, Container);
+                    asset.StorageBytes = totalUploadedBytes;   // ZIP reclaimed — drop it from the meter
+                    await _db.SaveChangesAsync(cancellationToken);
+                    _logger.LogInformation(
+                        "[DICOM_EXTRACT] Asset {AssetId}: source ZIP reclaimed after clean extraction — freed ~{MB:N1} MB (footprint now {Now:N1} MB).",
+                        assetId, originalBlobBytes / 1_048_576.0, totalUploadedBytes / 1_048_576.0);
+                }
+                catch (Exception delEx)
+                {
+                    _logger.LogWarning(delEx,
+                        "[DICOM_EXTRACT] Asset {AssetId}: source ZIP delete failed — keeping it (sweep can reclaim later).", assetId);
+                }
+            }
 
             // Compression summary — only useful when transcoding ran for >0
             // slices. Helps confirm in prod logs that JPEG-LS is paying off.
