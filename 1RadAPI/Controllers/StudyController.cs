@@ -275,6 +275,27 @@ namespace _1RadAPI.Controllers
             }
         }
 
+        /// <summary>
+        /// Pulls the raw `frameUrl` (blob URL) out of a slice's metadata JSON for
+        /// the byte-range progressive path. Returns null if absent (legacy slice
+        /// with no streamable frame) so the viewer falls back to the .dcm.
+        /// </summary>
+        private static string? ExtractFrameUrl(string? metadataJson)
+        {
+            if (string.IsNullOrWhiteSpace(metadataJson)) return null;
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(metadataJson);
+                return doc.RootElement.TryGetProperty("frameUrl", out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String
+                    ? v.GetString()
+                    : null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         [HttpGet("{appointmentId}/assets")]
         public async Task<IActionResult> GetStudyAssets(string appointmentId)
         {
@@ -546,6 +567,13 @@ namespace _1RadAPI.Controllers
                                           sopInstanceUID = s.SopInstanceUID,
                                           instanceNumber = s.InstanceNumber,
                                           url = ToCdn(s.BlobUrl),
+                                          // Raw HTJ2K frame for byte-range progressive
+                                          // loading — lifted out of the metadata JSON and
+                                          // CDN-rewritten so it goes through Front Door
+                                          // like every other slice URL. Null when the
+                                          // slice has no streamable frame (legacy / non-
+                                          // HTJ2K) → viewer uses the .dcm `url`.
+                                          frameUrl = ToCdn(ExtractFrameUrl(s.MetadataJson)),
                                           metadata = s.MetadataJson,
                                       })
                                       .ToList(),

@@ -112,6 +112,38 @@ public class DicomExtractionService : IDicomExtractionService
         }
     }
 
+    /// <summary>
+    /// Extracts the raw HTJ2K codestream (frame 0) + its transfer-syntax UID from
+    /// a transcoded DICOM byte buffer, for byte-range progressive delivery. The
+    /// viewer's wadors loader can ONLY do partial/range decode on the streamable
+    /// HTJ2K syntaxes (RPCL .202 and HTJ2K .203); .201 (non-RPCL) and anything
+    /// non-HTJ2K are skipped (those slices fall back to whole-file .dcm loading).
+    /// Returns null when no streamable single frame is available.
+    /// </summary>
+    private (byte[] Frame, string TransferSyntaxUid)? ExtractStreamableFrame(byte[] dcmBytes)
+    {
+        try
+        {
+            using var ms = new MemoryStream(dcmBytes, writable: false);
+            var f = DicomFile.Open(ms);
+            var ts = f.Dataset.InternalTransferSyntax;
+            var streamable = ts == DicomTransferSyntax.HTJ2KLosslessRPCL // .202
+                          || ts == DicomTransferSyntax.HTJ2K;            // .203
+            if (!streamable) return null;
+
+            var pd = FellowOakDicom.Imaging.DicomPixelData.Create(f.Dataset);
+            if (pd.NumberOfFrames < 1) return null;
+            var frame = pd.GetFrame(0).Data; // raw encapsulated codestream bytes
+            if (frame == null || frame.Length == 0) return null;
+            return (frame, ts.UID.UID);
+        }
+        catch
+        {
+            // Any parse/extract failure → no progressive frame; .dcm fallback covers it.
+            return null;
+        }
+    }
+
     public async Task<int> ExtractAsync(Guid assetId, CancellationToken cancellationToken)
     {
         var asset = await _db.StudyAssets
@@ -249,6 +281,32 @@ public class DicomExtractionService : IDicomExtractionService
                             sliceUrl = await _blob.UploadFileAtPathAsync(sliceUp, sliceBlobPath, "application/dicom", Container, ImmutableCacheControl);
                         }
 
+                        // Raw HTJ2K frame, served alongside the .dcm for byte-range
+                        // progressive loading (the viewer's wadors path range-reads
+                        // this and paints low-res-first). Content-type carries the
+                        // transfer syntax so Cornerstone treats it as streamable
+                        // HTJ2K. Best-effort: a slice without a streamable frame just
+                        // falls back to whole-file .dcm loading.
+                        string? frameUrl = null;
+                        long frameBytesLen = 0;
+                        try
+                        {
+                            var fr = ExtractStreamableFrame(uploadBytes);
+                            if (fr.HasValue)
+                            {
+                                var frameBlobPath = $"{hospitalIdN}/{appointmentIdN}/extracted/{assetIdN}/series/{series.Index:D3}/{i:D4}.jhc";
+                                var frameContentType = $"application/octet-stream; transfer-syntax={fr.Value.TransferSyntaxUid}";
+                                using var frameUp = new MemoryStream(fr.Value.Frame, writable: false);
+                                frameUrl = await _blob.UploadFileAtPathAsync(frameUp, frameBlobPath, frameContentType, Container, ImmutableCacheControl);
+                                frameBytesLen = fr.Value.Frame.Length;
+                                Interlocked.Add(ref totalUploadedBytes, frameBytesLen);
+                            }
+                        }
+                        catch (Exception frEx)
+                        {
+                            _logger.LogDebug(frEx, "[DICOM_EXTRACT] Asset {AssetId} frame {Idx}/{I} write failed — progressive disabled for this slice.", assetId, item.series.Index, item.i);
+                        }
+
                         // Thumbnail: first slice of each series only.
                         string? thumbnailUrl = null;
                         if (i == 0)
@@ -271,7 +329,7 @@ public class DicomExtractionService : IDicomExtractionService
                             }
                         }
 
-                        return (item.series, item.p, item.i, sliceUrl, sliceBlobPath, thumbnailUrl);
+                        return (item.series, item.p, item.i, sliceUrl, sliceBlobPath, thumbnailUrl, frameUrl);
                     }
                     finally
                     {
@@ -299,7 +357,7 @@ public class DicomExtractionService : IDicomExtractionService
                     BlobUrl           = u.sliceUrl,
                     BlobPath          = u.sliceBlobPath,
                     ThumbnailUrl      = u.i == 0 ? u.thumbnailUrl : null,
-                    MetadataJson      = ExtractMetadataJson(u.p.DicomFile),
+                    MetadataJson      = ExtractMetadataJson(u.p.DicomFile, u.frameUrl),
                     ExtractedAt       = DateTime.UtcNow,
                 });
                 sliceCount++;
@@ -559,8 +617,15 @@ public class DicomExtractionService : IDicomExtractionService
     /// <summary>
     /// Cherry-picks the viewer-relevant tags into a compact JSON blob so the
     /// manifest stays tiny. Anything missing is omitted.
+    ///
+    /// Carries the FULL pixel module (rows/columns/samplesPerPixel/bitsAllocated/
+    /// bitsStored/highBit/pixelRepresentation/planarConfiguration/photometric)
+    /// plus plane geometry (IOP/IPP/pixelSpacing) and VOI/modality LUT, because
+    /// the byte-range progressive (wadors) path has no .dcm header to parse — the
+    /// frontend builds a Cornerstone metadata provider from exactly these fields.
+    /// `frameUrl` (when present) points the wadors loader at the raw HTJ2K frame.
     /// </summary>
-    private static string? ExtractMetadataJson(DicomFile file)
+    private static string? ExtractMetadataJson(DicomFile file, string? frameUrl = null)
     {
         try
         {
@@ -575,29 +640,39 @@ public class DicomExtractionService : IDicomExtractionService
             {
                 if (ds.TryGetSingleValue<string>(tag, out var v) && !string.IsNullOrWhiteSpace(v)) dict[key] = v;
             }
+            void AddDoubles(string key, DicomTag tag)
+            {
+                if (!ds.Contains(tag)) return;
+                try { var vals = ds.GetValues<double>(tag); if (vals?.Length > 0) dict[key] = vals; }
+                catch { /* malformed multi-value — skip */ }
+            }
 
+            // VOI / modality LUT
             Add<double>("windowCenter", DicomTag.WindowCenter);
             Add<double>("windowWidth",  DicomTag.WindowWidth);
             Add<double>("rescaleSlope",     DicomTag.RescaleSlope);
             Add<double>("rescaleIntercept", DicomTag.RescaleIntercept);
+            // Pixel module (required by the wadors metadata provider)
+            Add<int>("rows",                 DicomTag.Rows);
+            Add<int>("columns",              DicomTag.Columns);
+            Add<int>("samplesPerPixel",      DicomTag.SamplesPerPixel);
+            Add<int>("bitsAllocated",        DicomTag.BitsAllocated);
+            Add<int>("bitsStored",           DicomTag.BitsStored);
+            Add<int>("highBit",              DicomTag.HighBit);
+            Add<int>("pixelRepresentation",  DicomTag.PixelRepresentation);
+            Add<int>("planarConfiguration",  DicomTag.PlanarConfiguration);
+            AddStr("photometricInterpretation", DicomTag.PhotometricInterpretation);
+            // Plane geometry (measurements / MPR)
             Add<double>("sliceLocation",    DicomTag.SliceLocation);
             Add<double>("sliceThickness",   DicomTag.SliceThickness);
-            Add<int>("rows",       DicomTag.Rows);
-            Add<int>("columns",    DicomTag.Columns);
-            Add<int>("bitsStored", DicomTag.BitsStored);
-            AddStr("photometricInterpretation", DicomTag.PhotometricInterpretation);
-            AddStr("patientPosition",           DicomTag.PatientPosition);
+            AddStr("patientPosition",       DicomTag.PatientPosition);
+            AddDoubles("pixelSpacing",          DicomTag.PixelSpacing);
+            AddDoubles("imageOrientationPatient", DicomTag.ImageOrientationPatient);
+            AddDoubles("imagePositionPatient",    DicomTag.ImagePositionPatient);
 
-            // Pixel spacing is a multi-value DS — store as array of doubles
-            if (ds.Contains(DicomTag.PixelSpacing))
-            {
-                try
-                {
-                    var ps = ds.GetValues<double>(DicomTag.PixelSpacing);
-                    if (ps?.Length > 0) dict["pixelSpacing"] = ps;
-                }
-                catch { /* malformed — skip */ }
-            }
+            // Raw HTJ2K frame for byte-range progressive delivery (blob URL,
+            // rewritten to the CDN host by the manifest builder's ToCdn()).
+            if (!string.IsNullOrWhiteSpace(frameUrl)) dict["frameUrl"] = frameUrl;
 
             return dict.Count == 0 ? null : JsonSerializer.Serialize(dict);
         }
