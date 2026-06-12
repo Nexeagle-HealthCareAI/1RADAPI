@@ -503,6 +503,11 @@ public class DicomExtractionService : IDicomExtractionService
         if (!string.IsNullOrEmpty(first.StudyDescription)) study.StudyDescription = Truncate(first.StudyDescription, 255);
         if (!string.IsNullOrEmpty(first.AccessionNumber))  study.AccessionNumber  = Truncate(first.AccessionNumber, 64);
         if (!string.IsNullOrEmpty(first.Modality))         study.Modality         = Truncate(first.Modality, 32);
+        // The DICOM StudyDate tag (0008,0020) is authoritative for when the study
+        // was acquired — backfill it when the registration request didn't supply
+        // one (PACS-only uploads usually don't), so the studies list/sort isn't
+        // blank. Only fill a null; never override an operator-provided date.
+        if (first.StudyDate.HasValue && study.StudyDate == null) study.StudyDate = first.StudyDate;
         // Demographics: prefer what the modality wrote over the appointment
         // denorm only when present — DICOM is authoritative for the pixels.
         if (!string.IsNullOrEmpty(first.PatientName))      study.PatientName      = Truncate(first.PatientName, 255);
@@ -540,6 +545,7 @@ public class DicomExtractionService : IDicomExtractionService
                 EntryName         = label,
                 StudyUid          = ds.GetSingleValueOrDefault<string?>(DicomTag.StudyInstanceUID, null),
                 StudyDescription  = ds.GetSingleValueOrDefault<string?>(DicomTag.StudyDescription, null),
+                StudyDate         = ParseDicomStudyDate(ds),
                 AccessionNumber   = ds.GetSingleValueOrDefault<string?>(DicomTag.AccessionNumber, null),
                 PatientName       = ds.GetSingleValueOrDefault<string?>(DicomTag.PatientName, null),
                 DicomPatientId    = ds.GetSingleValueOrDefault<string?>(DicomTag.PatientID, null),
@@ -557,6 +563,35 @@ public class DicomExtractionService : IDicomExtractionService
             _logger.LogDebug(parseEx, "[DICOM_EXTRACT] Asset {AssetId} {Label} not a valid DICOM file — skipping.", assetId, label);
             return null;
         }
+    }
+
+    // DICOM StudyDate (0008,0020) is a DA value "YYYYMMDD"; StudyTime (0008,0030)
+    // is a TM "HHMMSS.FFFFFF". Parse defensively (scanners emit odd punctuation /
+    // partial times) and return null rather than throw on anything malformed.
+    private static DateTime? ParseDicomStudyDate(DicomDataset ds)
+    {
+        try
+        {
+            var date = ds.GetSingleValueOrDefault<string?>(DicomTag.StudyDate, null);
+            if (string.IsNullOrWhiteSpace(date)) return null;
+            date = date.Replace(".", string.Empty).Trim();          // tolerate "YYYY.MM.DD"
+            if (date.Length < 8) return null;
+            if (!DateTime.TryParseExact(date[..8], "yyyyMMdd",
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None, out var d))
+                return null;
+
+            var time = ds.GetSingleValueOrDefault<string?>(DicomTag.StudyTime, null)?.Trim();
+            if (!string.IsNullOrEmpty(time))
+            {
+                int hh = time.Length >= 2 && int.TryParse(time[..2], out var h) ? h : 0;
+                int mm = time.Length >= 4 && int.TryParse(time.Substring(2, 2), out var m) ? m : 0;
+                int ss = time.Length >= 6 && int.TryParse(time.Substring(4, 2), out var s) ? s : 0;
+                if (hh < 24 && mm < 60 && ss < 60) d = d.AddHours(hh).AddMinutes(mm).AddSeconds(ss);
+            }
+            return d;
+        }
+        catch { return null; }
     }
 
     // Legacy path: download the study ZIP from blob and parse every entry.
@@ -763,6 +798,7 @@ public class DicomExtractionService : IDicomExtractionService
         public string EntryName         { get; set; } = string.Empty;
         public string? StudyUid         { get; set; }
         public string? StudyDescription { get; set; }
+        public DateTime? StudyDate      { get; set; }
         public string? AccessionNumber  { get; set; }
         public string? PatientName      { get; set; }
         public string? DicomPatientId   { get; set; }

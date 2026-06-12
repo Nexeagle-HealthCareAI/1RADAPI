@@ -727,7 +727,10 @@ namespace _1RadAPI.Controllers
                             seriesUID = g.Key,
                             seriesDescription = first.SeriesDescription,
                             modality = first.Modality,
-                            thumbnailUrl = ToCdn(first.ThumbnailUrl),
+                            // Thumbnail is written on one slice of the series (the
+                            // first); read it from whichever slice carries it so a
+                            // re-ordering or partial extraction can't blank the rail.
+                            thumbnailUrl = ToCdn(g.Select(s => s.ThumbnailUrl).FirstOrDefault(t => !string.IsNullOrWhiteSpace(t)) ?? first.ThumbnailUrl),
                             slices = g.OrderBy(s => s.InstanceNumber ?? int.MaxValue)
                                       .ThenBy(s => s.SopInstanceUID)
                                       .Select(s => new
