@@ -4,8 +4,11 @@ using Azure.Storage.Blobs.Models;
 using Azure.Storage.Sas;
 using Microsoft.Extensions.Configuration;
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace _1Rad.Infrastructure.Services
@@ -67,6 +70,26 @@ namespace _1Rad.Infrastructure.Services
             await blobClient.UploadAsync(fileStream, new BlobUploadOptions { HttpHeaders = blobHttpHeader, });
 
             return blobClient.Uri.ToString();
+        }
+
+        public async IAsyncEnumerable<_1Rad.Application.Interfaces.BlobItem> ListBlobsAsync(
+            string containerName, string? prefix = null,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
+            await foreach (var b in containerClient.GetBlobsAsync(prefix: prefix, cancellationToken: ct))
+            {
+                yield return new _1Rad.Application.Interfaces.BlobItem(
+                    b.Name,
+                    b.Properties.LastModified,
+                    b.Properties.ContentLength ?? 0);
+            }
+        }
+
+        public async Task DeleteBlobByNameAsync(string blobName, string containerName, CancellationToken ct = default)
+        {
+            var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
+            await containerClient.GetBlobClient(blobName).DeleteIfExistsAsync(cancellationToken: ct);
         }
 
         public async Task DeleteFileAsync(string fileUrl, string? containerName = null)

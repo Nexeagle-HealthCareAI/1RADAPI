@@ -113,6 +113,22 @@ public class DicomExtractionService : IDicomExtractionService
     }
 
     /// <summary>
+    /// The raw HTJ2K progressive frame sits at the slice's `.dcm` blob path with
+    /// a `.jhc` extension. Canonical derivation used by the delete/cleanup paths
+    /// (so frame blobs are reclaimed with their slice) — must match the path the
+    /// extraction loop writes. Returns null when the URL isn't a `.dcm`.
+    /// </summary>
+    public static string? FrameUrlFromSlice(string? sliceBlobUrl)
+    {
+        if (string.IsNullOrWhiteSpace(sliceBlobUrl)) return null;
+        var q = sliceBlobUrl.IndexOf('?');
+        var path = q >= 0 ? sliceBlobUrl[..q] : sliceBlobUrl;
+        var query = q >= 0 ? sliceBlobUrl[q..] : string.Empty;
+        if (!path.EndsWith(".dcm", StringComparison.OrdinalIgnoreCase)) return null;
+        return path[..^4] + ".jhc" + query;
+    }
+
+    /// <summary>
     /// Extracts the raw HTJ2K codestream (frame 0) + its transfer-syntax UID from
     /// a transcoded DICOM byte buffer, for byte-range progressive delivery. The
     /// viewer's wadors loader can ONLY do partial/range decode on the streamable
@@ -189,15 +205,26 @@ public class DicomExtractionService : IDicomExtractionService
         if (study != null) study.Status = ImagingStudyStatus.Processing;
         await _db.SaveChangesAsync(cancellationToken);
 
-        // Wipe any prior slice index so re-runs are clean. Blobs from a prior
-        // run are orphaned in storage — acceptable; periodic cleanup script
-        // can sweep them. Keeps the happy path simple.
+        // Wipe any prior slice index so re-runs are clean — AND delete the prior
+        // run's blobs first, so a re-extraction that produces a different slice
+        // layout doesn't strand the old slice/frame/thumbnail blobs. (The blob
+        // orphan-sweep job is the backstop; this removes the orphan at source so
+        // it usually never has to.)
         var prior = await _db.StudySliceIndexes
             .IgnoreQueryFilters()
             .Where(s => s.AssetId == assetId)
             .ToListAsync(cancellationToken);
         if (prior.Count > 0)
         {
+            foreach (var s in prior)
+            {
+                if (string.IsNullOrWhiteSpace(s.BlobUrl)) continue;
+                try { await _blob.DeleteFileAsync(s.BlobUrl, Container); } catch { /* best-effort */ }
+                var frame = FrameUrlFromSlice(s.BlobUrl);
+                if (frame != null) { try { await _blob.DeleteFileAsync(frame, Container); } catch { /* best-effort */ } }
+                if (!string.IsNullOrWhiteSpace(s.ThumbnailUrl))
+                { try { await _blob.DeleteFileAsync(s.ThumbnailUrl, Container); } catch { /* best-effort */ } }
+            }
             _db.StudySliceIndexes.RemoveRange(prior);
             await _db.SaveChangesAsync(cancellationToken);
         }

@@ -176,7 +176,13 @@ public class SubscriptionLifecycleJob : BackgroundService
                 if (!string.IsNullOrWhiteSpace(a.BlobUrl)) urls.Add(a.BlobUrl);
                 foreach (var s in a.Slices)
                 {
-                    if (!string.IsNullOrWhiteSpace(s.BlobUrl)) urls.Add(s.BlobUrl);
+                    if (!string.IsNullOrWhiteSpace(s.BlobUrl))
+                    {
+                        urls.Add(s.BlobUrl);
+                        // Raw HTJ2K progressive frame (best-effort; not every slice has one).
+                        var frame = Services.DicomExtractionService.FrameUrlFromSlice(s.BlobUrl);
+                        if (frame != null) urls.Add(frame);
+                    }
                     if (!string.IsNullOrWhiteSpace(s.ThumbnailUrl)) urls.Add(s.ThumbnailUrl);
                 }
             }

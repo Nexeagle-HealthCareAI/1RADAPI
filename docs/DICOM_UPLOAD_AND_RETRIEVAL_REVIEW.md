@@ -148,5 +148,96 @@ Blob is **public-ACL behind Front Door** (Posture A); immutable cache headers
 
 ### Quick wins
 - Verify `CdnBaseUrl` (config) — biggest retrieval risk.
-- Widen `RequeueStaleAsync` to `zip|instances|dcm` (bug #4) — small, correctness.
-- Add 2–4 parallel extraction consumers (#3) — throughput under load.
+- ~~Widen `RequeueStaleAsync` to `zip|instances|dcm` (bug #4)~~ — DONE.
+- ~~Add 2–4 parallel extraction consumers (#3)~~ — DONE.
+
+---
+
+## PART 4 — DEEPER REVIEW: storage lifecycle & cleanup gaps (2026-06-12)
+
+These are the gaps the first pass didn't reach. The **storage-lifecycle ones
+are the most material** — they leak real, uncapped Azure cost.
+
+### A. 🐛 Raw `.jhc` frames are ORPHANED on every delete (regression I introduced)
+`DeleteStudy` ([StudyController]) and the auto-delete job
+([SubscriptionLifecycleJob]) both build the blob-deletion list from
+`asset.BlobUrl` + `slice.BlobUrl` (.dcm) + `slice.ThumbnailUrl` — but **not the
+new `.jhc` frame blobs**. So every deleted / auto-deleted study now leaks all
+its frame blobs forever. Fix: derive the frame path from the slice URL
+(`.dcm`→`.jhc`) and add it to the deletion list in BOTH places.
+
+### B. 🐛 NO orphan/staging sweep job exists — despite the code claiming one
+Multiple comments say staging blobs / prior-run slices are "reclaimed by a
+periodic sweep" / "a periodic cleanup script can sweep them." **That job does
+not exist** (`BackgroundJobs/` has no sweep). Three permanent-orphan sources:
+- **Bridge per-instance staging blobs** (`staging/{assetId}/…`) — written by the
+  bridge, never deleted.
+- **Re-extraction orphans** — re-running extraction deletes the prior
+  `StudySliceIndex` ROWS but leaves the old slice/frame/thumbnail BLOBS.
+- All accumulate **unbounded**. Fix: a real sweep job (by prefix age, or
+  reconcile blobs vs. live slice rows).
+
+### C. Storage metering UNDER-reports actual Azure usage
+Metering = `SUM(StudyAsset.StorageBytes)`, recomputed per extraction to the
+*current* footprint. The orphans from (A)+(B) are real bytes in your account
+that metering never counts — so customers aren't overcharged, but **your Azure
+bill grows without bound and without visibility**. (A)+(B) must be fixed for
+metering to mean anything.
+
+### D. Re-extraction is destructive-rebuild with no rollback
+`ExtractAsync` sets `Running`, deletes prior slice rows, then rebuilds. A crash
+mid-way leaves partial slices + orphaned old blobs; the crash-requeue re-runs
+and wipes again. Acceptable, but means a poison asset can thrash. Consider a
+"build to a new prefix, swap, then delete old" pattern.
+
+### E. Frame-URL footgun in metadata JSON
+The raw (non-CDN) `frameUrl` stays embedded in each slice's `MetadataJson`
+(the manifest lifts a CDN copy out as a sibling, but the raw one remains in the
+metadata the client receives). Anything reading `metadata.frameUrl` directly
+would bypass Front Door / hit a firewalled blob. Strip it from the metadata copy.
+
+### F. SAS 30-min expiry vs. 1 GB on a slow link
+A near-1 GB upload on a slow (low-bandwidth-target) link can exceed the 30-min
+SAS lifetime → block PUTs start 403-ing mid-upload, no renewal. Either lengthen
+the SAS for large files or renew on expiry.
+
+### G. Orphan BLOB on upload-complete failure
+Row-after-blob prevents orphan *rows*, but if the PUT succeeds and
+`upload-complete` then fails (network), the blob exists with no DB row — an
+orphan blob counted nowhere. The sweep (B) would reclaim it; today nothing does.
+
+### H. Manifest list does a per-row `assetCount` subquery
+`ListStudies` projects `assetCount = StudyAssets.Count(...)` per study — an N+1
+on large worklists. Pre-aggregate or join.
+
+### Resolution (all fixed 2026-06-12)
+- **A** ✅ Both delete paths (DeleteStudy + auto-delete job) now reclaim the
+  `.jhc` frame via `DicomExtractionService.FrameUrlFromSlice` (canonical helper).
+- **B** ✅ New `BlobOrphanSweepJob`. Phase 1 (staging sweep) runs by default and
+  deletes transient `…/staging/…` blobs past retention. Phase 2 (full reconcile
+  vs. live StudyAsset/StudySliceIndex references incl. derived frames) is opt-in
+  (`Dicom:OrphanSweep:ReconcileEnabled`) and **dry-run unless**
+  `Dicom:OrphanSweep:DeleteOrphans=true` — so a reference-set miss can't delete
+  live data until you've reviewed its candidate logs. Added `IBlobService.
+  ListBlobsAsync` + `DeleteBlobByNameAsync`.
+- **C** ✅ Resolved structurally by A+B — no new uncounted orphans, and existing
+  ones are reclaimable, so actual usage converges to metered `SUM(StorageBytes)`.
+- **D** ✅ Re-extraction now deletes the prior run's slice/frame/thumbnail blobs
+  before rebuilding (self-cleaning; the sweep is the backstop).
+- **E** ✅ Manifest strips the raw `frameUrl` from the metadata copy
+  (`StripFrameUrl`); only the CDN-rewritten sibling is exposed.
+- **F** ✅ SAS lifetime scales with file size (`SasValidityFor`: 30 min → 6 h
+  cap) on both whole-file upload-token endpoints.
+- **G** ✅ Covered by B's reconcile (a blob with no live reference is reclaimed).
+- **H** ✅ Studies-list replaced the per-row correlated `assetCount` subquery
+  with a single grouped-count query merged in memory.
+
+### Config for the sweep (defaults are safe)
+```
+Dicom:OrphanSweep:Enabled (true)              # run the job
+Dicom:OrphanSweep:IntervalHours (24)
+Dicom:OrphanSweep:StagingRetentionHours (24)  # phase 1 deletes staging older than this
+Dicom:OrphanSweep:ReconcileEnabled (false)    # turn on phase 2
+Dicom:OrphanSweep:DeleteOrphans (false)        # phase 2 DELETES vs. dry-run-log
+Dicom:OrphanSweep:OrphanMinAgeHours (48)
+```

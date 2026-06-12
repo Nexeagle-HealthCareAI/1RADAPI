@@ -47,6 +47,7 @@ public static class DependencyInjection
         services.AddScoped<IEmailService, EmailService>();
         services.AddScoped<IJwtProvider, JwtProvider>();
         services.AddSingleton<ITrackingTokenService, TrackingTokenService>();
+        services.AddSingleton<IStudyShareTokenService, StudyShareTokenService>();
         services.AddSingleton<IReferralLinkTokenService, ReferralLinkTokenService>();
 
         // Session management — the active-session cache is process-local;
@@ -87,6 +88,7 @@ public static class DependencyInjection
         services.AddHostedService<DailyFinancialReportJob>();
         services.AddHostedService<DailyReferralExcelReportJob>();
         services.AddHostedService<SubscriptionLifecycleJob>();
+        services.AddHostedService<BlobOrphanSweepJob>();
 
         return services;
     }

@@ -1,11 +1,27 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace _1Rad.Application.Interfaces
 {
+    /// <summary>One blob's identity + age/size, for the orphan-sweep job.</summary>
+    public record BlobItem(string Name, DateTimeOffset? LastModified, long Length);
+
     public interface IBlobService
     {
+        /// <summary>
+        /// Streams blob listings under an optional prefix. Used by the orphan
+        /// sweep to reconcile storage against live DB references.
+        /// </summary>
+        IAsyncEnumerable<BlobItem> ListBlobsAsync(string containerName, string? prefix = null, CancellationToken ct = default);
+
+        /// <summary>
+        /// Deletes a blob by its container-relative name/path (not a full URL).
+        /// </summary>
+        Task DeleteBlobByNameAsync(string blobName, string containerName, CancellationToken ct = default);
+
         /// <summary>
         /// Uploads a file. The blob name is auto-generated as "{Guid}_{sanitised-fileName}".
         /// </summary>

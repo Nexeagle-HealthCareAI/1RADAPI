@@ -31,7 +31,13 @@ public class JwtProvider : IJwtProvider
             claims.Add(new Claim("userId", userId.Value.ToString()));
         }
 
-        return CreateToken(claims, 15); // 15 minutes for registration flow
+        // 60 minutes for the registration flow. The window starts at OTP-verify
+        // and must cover the WHOLE multi-step form (details → clinical → centre
+        // legal details → plan), since identity-setup (which consumes the token)
+        // is the final step. 15 min was too tight for a first-time user entering
+        // GSTIN/PAN/address and comparing plans → "verification expired" errors.
+        // A pre-account token scoped to one OTP-verified mobile is low-risk at 60.
+        return CreateToken(claims, 60);
     }
 
     public string GenerateContextualToken(User user, UserHospitalMapping activeMapping, IEnumerable<Guid> authorizedHospitalIds, Guid? sessionId = null)

@@ -34,6 +34,7 @@ namespace _1RadAPI.Controllers
         private readonly IStorageMeteringService _storage;
         private readonly IAssetUrlSigner _signer;
         private readonly IStudyMatchingService _matching;
+        private readonly IStudyShareTokenService _shareTokens;
 
         public StudyController(
             IApplicationDbContext context,
@@ -45,7 +46,8 @@ namespace _1RadAPI.Controllers
             IModuleEntitlementService modules,
             IStorageMeteringService storage,
             IAssetUrlSigner signer,
-            IStudyMatchingService matching)
+            IStudyMatchingService matching,
+            IStudyShareTokenService shareTokens)
         {
             _context = context;
             _blobService = blobService;
@@ -57,6 +59,7 @@ namespace _1RadAPI.Controllers
             _storage = storage;
             _signer = signer;
             _matching = matching;
+            _shareTokens = shareTokens;
         }
 
         // Container holding PHI (DICOM). Reads of it require a capability: a
@@ -275,6 +278,11 @@ namespace _1RadAPI.Controllers
             }
         }
 
+        // Frame-blob derivation lives in DicomExtractionService (its owner). The
+        // delete loop above calls it via this alias so both stay in lock-step.
+        private static string? FrameUrlFromSlice(string? sliceBlobUrl)
+            => _1Rad.Infrastructure.Services.DicomExtractionService.FrameUrlFromSlice(sliceBlobUrl);
+
         /// <summary>
         /// Pulls the raw `frameUrl` (blob URL) out of a slice's metadata JSON for
         /// the byte-range progressive path. Returns null if absent (legacy slice
@@ -293,6 +301,44 @@ namespace _1RadAPI.Controllers
             catch
             {
                 return null;
+            }
+        }
+
+        /// <summary>
+        /// SAS lifetime scaled to file size. A near-1 GB upload on a slow
+        /// (low-bandwidth) link can outlive a fixed 30-min SAS and fail
+        /// mid-transfer. Base 30 min + headroom (~4 MB/min pessimistic), capped
+        /// at 6h. The token is Write-only on a single blob path, so the longer
+        /// lifetime's exposure is limited to that one blob.
+        /// </summary>
+        private static TimeSpan SasValidityFor(long fileSizeBytes)
+        {
+            var mb = Math.Max(0, fileSizeBytes) / 1_048_576.0;
+            var minutes = Math.Clamp(30 + mb / 4.0, 30, 360);
+            return TimeSpan.FromMinutes(minutes);
+        }
+
+        /// <summary>
+        /// Returns the slice metadata JSON with the raw `frameUrl` removed (the
+        /// manifest exposes a CDN-rewritten copy separately). Keeps the pixel
+        /// module the wadors metadata provider needs.
+        /// </summary>
+        private static string? StripFrameUrl(string? metadataJson)
+        {
+            if (string.IsNullOrWhiteSpace(metadataJson)) return metadataJson;
+            try
+            {
+                var node = System.Text.Json.Nodes.JsonNode.Parse(metadataJson);
+                if (node is System.Text.Json.Nodes.JsonObject obj && obj.ContainsKey("frameUrl"))
+                {
+                    obj.Remove("frameUrl");
+                    return obj.ToJsonString();
+                }
+                return metadataJson;
+            }
+            catch
+            {
+                return metadataJson;
             }
         }
 
@@ -454,6 +500,74 @@ namespace _1RadAPI.Controllers
             return Ok(new { success = true, data = new { status = study.Status, assets } });
         }
 
+        // ── Secure share links ──────────────────────────────────────────────
+        /// <summary>
+        /// Mint a 24-hour secret link to share a study with an external doctor.
+        /// The token is HMAC-signed (stateless) and carries the study id + expiry.
+        /// Tenant-scoped: the study must belong to the caller's centre.
+        /// </summary>
+        [HttpPost("studies/{studyId:guid}/share")]
+        [RequiresModule(ModuleConstants.Pacs)]
+        public async Task<IActionResult> CreateShareLink(Guid studyId)
+        {
+            // Global query filter ⇒ only the caller's-tenant study resolves.
+            var study = await _context.ImagingStudies.FirstOrDefaultAsync(s => s.Id == studyId);
+            if (study == null)
+                return NotFound(new { success = false, error = "Imaging study not found." });
+
+            var ttl = TimeSpan.FromHours(24);
+            var token = _shareTokens.Issue(study.Id, ttl);
+            var expiresAt = DateTimeOffset.UtcNow.Add(ttl);
+            return Ok(new { success = true, data = new { token, expiresAt, ttlHours = 24 } });
+        }
+
+        /// <summary>
+        /// Public manifest for a shared study — no auth, gated entirely by the
+        /// signed token. Returns 410 (SHARE_EXPIRED) once the 24h window passes
+        /// so the share page can show the "expired" + upgrade message, or 404 for
+        /// a tampered/invalid token.
+        /// </summary>
+        [HttpGet("shared/{token}/manifest")]
+        [Microsoft.AspNetCore.Authorization.AllowAnonymous]
+        public async Task<IActionResult> GetSharedManifest(string token, CancellationToken cancellationToken)
+        {
+            var (status, studyId, _) = _shareTokens.Validate(token);
+            if (status == ShareTokenStatus.Invalid)
+                return NotFound(new { success = false, code = "SHARE_INVALID", error = "This share link is not valid." });
+            if (status == ShareTokenStatus.Expired)
+                return StatusCode(StatusCodes.Status410Gone, new { success = false, code = "SHARE_EXPIRED", error = "This share link has expired." });
+
+            // Valid token → resolve across tenants (no auth context here).
+            var study = await _context.ImagingStudies
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(st => st.Id == studyId, cancellationToken);
+            if (study == null)
+                return NotFound(new { success = false, code = "SHARE_INVALID", error = "The shared study no longer exists." });
+
+            var assets = await _context.StudyAssets
+                .IgnoreQueryFilters()
+                .Where(a => a.ImagingStudyId == study.Id)
+                .Include(a => a.Slices)
+                .OrderByDescending(a => a.UploadedAt)
+                .ToListAsync(cancellationToken);
+
+            return Ok(new
+            {
+                success = true,
+                data = new
+                {
+                    imagingStudyId = study.Id,
+                    studyInstanceUID = study.StudyInstanceUID,
+                    status = study.Status,
+                    patientName = study.PatientName,
+                    modality = study.Modality,
+                    studyDate = study.StudyDate,
+                    studyDescription = study.StudyDescription,
+                    assets = BuildManifestAssetDtos(assets),
+                },
+            });
+        }
+
         /// <summary>Same lightweight poll, keyed by appointment.</summary>
         [HttpGet("{appointmentId}/extraction-status")]
         [RequiresModule(ModuleConstants.Pacs)]
@@ -574,7 +688,10 @@ namespace _1RadAPI.Controllers
                                           // slice has no streamable frame (legacy / non-
                                           // HTJ2K) → viewer uses the .dcm `url`.
                                           frameUrl = ToCdn(ExtractFrameUrl(s.MetadataJson)),
-                                          metadata = s.MetadataJson,
+                                          // Strip the raw (non-CDN) frameUrl from the metadata copy — the
+                                          // CDN sibling above is the one to use; a raw blob URL in the
+                                          // payload is a Front-Door-bypass footgun.
+                                          metadata = StripFrameUrl(s.MetadataJson),
                                       })
                                       .ToList(),
                         };
@@ -911,7 +1028,7 @@ namespace _1RadAPI.Controllers
                     target = await _blobService.GenerateSasUploadUrlAsync(
                         blobPath,
                         "dicom-files",
-                        TimeSpan.FromMinutes(30),
+                        SasValidityFor(request.FileSize),
                         request.ContentType);
                 }
                 catch (Exception ex)
@@ -1347,7 +1464,7 @@ namespace _1RadAPI.Controllers
                 try
                 {
                     target = await _blobService.GenerateSasUploadUrlAsync(
-                        blobPath, "dicom-files", TimeSpan.FromMinutes(30), request.ContentType);
+                        blobPath, "dicom-files", SasValidityFor(request.FileSize), request.ContentType);
                 }
                 catch (Exception ex)
                 {
@@ -1636,13 +1753,15 @@ namespace _1RadAPI.Controllers
                 }
 
                 var total = await query.CountAsync();
-                var items = await query
+                // Fetch the page first, then get all asset counts in ONE grouped
+                // query (was a correlated subquery per row — N counts per page).
+                var pageRows = await query
                     .OrderByDescending(s => s.CreatedAt)
                     .Skip((page - 1) * pageSize)
                     .Take(pageSize)
                     .Select(s => new
                     {
-                        imagingStudyId = s.Id,
+                        s.Id,
                         s.StudyInstanceUID,
                         s.PatientName,
                         s.DicomPatientId,
@@ -1655,9 +1774,33 @@ namespace _1RadAPI.Controllers
                         s.AppointmentId,
                         s.PatientId,
                         s.CreatedAt,
-                        assetCount = _context.StudyAssets.Count(a => a.ImagingStudyId == s.Id),
                     })
                     .ToListAsync();
+
+                var pageIds = pageRows.Select(r => r.Id).ToList();
+                var assetCounts = await _context.StudyAssets
+                    .Where(a => a.ImagingStudyId != null && pageIds.Contains(a.ImagingStudyId.Value))
+                    .GroupBy(a => a.ImagingStudyId!.Value)
+                    .Select(g => new { StudyId = g.Key, Count = g.Count() })
+                    .ToDictionaryAsync(x => x.StudyId, x => x.Count);
+
+                var items = pageRows.Select(s => new
+                {
+                    imagingStudyId = s.Id,
+                    s.StudyInstanceUID,
+                    s.PatientName,
+                    s.DicomPatientId,
+                    s.AccessionNumber,
+                    s.Modality,
+                    s.StudyDate,
+                    s.StudyDescription,
+                    s.Status,
+                    s.MatchStatus,
+                    s.AppointmentId,
+                    s.PatientId,
+                    s.CreatedAt,
+                    assetCount = assetCounts.TryGetValue(s.Id, out var c) ? c : 0,
+                }).ToList();
 
                 return Ok(new { success = true, data = new { total, page, pageSize, items } });
             }
@@ -1799,7 +1942,15 @@ namespace _1RadAPI.Controllers
                     if (!string.IsNullOrWhiteSpace(a.BlobUrl)) urls.Add(a.BlobUrl);
                     foreach (var s in a.Slices)
                     {
-                        if (!string.IsNullOrWhiteSpace(s.BlobUrl)) urls.Add(s.BlobUrl);
+                        if (!string.IsNullOrWhiteSpace(s.BlobUrl))
+                        {
+                            urls.Add(s.BlobUrl);
+                            // Raw HTJ2K progressive frame lives at the slice path
+                            // with a .jhc extension (best-effort: not every slice
+                            // has one; a missing-blob delete is a harmless no-op).
+                            var frame = FrameUrlFromSlice(s.BlobUrl);
+                            if (frame != null) urls.Add(frame);
+                        }
                         if (!string.IsNullOrWhiteSpace(s.ThumbnailUrl)) urls.Add(s.ThumbnailUrl);
                     }
                 }
