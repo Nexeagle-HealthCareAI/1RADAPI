@@ -310,13 +310,16 @@ namespace _1RadAPI.Controllers
         /// the byte-range progressive path. Returns null if absent (legacy slice
         /// with no streamable frame) so the viewer falls back to the .dcm.
         /// </summary>
-        private static string? ExtractFrameUrl(string? metadataJson)
+        private static string? ExtractFrameUrl(string? metadataJson) => ExtractMetaUrl(metadataJson, "frameUrl");
+        private static string? ExtractPreviewUrl(string? metadataJson) => ExtractMetaUrl(metadataJson, "previewUrl");
+
+        private static string? ExtractMetaUrl(string? metadataJson, string key)
         {
             if (string.IsNullOrWhiteSpace(metadataJson)) return null;
             try
             {
                 using var doc = System.Text.Json.JsonDocument.Parse(metadataJson);
-                return doc.RootElement.TryGetProperty("frameUrl", out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String
+                return doc.RootElement.TryGetProperty(key, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String
                     ? v.GetString()
                     : null;
             }
@@ -351,10 +354,15 @@ namespace _1RadAPI.Controllers
             try
             {
                 var node = System.Text.Json.Nodes.JsonNode.Parse(metadataJson);
-                if (node is System.Text.Json.Nodes.JsonObject obj && obj.ContainsKey("frameUrl"))
+                if (node is System.Text.Json.Nodes.JsonObject obj)
                 {
-                    obj.Remove("frameUrl");
-                    return obj.ToJsonString();
+                    var changed = false;
+                    // Both raw blob URLs are re-exposed CDN-rewritten on the slice
+                    // object; strip them from the metadata copy (a raw blob URL in
+                    // the payload is a Front-Door-bypass footgun).
+                    if (obj.Remove("frameUrl")) changed = true;
+                    if (obj.Remove("previewUrl")) changed = true;
+                    if (changed) return obj.ToJsonString();
                 }
                 return metadataJson;
             }
@@ -777,6 +785,10 @@ namespace _1RadAPI.Controllers
                                           // slice has no streamable frame (legacy / non-
                                           // HTJ2K) → viewer uses the .dcm `url`.
                                           frameUrl = ToCdn(ExtractFrameUrl(s.MetadataJson)),
+                                          // Tiny progressive-preview JPEG (blurry→sharp two-tier load),
+                                          // CDN-rewritten. Null when previews weren't generated → viewer
+                                          // just loads the full slice directly.
+                                          previewUrl = ToCdn(ExtractPreviewUrl(s.MetadataJson)),
                                           // Strip the raw (non-CDN) frameUrl from the metadata copy — the
                                           // CDN sibling above is the one to use; a raw blob URL in the
                                           // payload is a Front-Door-bypass footgun.
@@ -2085,6 +2097,9 @@ namespace _1RadAPI.Controllers
                             // has one; a missing-blob delete is a harmless no-op).
                             var frame = FrameUrlFromSlice(s.BlobUrl);
                             if (frame != null) urls.Add(frame);
+                            // Progressive preview JPEG sits beside the slice (_prev.jpg).
+                            var preview = _1Rad.Infrastructure.Services.DicomExtractionService.PreviewUrlFromSlice(s.BlobUrl);
+                            if (preview != null) urls.Add(preview);
                         }
                         if (!string.IsNullOrWhiteSpace(s.ThumbnailUrl)) urls.Add(s.ThumbnailUrl);
                     }

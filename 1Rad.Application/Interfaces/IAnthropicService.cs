@@ -22,4 +22,12 @@ public interface IAnthropicService
     /// Returns the raw JSON text — callers parse it (leniently / strip fences).
     /// </summary>
     Task<string> GenerateJsonAsync(string systemPrompt, string userPrompt, object? responseSchema, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Like <see cref="GenerateJsonAsync"/> but also returns the call's token
+    /// usage (input/output, plus prompt-cache reads) so callers can attribute and
+    /// optimise spend. The system prompt is sent with prompt caching enabled, so
+    /// a recurring system prefix is billed at a fraction of the input rate.
+    /// </summary>
+    Task<AiJsonResult> GenerateJsonWithUsageAsync(string systemPrompt, string userPrompt, object? responseSchema, CancellationToken cancellationToken = default);
 }

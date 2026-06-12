@@ -44,6 +44,9 @@ public static class DependencyInjection
         // RadAI help-desk knowledge pack (system prompt + app_knowledge.json),
         // loaded once from Resources/RadAI. Singleton — pure in-memory data.
         services.AddSingleton<IRadAiKnowledge, RadAiKnowledge>();
+        // RadAI response cache — repeated questions skip the model entirely
+        // (token-optimization layer). Backed by the AddMemoryCache below.
+        services.AddSingleton<IRadAiResponseCache, RadAiResponseCache>();
         services.AddScoped<IEmailService, EmailService>();
         services.AddScoped<IJwtProvider, JwtProvider>();
         services.AddSingleton<ITrackingTokenService, TrackingTokenService>();

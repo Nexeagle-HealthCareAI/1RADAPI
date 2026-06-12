@@ -24,6 +24,10 @@ public class DicomExtractionService : IDicomExtractionService
 {
     private const string Container = "dicom-files";
     private const int ThumbnailMaxDim = 256;
+    // Per-slice progressive preview: a tiny JPEG the viewer shows INSTANTLY while
+    // the full HTJ2K slice streams (the "blurry → sharp" two-tier load). 128px
+    // longest-edge ≈ 3-5 KB/slice — the low-bandwidth perceived-speed win.
+    private const int PreviewMaxDim = 128;
 
     // Extracted slices + thumbnails are immutable (keyed by asset/series/instance),
     // so tell browsers and any CDN to cache them for a year. This turns repeat
@@ -66,6 +70,11 @@ public class DicomExtractionService : IDicomExtractionService
     // already-committed slices instead of failing. Dicom:DeleteSourceAfterExtraction.
     private readonly bool _deleteSourceAfterExtraction;
 
+    // Write a tiny per-slice progressive preview JPEG (two-tier blurry→sharp
+    // load). ON by default. Adds a small render + a few KB/slice; flip
+    // Dicom:WriteSlicePreviews=false to skip it (e.g. to speed extraction).
+    private readonly bool _writeSlicePreviews;
+
     public DicomExtractionService(
         IApplicationDbContext db,
         IBlobService blob,
@@ -82,6 +91,7 @@ public class DicomExtractionService : IDicomExtractionService
         // ARE the study, so the source ZIP is pure overhead. Set the flag to false
         // only to keep ZIPs (e.g. for debugging a problematic feed).
         _deleteSourceAfterExtraction = configuration.GetValue("Dicom:DeleteSourceAfterExtraction", true);
+        _writeSlicePreviews = configuration.GetValue("Dicom:WriteSlicePreviews", true);
 
         // fo-dicom uses a manager pattern — wire ImageSharp + native codecs
         // (JPEG-LS, JPEG2000, JPEG-baseline transcoders) once. Idempotent
@@ -152,6 +162,21 @@ public class DicomExtractionService : IDicomExtractionService
         var query = q >= 0 ? sliceBlobUrl[q..] : string.Empty;
         if (!path.EndsWith(".dcm", StringComparison.OrdinalIgnoreCase)) return null;
         return path[..^4] + ".jhc" + query;
+    }
+
+    /// <summary>
+    /// The progressive-preview JPEG sits at the slice's `.dcm` path with a
+    /// `_prev.jpg` suffix. Canonical derivation for delete/cleanup + the orphan
+    /// sweep's referenced set. Returns null when the URL isn't a `.dcm`.
+    /// </summary>
+    public static string? PreviewUrlFromSlice(string? sliceBlobUrl)
+    {
+        if (string.IsNullOrWhiteSpace(sliceBlobUrl)) return null;
+        var q = sliceBlobUrl.IndexOf('?');
+        var path = q >= 0 ? sliceBlobUrl[..q] : sliceBlobUrl;
+        var query = q >= 0 ? sliceBlobUrl[q..] : string.Empty;
+        if (!path.EndsWith(".dcm", StringComparison.OrdinalIgnoreCase)) return null;
+        return path[..^4] + "_prev.jpg" + query;
     }
 
     /// <summary>
@@ -298,6 +323,8 @@ public class DicomExtractionService : IDicomExtractionService
                 try { await _blob.DeleteFileAsync(s.BlobUrl, Container); } catch { /* best-effort */ }
                 var frame = FrameUrlFromSlice(s.BlobUrl);
                 if (frame != null) { try { await _blob.DeleteFileAsync(frame, Container); } catch { /* best-effort */ } }
+                var preview = PreviewUrlFromSlice(s.BlobUrl);
+                if (preview != null) { try { await _blob.DeleteFileAsync(preview, Container); } catch { /* best-effort */ } }
                 if (!string.IsNullOrWhiteSpace(s.ThumbnailUrl))
                 { try { await _blob.DeleteFileAsync(s.ThumbnailUrl, Container); } catch { /* best-effort */ } }
             }
@@ -421,31 +448,48 @@ public class DicomExtractionService : IDicomExtractionService
                             _logger.LogDebug(frEx, "[DICOM_EXTRACT] Asset {AssetId} frame {Idx}/{I} write failed — progressive disabled for this slice.", assetId, seriesIndex, i);
                         }
 
-                        // Thumbnail: first slice of each series only.
+                        // Per-slice progressive PREVIEW (blurry→sharp) + series
+                        // THUMBNAIL (first slice only) — both from ONE decode.
                         string? thumbnailUrl = null;
-                        if (i == 0)
+                        string? previewUrl = null;
+                        if (_writeSlicePreviews || i == 0)
                         {
                             try
                             {
-                                using var thumb = RenderThumbnail(dicom);
-                                if (thumb != null)
+                                using var full = RenderSharp(dicom);
+                                if (full != null)
                                 {
-                                    using var ms = new MemoryStream();
-                                    thumb.SaveAsJpeg(ms, new JpegEncoder { Quality = 70 });
-                                    var thumbPath = $"{hospitalIdN}/{appointmentIdN}/extracted/{assetIdN}/thumbs/{seriesIndex:D3}.jpg";
-                                    thumbnailUrl = await UploadWithRetryAsync(ms.ToArray(), thumbPath, "image/jpeg", cancellationToken);
+                                    if (_writeSlicePreviews)
+                                    {
+                                        var prev = EncodeJpeg(full, PreviewMaxDim, 55);
+                                        if (prev != null)
+                                        {
+                                            var prevPath = $"{hospitalIdN}/{appointmentIdN}/extracted/{assetIdN}/series/{seriesIndex:D3}/{i:D4}_prev.jpg";
+                                            previewUrl = await UploadWithRetryAsync(prev, prevPath, "image/jpeg", cancellationToken);
+                                            Interlocked.Add(ref totalUploadedBytes, prev.Length);
+                                        }
+                                    }
+                                    if (i == 0)
+                                    {
+                                        var thumb = EncodeJpeg(full, ThumbnailMaxDim, 70);
+                                        if (thumb != null)
+                                        {
+                                            var thumbPath = $"{hospitalIdN}/{appointmentIdN}/extracted/{assetIdN}/thumbs/{seriesIndex:D3}.jpg";
+                                            thumbnailUrl = await UploadWithRetryAsync(thumb, thumbPath, "image/jpeg", cancellationToken);
+                                        }
+                                    }
                                 }
                             }
-                            catch (Exception thumbEx)
+                            catch (Exception pvEx)
                             {
-                                _logger.LogDebug(thumbEx, "[DICOM_EXTRACT] Asset {AssetId} series {Idx} thumbnail failed — continuing without.", assetId, seriesIndex);
+                                _logger.LogDebug(pvEx, "[DICOM_EXTRACT] Asset {AssetId} preview/thumb {Idx}/{I} failed — continuing without.", assetId, seriesIndex, i);
                             }
                         }
 
                         // Metadata JSON computed HERE (while the DICOM is open), then
                         // carried in the result — the EF phase no longer needs the
                         // parsed file, so nothing heavy survives this task.
-                        var metadataJson = ExtractMetadataJson(dicom, frameUrl);
+                        var metadataJson = ExtractMetadataJson(dicom, frameUrl, previewUrl);
 
                         // Release the raw bytes now that this slice is fully uploaded,
                         // so held memory shrinks as the study progresses.
@@ -846,23 +890,38 @@ public class DicomExtractionService : IDicomExtractionService
         public List<string>? Instances { get; set; }
     }
 
-    private static Image? RenderThumbnail(DicomFile file)
+    // Render the DICOM to a full-resolution ImageSharp image ONCE (caller
+    // disposes). The same render feeds both the series thumbnail and the per-slice
+    // progressive preview, so we only decode pixels once.
+    private static Image? RenderSharp(DicomFile file)
     {
         try
         {
             var renderable = new DicomImage(file.Dataset);
             using var rendered = renderable.RenderImage();
-            // ImageSharp adapter — Convert to a SharpImage we can encode + resize.
-            var sharp = rendered.AsSharpImage();
-            var width  = sharp.Width;
-            var height = sharp.Height;
-            if (width == 0 || height == 0) return null;
-            var scale = (double)ThumbnailMaxDim / Math.Max(width, height);
-            if (scale < 1.0)
-            {
-                sharp.Mutate(x => x.Resize((int)(width * scale), (int)(height * scale)));
-            }
-            return sharp;
+            return rendered.AsSharpImage();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    // Downsize a rendered image to `maxDim` (longest edge) and JPEG-encode it.
+    // Returns null on any failure (preview/thumbnail are best-effort).
+    private static byte[]? EncodeJpeg(Image full, int maxDim, int quality)
+    {
+        try
+        {
+            var w = full.Width; var h = full.Height;
+            if (w == 0 || h == 0) return null;
+            var scale = (double)maxDim / Math.Max(w, h);
+            using var img = scale < 1.0
+                ? full.Clone(x => x.Resize((int)(w * scale), (int)(h * scale)))
+                : full.Clone(_ => { });
+            using var ms = new MemoryStream();
+            img.SaveAsJpeg(ms, new JpegEncoder { Quality = quality });
+            return ms.ToArray();
         }
         catch
         {
@@ -879,9 +938,10 @@ public class DicomExtractionService : IDicomExtractionService
     /// plus plane geometry (IOP/IPP/pixelSpacing) and VOI/modality LUT, because
     /// the byte-range progressive (wadors) path has no .dcm header to parse — the
     /// frontend builds a Cornerstone metadata provider from exactly these fields.
-    /// `frameUrl` (when present) points the wadors loader at the raw HTJ2K frame.
+    /// `frameUrl` (when present) points the wadors loader at the raw HTJ2K frame;
+    /// `previewUrl` points the viewer at the tiny progressive preview JPEG.
     /// </summary>
-    private static string? ExtractMetadataJson(DicomFile file, string? frameUrl = null)
+    private static string? ExtractMetadataJson(DicomFile file, string? frameUrl = null, string? previewUrl = null)
     {
         try
         {
@@ -929,6 +989,9 @@ public class DicomExtractionService : IDicomExtractionService
             // Raw HTJ2K frame for byte-range progressive delivery (blob URL,
             // rewritten to the CDN host by the manifest builder's ToCdn()).
             if (!string.IsNullOrWhiteSpace(frameUrl)) dict["frameUrl"] = frameUrl;
+            // Tiny progressive-preview JPEG (blurry→sharp two-tier load), CDN-
+            // rewritten by the manifest builder like frameUrl.
+            if (!string.IsNullOrWhiteSpace(previewUrl)) dict["previewUrl"] = previewUrl;
 
             return dict.Count == 0 ? null : JsonSerializer.Serialize(dict);
         }

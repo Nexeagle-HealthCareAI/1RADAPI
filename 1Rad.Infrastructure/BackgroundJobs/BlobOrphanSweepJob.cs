@@ -148,6 +148,9 @@ public class BlobOrphanSweepJob : BackgroundService
         {
             AddName(referenced, s.BlobUrl);
             AddName(referenced, s.ThumbnailUrl);
+            // Per-slice progressive preview lives beside the slice (_prev.jpg) and
+            // is referenced via the slice — keep it out of the orphan set.
+            AddName(referenced, Services.DicomExtractionService.PreviewUrlFromSlice(s.BlobUrl));
             if (framesEnabled)
                 AddName(referenced, Services.DicomExtractionService.FrameUrlFromSlice(s.BlobUrl));
         }

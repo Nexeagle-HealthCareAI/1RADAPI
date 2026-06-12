@@ -39,10 +39,13 @@ public class AnthropicService : IAnthropicService
 
     public bool IsConfigured => !string.IsNullOrWhiteSpace(_apiKey) && _apiKey != Placeholder;
 
-    public Task<string> GenerateAsync(string systemPrompt, string userPrompt, CancellationToken cancellationToken = default)
-        => SendAsync(systemPrompt, userPrompt, cancellationToken);
+    public async Task<string> GenerateAsync(string systemPrompt, string userPrompt, CancellationToken cancellationToken = default)
+        => (await SendAsync(systemPrompt, userPrompt, cancellationToken)).Text;
 
-    public Task<string> GenerateJsonAsync(string systemPrompt, string userPrompt, object? responseSchema, CancellationToken cancellationToken = default)
+    public async Task<string> GenerateJsonAsync(string systemPrompt, string userPrompt, object? responseSchema, CancellationToken cancellationToken = default)
+        => (await GenerateJsonWithUsageAsync(systemPrompt, userPrompt, responseSchema, cancellationToken)).Text;
+
+    public async Task<AiJsonResult> GenerateJsonWithUsageAsync(string systemPrompt, string userPrompt, object? responseSchema, CancellationToken cancellationToken = default)
     {
         // Claude has no Gemini-style "JSON mode" flag, so steer it via the prompt:
         // demand a single JSON object (callers strip fences + parse leniently).
@@ -55,10 +58,11 @@ public class AnthropicService : IAnthropicService
             sys.AppendLine("The JSON must conform to this schema:");
             sys.AppendLine(JsonSerializer.Serialize(responseSchema));
         }
-        return SendAsync(sys.ToString(), userPrompt, cancellationToken);
+        var (text, usage) = await SendAsync(sys.ToString(), userPrompt, cancellationToken);
+        return new AiJsonResult(text, usage);
     }
 
-    private async Task<string> SendAsync(string systemPrompt, string userPrompt, CancellationToken cancellationToken)
+    private async Task<(string Text, AiUsage Usage)> SendAsync(string systemPrompt, string userPrompt, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(_apiKey))
             throw new InvalidOperationException("Anthropic API key is not configured (set Anthropic__ApiKey).");
@@ -77,7 +81,14 @@ public class AnthropicService : IAnthropicService
             // truncated mid-output for medium/long radiology templates.
             max_tokens = 4096,
             temperature = 0.2,
-            system = systemPrompt,
+            // Prompt caching: send the (large, static) system prompt as a cached
+            // content block. Calls that share this prefix within the cache window
+            // are billed at ~10% of the input rate — a big saving for RadAI, whose
+            // ~5k-token app_knowledge system prompt is identical on every call.
+            system = new object[]
+            {
+                new { type = "text", text = systemPrompt, cache_control = new { type = "ephemeral" } }
+            },
             messages = new[]
             {
                 new { role = "user", content = userPrompt }
@@ -130,6 +141,15 @@ public class AnthropicService : IAnthropicService
                 }
             }
         }
-        return sb.ToString();
+
+        // Token usage for cost attribution. cache_read_input_tokens are the
+        // system-prompt tokens served from the prompt cache (billed at ~10%).
+        var usage = new AiUsage(0, 0, 0, 0);
+        if (doc.RootElement.TryGetProperty("usage", out var u) && u.ValueKind == JsonValueKind.Object)
+        {
+            int Get(string n) => u.TryGetProperty(n, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetInt32() : 0;
+            usage = new AiUsage(Get("input_tokens"), Get("output_tokens"), Get("cache_read_input_tokens"), Get("cache_creation_input_tokens"));
+        }
+        return (sb.ToString(), usage);
     }
 }

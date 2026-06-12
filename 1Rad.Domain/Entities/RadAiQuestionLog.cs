@@ -33,5 +33,25 @@ public class RadAiQuestionLog : BaseEntity, IHospitalContext
     // how-to guidance, never patient data). Length capped in the model config.
     public string? AnswerSnippet { get; set; }
 
+    // --- Token usage & savings attribution (token-optimization layer) ---
+    // Which path served this request: "claude", "gemini", or "cache".
+    public string? Model { get; set; }
+
+    // Tokens this request actually billed (0 on a response-cache hit).
+    public int InputTokens { get; set; }
+    public int OutputTokens { get; set; }
+
+    // Input tokens served from Anthropic prompt caching (billed at ~10% of the
+    // normal input rate) — used to credit prompt-cache savings.
+    public int CacheReadInputTokens { get; set; }
+
+    // True when the answer came straight from the response cache (no model call).
+    public bool CacheHit { get; set; }
+
+    // On a cache hit, the tokens the avoided model call would have billed — used
+    // to credit response-cache savings.
+    public int SavedInputTokens { get; set; }
+    public int SavedOutputTokens { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }

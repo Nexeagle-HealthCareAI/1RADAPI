@@ -1,5 +1,6 @@
 using _1Rad.Application.Features.Assist.RadAi;
 using _1Rad.Application.Features.Assist.Retrain;
+using _1Rad.Application.Features.Assist.Usage;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -30,6 +31,15 @@ public class AssistController : ControllerBase
     // shipping (the class is [Authorize] but not yet admin-only).
     [HttpGet("retrain-candidates")]
     public async Task<IActionResult> RetrainCandidates([FromQuery] GetRadAiRetrainCandidatesQuery query)
+    {
+        var result = await _mediator.Send(query);
+        return Ok(result);
+    }
+
+    // RadAI token-usage & savings dashboard (admin): tokens billed vs saved by
+    // response caching + prompt caching, as a before/after. Restrict to admins.
+    [HttpGet("usage")]
+    public async Task<IActionResult> Usage([FromQuery] GetRadAiUsageQuery query)
     {
         var result = await _mediator.Send(query);
         return Ok(result);

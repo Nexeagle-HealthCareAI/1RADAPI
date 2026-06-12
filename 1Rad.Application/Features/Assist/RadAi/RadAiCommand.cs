@@ -49,13 +49,20 @@ public class RadAiCommandHandler : IRequestHandler<RadAiCommand, RadAiResult>
     private readonly IAnthropicService _claude;
     private readonly IRadAiKnowledge _knowledge;
     private readonly IApplicationDbContext _db;
+    private readonly IRadAiResponseCache _cache;
 
-    public RadAiCommandHandler(IReportAiService gemini, IAnthropicService claude, IRadAiKnowledge knowledge, IApplicationDbContext db)
+    // Response-cache lifetime. Long enough to absorb bursts of the same question,
+    // short enough that a knowledge-pack change takes effect quickly (the cache
+    // key also hashes the system prompt, so a content change invalidates anyway).
+    private static readonly TimeSpan CacheTtl = TimeSpan.FromHours(6);
+
+    public RadAiCommandHandler(IReportAiService gemini, IAnthropicService claude, IRadAiKnowledge knowledge, IApplicationDbContext db, IRadAiResponseCache cache)
     {
         _gemini = gemini;
         _claude = claude;
         _knowledge = knowledge;
         _db = db;
+        _cache = cache;
     }
 
     public async Task<RadAiResult> Handle(RadAiCommand request, CancellationToken cancellationToken)
@@ -85,8 +92,29 @@ public class RadAiCommandHandler : IRequestHandler<RadAiCommand, RadAiResult>
             : "User question: " + request.Question!.Trim());
 
         var schema = _knowledge.BuildResponseSchema();
+        var langHint = string.IsNullOrWhiteSpace(request.Lang) ? "auto" : request.Lang!.Trim().ToLowerInvariant();
+
+        // Response cache (typed questions only — voice has no stable text key).
+        // A hit skips the model entirely, so 100% of the tokens that call would
+        // have billed are saved; we log what was avoided so it can be measured.
+        // The key hashes the system prompt, so a knowledge-pack change auto-
+        // invalidates stale answers.
+        string? cacheKey = null;
+        if (!hasAudio && !string.IsNullOrWhiteSpace(request.Question))
+        {
+            cacheKey = BuildCacheKey(request.Question!, request.Page, langHint, system);
+            if (_cache.TryGet(cacheKey, out var hit) && hit is not null)
+            {
+                await LogUsageAsync(request, wasVoice: false, model: "cache", answer: hit.Answer,
+                    lang: hit.ReplyLanguage, covered: hit.Covered,
+                    inputTokens: 0, outputTokens: 0, cacheReadInput: 0, cacheHit: true,
+                    savedInput: hit.SavedInputTokens, savedOutput: hit.SavedOutputTokens, ct: cancellationToken);
+                return new RadAiResult(true, hit.Answer, hit.ReplyLanguage, new List<string>(), hit.Covered, null);
+            }
+        }
 
         string json;
+        AiUsage usage;
         try
         {
             if (hasAudio)
@@ -96,11 +124,14 @@ public class RadAiCommandHandler : IRequestHandler<RadAiCommand, RadAiResult>
                 catch { return Fail("Couldn't read the audio. Please try again or type your question."); }
                 // Spoken → Gemini (inline audio transcription + answer in one call).
                 json = await _gemini.GenerateJsonAsync(system, user.ToString(), bytes, request.AudioMimeType, schema, cancellationToken);
+                usage = EstimateUsage(system, user.ToString(), json); // Gemini gives no usage on this path — estimate.
             }
             else
             {
-                // Typed → Claude Haiku.
-                json = await _claude.GenerateJsonAsync(system, user.ToString(), schema, cancellationToken);
+                // Typed → Claude Haiku (prompt caching + real token usage).
+                var res = await _claude.GenerateJsonWithUsageAsync(system, user.ToString(), schema, cancellationToken);
+                json = res.Text;
+                usage = res.Usage;
             }
         }
         catch
@@ -120,15 +151,23 @@ public class RadAiCommandHandler : IRequestHandler<RadAiCommand, RadAiResult>
         var followups = (parsed.SuggestedFollowups ?? new List<string>())
             .Where(s => !string.IsNullOrWhiteSpace(s)).Take(3).ToList();
 
-        // Capture the question for the "retrain" loop (most-asked + uncovered
-        // questions drive what to add to app_knowledge.json). Best-effort: it
-        // must never break or delay the user's answer.
-        await LogQuestionAsync(request, hasAudio, parsed.Answer, lang, parsed.Covered, cancellationToken);
+        // Cache the answer (typed path) so the next identical question is free.
+        // Store what THIS call billed, so a future hit can credit the saving.
+        if (cacheKey is not null)
+            _cache.Set(cacheKey, new RadAiCachedAnswer(parsed.Answer.Trim(), lang, parsed.Covered, usage.InputTokens, usage.OutputTokens), CacheTtl);
+
+        // Capture usage + the question for the retrain + token-savings dashboards.
+        // Best-effort: it must never break or delay the user's answer.
+        await LogUsageAsync(request, wasVoice: hasAudio, model: hasAudio ? "gemini" : "claude",
+            answer: parsed.Answer, lang: lang, covered: parsed.Covered,
+            inputTokens: usage.InputTokens, outputTokens: usage.OutputTokens, cacheReadInput: usage.CacheReadInputTokens,
+            cacheHit: false, savedInput: 0, savedOutput: 0, ct: cancellationToken);
 
         return new RadAiResult(true, parsed.Answer.Trim(), lang, followups, parsed.Covered, null);
     }
 
-    private async Task LogQuestionAsync(RadAiCommand req, bool wasVoice, string? answer, string lang, bool covered, CancellationToken ct)
+    private async Task LogUsageAsync(RadAiCommand req, bool wasVoice, string model, string? answer, string lang, bool covered,
+        int inputTokens, int outputTokens, int cacheReadInput, bool cacheHit, int savedInput, int savedOutput, CancellationToken ct)
     {
         try
         {
@@ -139,15 +178,22 @@ public class RadAiCommandHandler : IRequestHandler<RadAiCommand, RadAiResult>
 
             _db.RadAiQuestionLogs.Add(new RadAiQuestionLog
             {
-                HospitalId    = uc.HospitalId,
-                AskedByUserId = uc.UserId == Guid.Empty ? (Guid?)null : uc.UserId,
-                SessionId     = uc.SessionId,
-                Question      = wasVoice ? null : req.Question?.Trim(),
-                WasVoice      = wasVoice,
-                Page          = string.IsNullOrWhiteSpace(req.Page) ? null : req.Page!.Trim(),
-                ReplyLanguage = lang,
-                Covered       = covered,
-                AnswerSnippet = snippet,
+                HospitalId           = uc.HospitalId,
+                AskedByUserId        = uc.UserId == Guid.Empty ? (Guid?)null : uc.UserId,
+                SessionId            = uc.SessionId,
+                Question             = wasVoice ? null : req.Question?.Trim(),
+                WasVoice             = wasVoice,
+                Page                 = string.IsNullOrWhiteSpace(req.Page) ? null : req.Page!.Trim(),
+                ReplyLanguage        = lang,
+                Covered              = covered,
+                AnswerSnippet        = snippet,
+                Model                = model,
+                InputTokens          = inputTokens,
+                OutputTokens         = outputTokens,
+                CacheReadInputTokens = cacheReadInput,
+                CacheHit             = cacheHit,
+                SavedInputTokens     = savedInput,
+                SavedOutputTokens    = savedOutput,
             });
             await _db.SaveChangesAsync(ct);
         }
@@ -155,6 +201,32 @@ public class RadAiCommandHandler : IRequestHandler<RadAiCommand, RadAiResult>
         {
             // Logging is best-effort; never surface a failure to the user.
         }
+    }
+
+    // Stable cache key: normalised question + page + language + a short hash of
+    // the system prompt (which encodes the knowledge-pack version), so the cache
+    // is shared across centres (RadAI answers are generic, non-PHI help) and
+    // invalidates when app_knowledge.json changes.
+    private static string BuildCacheKey(string question, string? page, string langHint, string systemPrompt)
+    {
+        var norm = Regex.Replace(question.ToLowerInvariant(), "[^a-z0-9 ]", " ");
+        norm = Regex.Replace(norm, "\\s+", " ").Trim();
+        return $"radai:{ShortHash(systemPrompt)}:{page}:{langHint}:{norm}";
+    }
+
+    private static string ShortHash(string s)
+    {
+        using var sha = System.Security.Cryptography.SHA256.Create();
+        var bytes = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(s));
+        return Convert.ToHexString(bytes, 0, 6); // 12 hex chars — plenty to version the prompt
+    }
+
+    // ~4 chars/token heuristic for the Gemini (audio) path, which doesn't return
+    // usage here. Claude returns real counts via GenerateJsonWithUsageAsync.
+    private static AiUsage EstimateUsage(string system, string user, string output)
+    {
+        static int Est(string t) => string.IsNullOrEmpty(t) ? 0 : (t.Length + 3) / 4;
+        return new AiUsage(Est(system) + Est(user), Est(output), 0, 0);
     }
 
     private static RadAiResult Fail(string msg) => new(false, null, null, null, false, msg);

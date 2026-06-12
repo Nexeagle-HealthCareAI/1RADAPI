@@ -80,6 +80,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.Page).HasMaxLength(200);
             entity.Property(e => e.ReplyLanguage).HasMaxLength(8);
             entity.Property(e => e.AnswerSnippet).HasMaxLength(500);
+            entity.Property(e => e.Model).HasMaxLength(20);
             entity.HasIndex(e => new { e.HospitalId, e.CreatedAt });
             entity.HasIndex(e => new { e.HospitalId, e.Covered });
         });
