@@ -1903,7 +1903,8 @@ namespace _1RadAPI.Controllers
                 var pageIds = pageRows.Select(r => r.Id).ToList();
                 var pageAssets = await _context.StudyAssets
                     .Where(a => a.ImagingStudyId != null && pageIds.Contains(a.ImagingStudyId.Value))
-                    .Select(a => new { StudyId = a.ImagingStudyId!.Value, a.StorageBytes, a.ExtractionStatus, a.ExtractionError })
+                    .Select(a => new { StudyId = a.ImagingStudyId!.Value, a.StorageBytes, a.ExtractionStatus, a.ExtractionError,
+                                       a.ExtractionPhase, a.ExtractionProcessedSlices, a.ExtractionTotalSlices })
                     .ToListAsync();
                 var byStudy = pageAssets
                     .GroupBy(a => a.StudyId)
@@ -1913,6 +1914,11 @@ namespace _1RadAPI.Controllers
                         Size = g.Sum(x => x.StorageBytes),
                         Error = g.Where(x => x.ExtractionStatus == "Failed" && !string.IsNullOrWhiteSpace(x.ExtractionError))
                                  .Select(x => x.ExtractionError).FirstOrDefault(),
+                        // Live extraction progress (summed across the study's assets)
+                        // so the worklist can show a loader + % per processing study.
+                        Phase     = g.Select(x => x.ExtractionPhase).FirstOrDefault(p => !string.IsNullOrEmpty(p)),
+                        Processed = g.Sum(x => x.ExtractionProcessedSlices),
+                        Total     = g.Sum(x => x.ExtractionTotalSlices),
                     });
 
                 var items = pageRows.Select(s =>
@@ -1936,6 +1942,13 @@ namespace _1RadAPI.Controllers
                         assetCount = agg?.Count ?? 0,
                         sizeBytes = agg?.Size ?? 0L,
                         extractionError = string.Equals(s.Status, "Failed", StringComparison.OrdinalIgnoreCase) ? agg?.Error : null,
+                        // Live progress for the loader + % shown on processing rows.
+                        progressPhase = agg?.Phase,
+                        progressProcessed = agg?.Processed ?? 0,
+                        progressTotal = agg?.Total ?? 0,
+                        progressPercent = (agg?.Total ?? 0) > 0
+                            ? (int)Math.Round(100.0 * (agg?.Processed ?? 0) / agg!.Total)
+                            : 0,
                     };
                 }).ToList();
 
