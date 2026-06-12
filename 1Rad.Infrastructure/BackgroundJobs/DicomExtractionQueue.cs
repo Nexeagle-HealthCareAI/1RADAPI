@@ -5,15 +5,16 @@ namespace _1Rad.Infrastructure.BackgroundJobs;
 
 /// <summary>
 /// Channel-backed implementation of <see cref="IDicomExtractionQueue"/>.
-/// Single-consumer (the hosted service) is the expected usage pattern but
-/// multiple consumers would also be safe.
+/// The worker runs MULTIPLE parallel consumers, so SingleReader is false —
+/// System.Threading.Channels delivers each item to exactly one reader, so the
+/// consumers compete safely without any item being processed twice or lost.
 /// </summary>
 public class DicomExtractionQueue : IDicomExtractionQueue
 {
     private readonly Channel<Guid> _channel = Channel.CreateUnbounded<Guid>(
         new UnboundedChannelOptions
         {
-            SingleReader = true,
+            SingleReader = false, // multiple parallel consumers in DicomExtractionWorker
             SingleWriter = false,
         });
 
