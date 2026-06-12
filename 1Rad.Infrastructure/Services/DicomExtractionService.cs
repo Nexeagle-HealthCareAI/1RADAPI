@@ -5,13 +5,13 @@ using _1Rad.Domain.Entities;
 using FellowOakDicom;
 using FellowOakDicom.Imaging;
 using FellowOakDicom.Imaging.Codec;
-using FellowOakDicom.Imaging.ImageSharp;
 using FellowOakDicom.Imaging.NativeCodec;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Formats.Jpeg;
+using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
 
 namespace _1Rad.Infrastructure.Services;
@@ -93,13 +93,15 @@ public class DicomExtractionService : IDicomExtractionService
         _deleteSourceAfterExtraction = configuration.GetValue("Dicom:DeleteSourceAfterExtraction", true);
         _writeSlicePreviews = configuration.GetValue("Dicom:WriteSlicePreviews", true);
 
-        // fo-dicom uses a manager pattern — wire ImageSharp + native codecs
-        // (JPEG-LS, JPEG2000, JPEG-baseline transcoders) once. Idempotent
-        // because the second .Build() call no-ops if already configured.
+        // fo-dicom uses a manager pattern — wire the NATIVE codecs (JPEG-LS /
+        // JPEG2000 / HTJ2K transcoders) once. Idempotent (second .Build() no-ops).
+        // NOTE: we deliberately DON'T register an ImageManager — fo-dicom's
+        // ImageSharp bridge (fo-dicom.Imaging.ImageSharp 5.1.2) is built against
+        // ImageSharp 1.x and crashes on the 3.x we ship. Thumbnails/previews are
+        // rendered directly from pixel data instead (see RenderGrayscaleJpeg).
         try
         {
             new DicomSetupBuilder()
-                .RegisterServices(s => s.AddImageManager<ImageSharpImageManager>())
                 .RegisterServices(s => s.AddTranscoderManager<NativeTranscoderManager>())
                 .SkipValidation()
                 .Build();
@@ -456,33 +458,29 @@ public class DicomExtractionService : IDicomExtractionService
                         {
                             try
                             {
-                                using var full = RenderSharp(dicom);
-                                if (full != null)
+                                if (_writeSlicePreviews)
                                 {
-                                    if (_writeSlicePreviews)
+                                    var prev = RenderGrayscaleJpeg(dicom, PreviewMaxDim, 55);
+                                    if (prev != null)
                                     {
-                                        var prev = EncodeJpeg(full, PreviewMaxDim, 55);
-                                        if (prev != null)
-                                        {
-                                            var prevPath = $"{hospitalIdN}/{appointmentIdN}/extracted/{assetIdN}/series/{seriesIndex:D3}/{i:D4}_prev.jpg";
-                                            previewUrl = await UploadWithRetryAsync(prev, prevPath, "image/jpeg", cancellationToken);
-                                            Interlocked.Add(ref totalUploadedBytes, prev.Length);
-                                        }
+                                        var prevPath = $"{hospitalIdN}/{appointmentIdN}/extracted/{assetIdN}/series/{seriesIndex:D3}/{i:D4}_prev.jpg";
+                                        previewUrl = await UploadWithRetryAsync(prev, prevPath, "image/jpeg", cancellationToken);
+                                        Interlocked.Add(ref totalUploadedBytes, prev.Length);
                                     }
-                                    if (i == 0)
+                                }
+                                if (i == 0)
+                                {
+                                    var thumb = RenderGrayscaleJpeg(dicom, ThumbnailMaxDim, 70);
+                                    if (thumb != null)
                                     {
-                                        var thumb = EncodeJpeg(full, ThumbnailMaxDim, 70);
-                                        if (thumb != null)
-                                        {
-                                            var thumbPath = $"{hospitalIdN}/{appointmentIdN}/extracted/{assetIdN}/thumbs/{seriesIndex:D3}.jpg";
-                                            thumbnailUrl = await UploadWithRetryAsync(thumb, thumbPath, "image/jpeg", cancellationToken);
-                                        }
+                                        var thumbPath = $"{hospitalIdN}/{appointmentIdN}/extracted/{assetIdN}/thumbs/{seriesIndex:D3}.jpg";
+                                        thumbnailUrl = await UploadWithRetryAsync(thumb, thumbPath, "image/jpeg", cancellationToken);
                                     }
                                 }
                             }
                             catch (Exception pvEx)
                             {
-                                _logger.LogDebug(pvEx, "[DICOM_EXTRACT] Asset {AssetId} preview/thumb {Idx}/{I} failed — continuing without.", assetId, seriesIndex, i);
+                                _logger.LogWarning(pvEx, "[DICOM_EXTRACT] Asset {AssetId} preview/thumb {Idx}/{I} failed — continuing without.", assetId, seriesIndex, i);
                             }
                         }
 
@@ -890,41 +888,74 @@ public class DicomExtractionService : IDicomExtractionService
         public List<string>? Instances { get; set; }
     }
 
-    // Render the DICOM to a full-resolution ImageSharp image ONCE (caller
-    // disposes). The same render feeds both the series thumbnail and the per-slice
-    // progressive preview, so we only decode pixels once.
-    private static Image? RenderSharp(DicomFile file)
+    // Render a downsized grayscale JPEG (thumbnail / progressive preview) DIRECTLY
+    // from the DICOM pixel data + the DICOM VOI window, using ImageSharp 3.x only
+    // for resize + encode. This deliberately AVOIDS fo-dicom's
+    // DicomImage.RenderImage()/AsSharpImage() bridge, which is binary-incompatible
+    // with the ImageSharp 3.x we ship (fo-dicom.Imaging.ImageSharp 5.1.2 targets
+    // ImageSharp 1.x) — that silent mismatch is why thumbnails/previews produced
+    // nothing. Grayscale (MONOCHROME, SamplesPerPixel==1) only; colour → null.
+    private byte[]? RenderGrayscaleJpeg(DicomFile file, int maxDim, int quality)
     {
         try
         {
-            var renderable = new DicomImage(file.Dataset);
-            using var rendered = renderable.RenderImage();
-            return rendered.AsSharpImage();
-        }
-        catch
-        {
-            return null;
-        }
-    }
+            var ds = file.Dataset;
+            // GetFrame needs uncompressed pixels — decompress an encapsulated
+            // source first (the native codec, now loaded, handles this).
+            if (ds.InternalTransferSyntax.IsEncapsulated)
+                ds = new DicomTranscoder(ds.InternalTransferSyntax, DicomTransferSyntax.ExplicitVRLittleEndian)
+                        .Transcode(file).Dataset;
 
-    // Downsize a rendered image to `maxDim` (longest edge) and JPEG-encode it.
-    // Returns null on any failure (preview/thumbnail are best-effort).
-    private static byte[]? EncodeJpeg(Image full, int maxDim, int quality)
-    {
-        try
-        {
-            var w = full.Width; var h = full.Height;
-            if (w == 0 || h == 0) return null;
-            var scale = (double)maxDim / Math.Max(w, h);
-            using var img = scale < 1.0
-                ? full.Clone(x => x.Resize((int)(w * scale), (int)(h * scale)))
-                : full.Clone(_ => { });
+            var pd = DicomPixelData.Create(ds);
+            int cols = pd.Width, rows = pd.Height;
+            if (cols <= 0 || rows <= 0 || pd.SamplesPerPixel != 1) return null; // grayscale only
+
+            var frame = pd.GetFrame(0).Data;
+            int bits   = ds.GetSingleValueOrDefault<ushort>(DicomTag.BitsAllocated, 16);
+            bool signed = ds.GetSingleValueOrDefault<ushort>(DicomTag.PixelRepresentation, (ushort)0) == 1;
+            double slope     = ds.GetSingleValueOrDefault(DicomTag.RescaleSlope, 1.0);
+            double intercept = ds.GetSingleValueOrDefault(DicomTag.RescaleIntercept, 0.0);
+            bool mono1 = string.Equals(
+                ds.GetSingleValueOrDefault(DicomTag.PhotometricInterpretation, "MONOCHROME2"),
+                "MONOCHROME1", StringComparison.OrdinalIgnoreCase);
+
+            int n = cols * rows;
+            int bytesPerPx = bits > 8 ? 2 : 1;
+            if (frame.Length < n * bytesPerPx) return null;
+
+            double ReadStored(int i) => bits > 8
+                ? (signed ? BitConverter.ToInt16(frame, i * 2) : BitConverter.ToUInt16(frame, i * 2))
+                : (signed ? (sbyte)frame[i] : frame[i]);
+
+            double wc = ds.GetSingleValueOrDefault(DicomTag.WindowCenter, double.NaN);
+            double ww = ds.GetSingleValueOrDefault(DicomTag.WindowWidth,  double.NaN);
+            if (double.IsNaN(wc) || double.IsNaN(ww) || ww < 1)
+            {
+                // No window in the header — derive one from the data range.
+                double mn = double.MaxValue, mx = double.MinValue;
+                for (int i = 0; i < n; i++) { var v = ReadStored(i) * slope + intercept; if (v < mn) mn = v; if (v > mx) mx = v; }
+                wc = (mn + mx) / 2.0; ww = Math.Max(1.0, mx - mn);
+            }
+
+            var gray = new byte[n];
+            double lo = wc - 0.5 - (ww - 1) / 2.0;   // DICOM linear VOI LUT
+            for (int i = 0; i < n; i++)
+            {
+                double v = ReadStored(i) * slope + intercept;
+                int g = (int)Math.Round(Math.Clamp((v - lo) / (ww - 1), 0.0, 1.0) * 255);
+                gray[i] = (byte)(mono1 ? 255 - g : g);
+            }
+
+            using var img = Image.LoadPixelData<L8>(gray, cols, rows);
+            double sc = (double)maxDim / Math.Max(cols, rows);
+            if (sc < 1.0) img.Mutate(x => x.Resize((int)(cols * sc), (int)(rows * sc)));
             using var ms = new MemoryStream();
             img.SaveAsJpeg(ms, new JpegEncoder { Quality = quality });
             return ms.ToArray();
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogWarning(ex, "[DICOM_EXTRACT] grayscale preview/thumbnail render failed (continuing without).");
             return null;
         }
     }
