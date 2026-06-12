@@ -160,6 +160,24 @@ public class DicomExtractionService : IDicomExtractionService
         }
     }
 
+    // Upload a slice/frame/thumbnail with one retry. A transient blob hiccup on
+    // ONE slice must not throw out of its task and fail the whole study.
+    private async Task<string> UploadWithRetryAsync(byte[] bytes, string path, string contentType, CancellationToken ct)
+    {
+        for (int attempt = 0; ; attempt++)
+        {
+            try
+            {
+                using var ms = new MemoryStream(bytes, writable: false);
+                return await _blob.UploadFileAtPathAsync(ms, path, contentType, Container, ImmutableCacheControl);
+            }
+            catch when (attempt < 1)
+            {
+                await Task.Delay(400, ct);
+            }
+        }
+    }
+
     public async Task<int> ExtractAsync(Guid assetId, CancellationToken cancellationToken)
     {
         var asset = await _db.StudyAssets
@@ -271,25 +289,26 @@ public class DicomExtractionService : IDicomExtractionService
             long totalOriginalBytes  = 0;
             long totalUploadedBytes  = 0;
             int  transcodedSliceCount = 0;
+            int  failedSliceCount     = 0;
 
             // 4. Transcode + upload every slice IN PARALLEL (bounded), then
-            // write the slice index sequentially. The previous one-at-a-time
-            // loop serialised CPU transcode behind network upload RTT — a
-            // 300-slice study took minutes. Transcode is CPU-bound, upload is
-            // IO-bound; they pipeline well at modest concurrency. The
-            // DbContext is NOT thread-safe, so all EF writes happen after the
-            // parallel phase completes (re-runs wipe the index anyway, so the
-            // old chunked-save crash recovery is unnecessary).
+            // write the slice index sequentially. RESILIENCE: an individual
+            // slice failing (transient blob error, etc.) must NOT fail the whole
+            // study — each task catches its own error, retries the upload once,
+            // and on final failure returns null instead of throwing. We deliver
+            // the slices that DID succeed and only fail the extraction if none
+            // did. (`series.Index` is carried as a plain int so the result tuple
+            // is nameable/nullable.)
             using var uploadGate = new SemaphoreSlim(6);
             var sliceTasks = bySeries
-                .SelectMany(series => series.Slices.Select((p, i) => (series, p, i)))
+                .SelectMany(series => series.Slices.Select((p, i) => (seriesIndex: series.Index, p, i)))
                 .Select(async item =>
                 {
                     await uploadGate.WaitAsync(cancellationToken);
                     try
                     {
                         cancellationToken.ThrowIfCancellationRequested();
-                        var (series, p, i) = item;
+                        var (seriesIndex, p, i) = item;
 
                         // Transcode to HTJ2K Lossless RPCL — shrinks the payload and,
                         // crucially, makes each slice resolution-progressive (a low-res
@@ -301,37 +320,27 @@ public class DicomExtractionService : IDicomExtractionService
                         if (didTranscode) Interlocked.Increment(ref transcodedSliceCount);
 
                         // Slice blob path: deterministic, easy to delete by prefix.
-                        var sliceBlobPath = $"{hospitalIdN}/{appointmentIdN}/extracted/{assetIdN}/series/{series.Index:D3}/{i:D4}.dcm";
-                        string sliceUrl;
-                        using (var sliceUp = new MemoryStream(uploadBytes, writable: false))
-                        {
-                            sliceUrl = await _blob.UploadFileAtPathAsync(sliceUp, sliceBlobPath, "application/dicom", Container, ImmutableCacheControl);
-                        }
+                        var sliceBlobPath = $"{hospitalIdN}/{appointmentIdN}/extracted/{assetIdN}/series/{seriesIndex:D3}/{i:D4}.dcm";
+                        var sliceUrl = await UploadWithRetryAsync(uploadBytes, sliceBlobPath, "application/dicom", cancellationToken);
 
                         // Raw HTJ2K frame, served alongside the .dcm for byte-range
-                        // progressive loading (the viewer's wadors path range-reads
-                        // this and paints low-res-first). Content-type carries the
-                        // transfer syntax so Cornerstone treats it as streamable
-                        // HTJ2K. Best-effort: a slice without a streamable frame just
-                        // falls back to whole-file .dcm loading.
+                        // progressive loading. Best-effort: a slice without a
+                        // streamable frame just falls back to whole-file .dcm loading.
                         string? frameUrl = null;
-                        long frameBytesLen = 0;
                         try
                         {
                             var fr = ExtractStreamableFrame(uploadBytes);
                             if (fr.HasValue)
                             {
-                                var frameBlobPath = $"{hospitalIdN}/{appointmentIdN}/extracted/{assetIdN}/series/{series.Index:D3}/{i:D4}.jhc";
+                                var frameBlobPath = $"{hospitalIdN}/{appointmentIdN}/extracted/{assetIdN}/series/{seriesIndex:D3}/{i:D4}.jhc";
                                 var frameContentType = $"application/octet-stream; transfer-syntax={fr.Value.TransferSyntaxUid}";
-                                using var frameUp = new MemoryStream(fr.Value.Frame, writable: false);
-                                frameUrl = await _blob.UploadFileAtPathAsync(frameUp, frameBlobPath, frameContentType, Container, ImmutableCacheControl);
-                                frameBytesLen = fr.Value.Frame.Length;
-                                Interlocked.Add(ref totalUploadedBytes, frameBytesLen);
+                                frameUrl = await UploadWithRetryAsync(fr.Value.Frame, frameBlobPath, frameContentType, cancellationToken);
+                                Interlocked.Add(ref totalUploadedBytes, fr.Value.Frame.Length);
                             }
                         }
                         catch (Exception frEx)
                         {
-                            _logger.LogDebug(frEx, "[DICOM_EXTRACT] Asset {AssetId} frame {Idx}/{I} write failed — progressive disabled for this slice.", assetId, item.series.Index, item.i);
+                            _logger.LogDebug(frEx, "[DICOM_EXTRACT] Asset {AssetId} frame {Idx}/{I} write failed — progressive disabled for this slice.", assetId, seriesIndex, i);
                         }
 
                         // Thumbnail: first slice of each series only.
@@ -345,18 +354,27 @@ public class DicomExtractionService : IDicomExtractionService
                                 {
                                     using var ms = new MemoryStream();
                                     thumb.SaveAsJpeg(ms, new JpegEncoder { Quality = 70 });
-                                    ms.Position = 0;
-                                    var thumbPath = $"{hospitalIdN}/{appointmentIdN}/extracted/{assetIdN}/thumbs/{series.Index:D3}.jpg";
-                                    thumbnailUrl = await _blob.UploadFileAtPathAsync(ms, thumbPath, "image/jpeg", Container, ImmutableCacheControl);
+                                    var thumbPath = $"{hospitalIdN}/{appointmentIdN}/extracted/{assetIdN}/thumbs/{seriesIndex:D3}.jpg";
+                                    thumbnailUrl = await UploadWithRetryAsync(ms.ToArray(), thumbPath, "image/jpeg", cancellationToken);
                                 }
                             }
                             catch (Exception thumbEx)
                             {
-                                _logger.LogDebug(thumbEx, "[DICOM_EXTRACT] Asset {AssetId} series {Idx} thumbnail failed — continuing without.", assetId, item.series.Index);
+                                _logger.LogDebug(thumbEx, "[DICOM_EXTRACT] Asset {AssetId} series {Idx} thumbnail failed — continuing without.", assetId, seriesIndex);
                             }
                         }
 
-                        return (item.series, item.p, item.i, sliceUrl, sliceBlobPath, thumbnailUrl, frameUrl);
+                        return new SliceResult(seriesIndex, p, i, sliceUrl, sliceBlobPath, thumbnailUrl, frameUrl);
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        throw; // shutdown — let it propagate to requeue
+                    }
+                    catch (Exception sliceEx)
+                    {
+                        Interlocked.Increment(ref failedSliceCount);
+                        _logger.LogWarning(sliceEx, "[DICOM_EXTRACT] Asset {AssetId} slice {Series}/{I} failed after retry — skipping it.", assetId, item.seriesIndex, item.i);
+                        return (SliceResult?)null;
                     }
                     finally
                     {
@@ -365,10 +383,20 @@ public class DicomExtractionService : IDicomExtractionService
                 })
                 .ToList();
 
-            var uploaded = await Task.WhenAll(sliceTasks);
+            var results = await Task.WhenAll(sliceTasks);
+            var uploaded = results.Where(r => r.HasValue).Select(r => r!.Value).ToList();
+
+            // Total failure (nothing landed) is a real failure → surface it.
+            if (uploaded.Count == 0)
+                throw new InvalidOperationException(
+                    $"All {failedSliceCount} slice(s) failed to upload during extraction.");
+            if (failedSliceCount > 0)
+                _logger.LogWarning(
+                    "[DICOM_EXTRACT] Asset {AssetId}: {Failed} slice(s) failed, {Ok} succeeded — delivering partial study.",
+                    assetId, failedSliceCount, uploaded.Count);
 
             // Sequential EF phase — deterministic order (series, instance).
-            foreach (var u in uploaded.OrderBy(x => x.series.Index).ThenBy(x => x.i))
+            foreach (var u in uploaded.OrderBy(x => x.SeriesIndex).ThenBy(x => x.I))
             {
                 _db.StudySliceIndexes.Add(new StudySliceIndex
                 {
@@ -376,15 +404,15 @@ public class DicomExtractionService : IDicomExtractionService
                     AssetId           = asset.Id,
                     AppointmentId     = asset.AppointmentId,
                     HospitalId        = asset.HospitalId,
-                    SeriesUID         = u.p.SeriesUid,
-                    SopInstanceUID    = u.p.SopUid,
-                    InstanceNumber    = u.p.InstanceNumber,
-                    SeriesDescription = Truncate(u.p.SeriesDescription, 200),
-                    Modality          = Truncate(u.p.Modality, 16),
-                    BlobUrl           = u.sliceUrl,
-                    BlobPath          = u.sliceBlobPath,
-                    ThumbnailUrl      = u.i == 0 ? u.thumbnailUrl : null,
-                    MetadataJson      = ExtractMetadataJson(u.p.DicomFile, u.frameUrl),
+                    SeriesUID         = u.P.SeriesUid,
+                    SopInstanceUID    = u.P.SopUid,
+                    InstanceNumber    = u.P.InstanceNumber,
+                    SeriesDescription = Truncate(u.P.SeriesDescription, 200),
+                    Modality          = Truncate(u.P.Modality, 16),
+                    BlobUrl           = u.SliceUrl,
+                    BlobPath          = u.SliceBlobPath,
+                    ThumbnailUrl      = u.I == 0 ? u.ThumbnailUrl : null,
+                    MetadataJson      = ExtractMetadataJson(u.P.DicomFile, u.FrameUrl),
                     ExtractedAt       = DateTime.UtcNow,
                 });
                 sliceCount++;
@@ -711,6 +739,13 @@ public class DicomExtractionService : IDicomExtractionService
 
     private static string? Truncate(string? s, int max) =>
         string.IsNullOrEmpty(s) ? s : (s.Length <= max ? s : s.Substring(0, max));
+
+    // One successfully-uploaded slice's outputs, carried from the parallel
+    // upload phase to the sequential EF-write phase. A value type so the task
+    // can return SliceResult? (null = this slice failed and was skipped).
+    private readonly record struct SliceResult(
+        int SeriesIndex, ParsedSlice P, int I,
+        string SliceUrl, string SliceBlobPath, string? ThumbnailUrl, string? FrameUrl);
 
     private sealed class ParsedSlice
     {

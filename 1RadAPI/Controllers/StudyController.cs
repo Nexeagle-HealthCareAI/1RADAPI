@@ -590,6 +590,38 @@ namespace _1RadAPI.Controllers
             });
         }
 
+        /// <summary>
+        /// Re-queue extraction for a failed (or stuck) study — the "Retry"
+        /// action on the worklist. Resets the study + its extractable assets to
+        /// Queued and re-enqueues them. Tenant-scoped via the global filter.
+        /// </summary>
+        [HttpPost("studies/{studyId:guid}/reextract")]
+        [RequiresModule(ModuleConstants.Pacs)]
+        public async Task<IActionResult> ReextractStudy(Guid studyId)
+        {
+            var study = await _context.ImagingStudies.FirstOrDefaultAsync(s => s.Id == studyId);
+            if (study == null)
+                return NotFound(new { success = false, error = "Imaging study not found." });
+
+            var assets = await _context.StudyAssets
+                .Where(a => a.ImagingStudyId == study.Id)
+                .ToListAsync();
+            var retryable = assets.Where(a => NeedsExtraction(a.FileType) || a.FileType == "instances").ToList();
+            if (retryable.Count == 0)
+                return BadRequest(new { success = false, error = "This study has no extractable assets to retry." });
+
+            foreach (var a in retryable)
+            {
+                a.ExtractionStatus = "Queued";
+                a.ExtractionError = null;
+            }
+            study.Status = ImagingStudyStatus.Processing;
+            await _context.SaveChangesAsync(default);
+            foreach (var a in retryable) _extractionQueue.Enqueue(a.Id);
+
+            return Ok(new { success = true, data = new { imagingStudyId = study.Id, requeued = retryable.Count } });
+        }
+
         /// <summary>Same lightweight poll, keyed by appointment.</summary>
         [HttpGet("{appointmentId}/extraction-status")]
         [RequiresModule(ModuleConstants.Pacs)]
@@ -1799,32 +1831,59 @@ namespace _1RadAPI.Controllers
                     })
                     .ToListAsync();
 
+                // One asset query for the page → count, total size, and the
+                // failure reason (so the worklist can show WHY a study failed
+                // and how much storage it uses), aggregated in memory.
                 var pageIds = pageRows.Select(r => r.Id).ToList();
-                var assetCounts = await _context.StudyAssets
+                var pageAssets = await _context.StudyAssets
                     .Where(a => a.ImagingStudyId != null && pageIds.Contains(a.ImagingStudyId.Value))
-                    .GroupBy(a => a.ImagingStudyId!.Value)
-                    .Select(g => new { StudyId = g.Key, Count = g.Count() })
-                    .ToDictionaryAsync(x => x.StudyId, x => x.Count);
+                    .Select(a => new { StudyId = a.ImagingStudyId!.Value, a.StorageBytes, a.ExtractionStatus, a.ExtractionError })
+                    .ToListAsync();
+                var byStudy = pageAssets
+                    .GroupBy(a => a.StudyId)
+                    .ToDictionary(g => g.Key, g => new
+                    {
+                        Count = g.Count(),
+                        Size = g.Sum(x => x.StorageBytes),
+                        Error = g.Where(x => x.ExtractionStatus == "Failed" && !string.IsNullOrWhiteSpace(x.ExtractionError))
+                                 .Select(x => x.ExtractionError).FirstOrDefault(),
+                    });
 
-                var items = pageRows.Select(s => new
+                var items = pageRows.Select(s =>
                 {
-                    imagingStudyId = s.Id,
-                    s.StudyInstanceUID,
-                    s.PatientName,
-                    s.DicomPatientId,
-                    s.AccessionNumber,
-                    s.Modality,
-                    s.StudyDate,
-                    s.StudyDescription,
-                    s.Status,
-                    s.MatchStatus,
-                    s.AppointmentId,
-                    s.PatientId,
-                    s.CreatedAt,
-                    assetCount = assetCounts.TryGetValue(s.Id, out var c) ? c : 0,
+                    byStudy.TryGetValue(s.Id, out var agg);
+                    return new
+                    {
+                        imagingStudyId = s.Id,
+                        s.StudyInstanceUID,
+                        s.PatientName,
+                        s.DicomPatientId,
+                        s.AccessionNumber,
+                        s.Modality,
+                        s.StudyDate,
+                        s.StudyDescription,
+                        s.Status,
+                        s.MatchStatus,
+                        s.AppointmentId,
+                        s.PatientId,
+                        s.CreatedAt,
+                        assetCount = agg?.Count ?? 0,
+                        sizeBytes = agg?.Size ?? 0L,
+                        extractionError = string.Equals(s.Status, "Failed", StringComparison.OrdinalIgnoreCase) ? agg?.Error : null,
+                    };
                 }).ToList();
 
-                return Ok(new { success = true, data = new { total, page, pageSize, items } });
+                // Whole-centre storage usage so the worklist can show a meter.
+                long usedBytes = 0; long? quotaBytes = null;
+                try
+                {
+                    var usage = await _storage.GetUsageAsync(_userContext.HospitalId);
+                    usedBytes = usage.UsedBytes;
+                    quotaBytes = usage.IncludedBytes;
+                }
+                catch { /* metering is best-effort for the list header */ }
+
+                return Ok(new { success = true, data = new { total, page, pageSize, items, usedBytes, quotaBytes } });
             }
             catch (Exception ex)
             {
