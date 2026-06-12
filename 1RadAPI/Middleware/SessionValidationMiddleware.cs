@@ -52,6 +52,23 @@ public class SessionValidationMiddleware
             return;
         }
 
+        // Registration-stage (initiation) tokens are pre-session BY DESIGN:
+        // they're minted at OTP-verify before any RefreshTokens row exists,
+        // live 15 minutes, and are only accepted by the two InitiationOnly
+        // registration endpoints. Without this exemption the sid gate 401s
+        // the whole signup flow with MISSING_SID (the frontend reads that as
+        // "session-upgraded" and kicks the new user off the form). Scoped to
+        // BOTH the claim and the two endpoints so an initiation token still
+        // can't slip past session checks anywhere else.
+        var path = context.Request.Path.Value ?? string.Empty;
+        if (user.FindFirst("type")?.Value == "initiation"
+            && (path.EndsWith("/auth/identity-setup", StringComparison.OrdinalIgnoreCase)
+                || path.EndsWith("/auth/deploy-infrastructure", StringComparison.OrdinalIgnoreCase)))
+        {
+            await _next(context);
+            return;
+        }
+
         var sidString = user.FindFirst(JwtRegisteredClaimNames.Sid)?.Value
                         ?? user.FindFirst(ClaimTypes.Sid)?.Value;
         if (!Guid.TryParse(sidString, out var sessionId))

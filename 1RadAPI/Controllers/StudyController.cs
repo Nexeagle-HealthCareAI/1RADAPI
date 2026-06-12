@@ -251,6 +251,15 @@ namespace _1RadAPI.Controllers
             if (string.IsNullOrEmpty(blobUrl)) return blobUrl;
             var cdnBase = _configuration["AzureBlobStorage:CdnBaseUrl"];
             if (string.IsNullOrWhiteSpace(cdnBase)) return blobUrl;
+            // Tolerate scheme-less configuration ("myfd.azurefd.net"). Without
+            // a scheme the emitted URL is RELATIVE — the browser resolves it
+            // against the SPA origin and gets index.html instead of DICOM
+            // bytes (the viewer then fails with "DICM prefix not found").
+            if (!cdnBase.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                && !cdnBase.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                cdnBase = "https://" + cdnBase;
+            }
             try
             {
                 var u = new Uri(blobUrl);
