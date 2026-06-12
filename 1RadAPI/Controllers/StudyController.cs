@@ -1762,6 +1762,8 @@ namespace _1RadAPI.Controllers
             [FromQuery] string? q = null,
             [FromQuery] DateTime? from = null,
             [FromQuery] DateTime? to = null,
+            [FromQuery] string? sortBy = null,
+            [FromQuery] string? sortDir = null,
             [FromQuery] int page = 1,
             [FromQuery] int pageSize = 50)
         {
@@ -1807,10 +1809,27 @@ namespace _1RadAPI.Controllers
                 }
 
                 var total = await query.CountAsync();
+
+                // Column sorting. `size` orders by the per-study StorageBytes sum
+                // (a correlated sum — runs only when the user explicitly sorts by
+                // it). Everything else is a plain column. Default: newest first.
+                var asc = string.Equals(sortDir, "asc", StringComparison.OrdinalIgnoreCase);
+                var ordered = (sortBy?.ToLowerInvariant()) switch
+                {
+                    "patient" or "patientname" => asc ? query.OrderBy(s => s.PatientName) : query.OrderByDescending(s => s.PatientName),
+                    "modality" => asc ? query.OrderBy(s => s.Modality) : query.OrderByDescending(s => s.Modality),
+                    "studydate" or "date" => asc ? query.OrderBy(s => s.StudyDate) : query.OrderByDescending(s => s.StudyDate),
+                    "accession" or "accessionnumber" => asc ? query.OrderBy(s => s.AccessionNumber) : query.OrderByDescending(s => s.AccessionNumber),
+                    "status" => asc ? query.OrderBy(s => s.Status) : query.OrderByDescending(s => s.Status),
+                    "size" or "sizebytes" => asc
+                        ? query.OrderBy(s => _context.StudyAssets.Where(a => a.ImagingStudyId == s.Id).Sum(a => (long?)a.StorageBytes) ?? 0)
+                        : query.OrderByDescending(s => _context.StudyAssets.Where(a => a.ImagingStudyId == s.Id).Sum(a => (long?)a.StorageBytes) ?? 0),
+                    _ => asc ? query.OrderBy(s => s.CreatedAt) : query.OrderByDescending(s => s.CreatedAt),
+                };
+
                 // Fetch the page first, then get all asset counts in ONE grouped
                 // query (was a correlated subquery per row — N counts per page).
-                var pageRows = await query
-                    .OrderByDescending(s => s.CreatedAt)
+                var pageRows = await ordered
                     .Skip((page - 1) * pageSize)
                     .Take(pageSize)
                     .Select(s => new

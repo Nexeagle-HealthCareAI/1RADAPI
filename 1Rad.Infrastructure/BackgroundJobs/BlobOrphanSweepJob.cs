@@ -138,13 +138,18 @@ public class BlobOrphanSweepJob : BackgroundService
                            .Select(a => a.BlobUrl).AsAsyncEnumerable().WithCancellation(ct))
             AddName(referenced, url);
 
+        // Only treat the derived `.jhc` frame as live when progressive frames
+        // are ENABLED. With them off (the default), existing frames are dead
+        // weight → leaving them out of the referenced set lets this sweep
+        // reclaim them.
+        var framesEnabled = _config.GetValue("Dicom:WriteProgressiveFrames", false);
         await foreach (var s in db.StudySliceIndexes.IgnoreQueryFilters()
                            .Select(x => new { x.BlobUrl, x.ThumbnailUrl }).AsAsyncEnumerable().WithCancellation(ct))
         {
             AddName(referenced, s.BlobUrl);
             AddName(referenced, s.ThumbnailUrl);
-            // The progressive frame is referenced implicitly by its slice.
-            AddName(referenced, Services.DicomExtractionService.FrameUrlFromSlice(s.BlobUrl));
+            if (framesEnabled)
+                AddName(referenced, Services.DicomExtractionService.FrameUrlFromSlice(s.BlobUrl));
         }
 
         int orphans = 0; long bytes = 0;

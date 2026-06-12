@@ -8,6 +8,7 @@ using FellowOakDicom.Imaging.Codec;
 using FellowOakDicom.Imaging.ImageSharp;
 using FellowOakDicom.Imaging.NativeCodec;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Formats.Jpeg;
@@ -46,16 +47,26 @@ public class DicomExtractionService : IDicomExtractionService
     private readonly ILogger<DicomExtractionService> _logger;
     private readonly IStudyMatchingService _matching;
 
+    // Whether to ALSO write the raw .jhc progressive frame per slice. OFF by
+    // default: the viewer currently loads the full .dcm (wadouri), and the
+    // byte-range/wadors path that would CONSUME the .jhc isn't wired yet — so
+    // producing frames just DOUBLES per-slice storage for no benefit. Storing
+    // only the (already HTJ2K-compressed) .dcm realises the full ~2-3x saving.
+    // Flip Dicom:WriteProgressiveFrames=true once the frontend wadors path ships.
+    private readonly bool _writeFrames;
+
     public DicomExtractionService(
         IApplicationDbContext db,
         IBlobService blob,
         ILogger<DicomExtractionService> logger,
-        IStudyMatchingService matching)
+        IStudyMatchingService matching,
+        Microsoft.Extensions.Configuration.IConfiguration configuration)
     {
         _db = db;
         _blob = blob;
         _logger = logger;
         _matching = matching;
+        _writeFrames = configuration.GetValue("Dicom:WriteProgressiveFrames", false);
 
         // fo-dicom uses a manager pattern — wire ImageSharp + native codecs
         // (JPEG-LS, JPEG2000, JPEG-baseline transcoders) once. Idempotent
@@ -329,7 +340,7 @@ public class DicomExtractionService : IDicomExtractionService
                         string? frameUrl = null;
                         try
                         {
-                            var fr = ExtractStreamableFrame(uploadBytes);
+                            var fr = _writeFrames ? ExtractStreamableFrame(uploadBytes) : null;
                             if (fr.HasValue)
                             {
                                 var frameBlobPath = $"{hospitalIdN}/{appointmentIdN}/extracted/{assetIdN}/series/{seriesIndex:D3}/{i:D4}.jhc";
