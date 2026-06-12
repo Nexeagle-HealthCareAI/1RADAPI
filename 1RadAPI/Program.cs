@@ -172,13 +172,21 @@ var app = builder.Build();
 // Ops guard: without CdnBaseUrl the viewer's slice URLs point straight at
 // blob storage — no Front Door edge caching AND browsers cap blob origins at
 // ~6 parallel HTTP/1.1 connections, which collapses DICOM scroll throughput.
-// This is the single biggest viewer-latency lever; make a misconfig loud.
-if (string.IsNullOrWhiteSpace(builder.Configuration["AzureBlobStorage:CdnBaseUrl"]))
+// This is the single biggest viewer-latency lever; make the resolved value
+// LOUD at startup so a ":" vs "__" App-Setting keying mistake is obvious in the
+// App Service log stream (on Linux a literal ":" key does NOT bind).
+var resolvedCdn = _1RadAPI.Controllers.StudyController.ResolveCdnBaseUrl(builder.Configuration);
+if (string.IsNullOrWhiteSpace(resolvedCdn))
 {
     app.Logger.LogWarning(
-        "AzureBlobStorage:CdnBaseUrl is NOT configured — DICOM slice URLs will bypass Front Door " +
-        "(no edge caching, HTTP/1.1 only, ~6 parallel requests). Set it to the Front Door endpoint, " +
-        "e.g. https://<your-frontdoor>.azurefd.net, in App Service configuration.");
+        "[CDN] AzureBlobStorage:CdnBaseUrl did NOT resolve — DICOM slice URLs will bypass Front Door " +
+        "(no edge caching, HTTP/1.1 only, ~6 parallel requests). On LINUX App Service the setting key " +
+        "MUST use double underscore: AzureBlobStorage__CdnBaseUrl (not a colon). Set it to your Front Door " +
+        "endpoint, e.g. https://<your-frontdoor>.azurefd.net.");
+}
+else
+{
+    app.Logger.LogInformation("[CDN] CdnBaseUrl resolved to {Cdn} — DICOM slices will be served via Front Door.", resolvedCdn);
 }
 
 // Configure the HTTP request pipeline.

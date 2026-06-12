@@ -249,10 +249,32 @@ namespace _1RadAPI.Controllers
             }
         }
 
+        /// <summary>
+        /// Resolves the Front Door base URL from configuration, tolerant of how
+        /// the App Setting is keyed. Azure App Service injects settings as env
+        /// vars: on Windows a "AzureBlobStorage:CdnBaseUrl" colon key binds, but
+        /// on LINUX/containers nested keys MUST use "__" (double underscore) —
+        /// a literal ":" setting simply doesn't bind there and the lookup returns
+        /// null, so every slice silently bypasses Front Door. We read all the
+        /// plausible forms so the setting works regardless of platform/keying.
+        /// </summary>
+        public static string? ResolveCdnBaseUrl(IConfiguration config)
+        {
+            string? Pick(params string?[] vals) =>
+                vals.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
+            return Pick(
+                config["AzureBlobStorage:CdnBaseUrl"],
+                config["AzureBlobStorage__CdnBaseUrl"],
+                config["CdnBaseUrl"],
+                Environment.GetEnvironmentVariable("AzureBlobStorage__CdnBaseUrl"),
+                Environment.GetEnvironmentVariable("AzureBlobStorage:CdnBaseUrl"),
+                Environment.GetEnvironmentVariable("CdnBaseUrl"));
+        }
+
         private string? ToCdn(string? blobUrl)
         {
             if (string.IsNullOrEmpty(blobUrl)) return blobUrl;
-            var cdnBase = _configuration["AzureBlobStorage:CdnBaseUrl"];
+            var cdnBase = ResolveCdnBaseUrl(_configuration);
             if (string.IsNullOrWhiteSpace(cdnBase)) return blobUrl;
             // Tolerate scheme-less configuration ("myfd.azurefd.net"). Without
             // a scheme the emitted URL is RELATIVE — the browser resolves it
