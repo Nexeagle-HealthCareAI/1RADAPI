@@ -62,6 +62,20 @@ public interface IApplicationDbContext
     // a brand-new hospital-day starts in the right place with no data backfill.
     Task<int> NextSequenceValueAsync(Guid hospitalId, string counterKey, int seedIfAbsent, CancellationToken cancellationToken);
 
+    // ── Durable leased extraction queue (multi-instance safe) ─────────────────
+    // The StudyAssets table IS the queue. ClaimNext atomically leases the oldest
+    // ready job to one instance (READPAST so parallel claimers never collide or
+    // double-process); a crashed instance's lease expires and the job is
+    // reclaimed. RenewLease is the heartbeat the worker calls while a long
+    // extraction runs so the job isn't mistaken for abandoned. Both are single
+    // server-side statements — no app-side locking.
+
+    /// <summary>Atomically claim + lease the next ready extraction job, or null if none is ready.</summary>
+    Task<Guid?> ClaimNextExtractionJobAsync(string owner, int leaseSeconds, CancellationToken cancellationToken);
+
+    /// <summary>Heartbeat: extend the lease on a job this instance still owns.</summary>
+    Task RenewExtractionLeaseAsync(Guid assetId, string owner, int leaseSeconds, CancellationToken cancellationToken);
+
     // EF Core ChangeTracker access — needed by OCC-aware command handlers
     // (Phase B2 Track 3) so they can set OriginalValues["RowVersion"] on
     // an existing tracked entity. Exposing the EntityEntry shape keeps

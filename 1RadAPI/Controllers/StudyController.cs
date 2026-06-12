@@ -513,10 +513,23 @@ namespace _1RadAPI.Controllers
             if (study == null)
                 return NotFound(new { success = false, error = "Imaging study not found." });
 
+            // Live progress (phase + slices done/total/percent) is read straight
+            // from the row, so it's correct no matter which instance is doing the
+            // extraction (durable, multi-instance).
             var assets = await _context.StudyAssets
                 .AsNoTracking()
                 .Where(a => a.ImagingStudyId == imagingStudyId)
-                .Select(a => new { assetId = a.Id, fileName = a.FileName, fileType = a.FileType, extractionStatus = a.ExtractionStatus })
+                .Select(a => new
+                {
+                    assetId = a.Id, fileName = a.FileName, fileType = a.FileType,
+                    extractionStatus = a.ExtractionStatus,
+                    phase     = a.ExtractionPhase,
+                    processed = a.ExtractionProcessedSlices,
+                    total     = a.ExtractionTotalSlices,
+                    percent   = a.ExtractionTotalSlices > 0
+                        ? (int)Math.Round(100.0 * a.ExtractionProcessedSlices / a.ExtractionTotalSlices)
+                        : 0,
+                })
                 .ToListAsync(cancellationToken);
 
             return Ok(new { success = true, data = new { status = study.Status, assets } });
@@ -612,8 +625,17 @@ namespace _1RadAPI.Controllers
 
             foreach (var a in retryable)
             {
-                a.ExtractionStatus = "Queued";
-                a.ExtractionError = null;
+                // Manual retry starts FRESH: clear the durable retry/backoff +
+                // lease state so the leased queue claims it immediately (not gated
+                // by a stale backoff) and the attempt counter restarts.
+                a.ExtractionStatus       = "Queued";
+                a.ExtractionError        = null;
+                a.ExtractionAttempts     = 0;
+                a.ExtractionNextAttemptAt = null;
+                a.ExtractionLeaseOwner   = null;
+                a.ExtractionLeaseUntil   = null;
+                a.ExtractionPhase        = null;
+                a.ExtractionProcessedSlices = 0;
             }
             study.Status = ImagingStudyStatus.Processing;
             await _context.SaveChangesAsync(default);
@@ -639,7 +661,17 @@ namespace _1RadAPI.Controllers
             var assets = await _context.StudyAssets
                 .AsNoTracking()
                 .Where(a => a.AppointmentId == appointment.AppointmentId)
-                .Select(a => new { assetId = a.Id, fileName = a.FileName, fileType = a.FileType, extractionStatus = a.ExtractionStatus })
+                .Select(a => new
+                {
+                    assetId = a.Id, fileName = a.FileName, fileType = a.FileType,
+                    extractionStatus = a.ExtractionStatus,
+                    phase     = a.ExtractionPhase,
+                    processed = a.ExtractionProcessedSlices,
+                    total     = a.ExtractionTotalSlices,
+                    percent   = a.ExtractionTotalSlices > 0
+                        ? (int)Math.Round(100.0 * a.ExtractionProcessedSlices / a.ExtractionTotalSlices)
+                        : 0,
+                })
                 .ToListAsync(cancellationToken);
 
             return Ok(new { success = true, data = new { status = (string?)null, assets } });

@@ -58,6 +58,35 @@ namespace _1Rad.Domain.Entities
         public string? ExtractionError { get; set; }
         public int ExtractionSliceCount { get; set; }
 
+        // ── Durable, multi-instance extraction queue (migration 60) ──────────
+        // The work queue is the StudyAssets table itself: a row in 'Queued' is a
+        // job, claimed atomically with a LEASE so many API instances can pull
+        // work safely (READPAST skip), and a crashed instance's lease expires so
+        // the job is reclaimed — no in-memory queue, no double-processing, no
+        // lost work on restart. Retry + live progress are columns too, so ANY
+        // instance answers the status poll and survives restarts.
+
+        /// <summary>Instance id currently holding the processing lease (null when idle).</summary>
+        public string? ExtractionLeaseOwner { get; set; }
+
+        /// <summary>Lease expiry. A 'Running' row past this is treated as abandoned and reclaimable.</summary>
+        public DateTime? ExtractionLeaseUntil { get; set; }
+
+        /// <summary>How many times extraction has been attempted (durable retry counter).</summary>
+        public int ExtractionAttempts { get; set; }
+
+        /// <summary>Backoff gate — a 'Queued' row is not claimed before this time.</summary>
+        public DateTime? ExtractionNextAttemptAt { get; set; }
+
+        /// <summary>Live progress phase shown in the viewer (Downloading / Processing / Finalizing).</summary>
+        public string? ExtractionPhase { get; set; }
+
+        /// <summary>Live progress numerator — slices handled so far.</summary>
+        public int ExtractionProcessedSlices { get; set; }
+
+        /// <summary>Live progress denominator — total slices discovered (0 until known).</summary>
+        public int ExtractionTotalSlices { get; set; }
+
         // Navigation
         public Appointment? Appointment { get; set; }
         public ImagingStudy? ImagingStudy { get; set; }

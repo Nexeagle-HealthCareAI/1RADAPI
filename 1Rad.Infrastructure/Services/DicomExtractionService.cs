@@ -78,7 +78,10 @@ public class DicomExtractionService : IDicomExtractionService
         _logger = logger;
         _matching = matching;
         _writeFrames = configuration.GetValue("Dicom:WriteProgressiveFrames", false);
-        _deleteSourceAfterExtraction = configuration.GetValue("Dicom:DeleteSourceAfterExtraction", false);
+        // Default ON: once extraction succeeds cleanly the per-slice HTJ2K blobs
+        // ARE the study, so the source ZIP is pure overhead. Set the flag to false
+        // only to keep ZIPs (e.g. for debugging a problematic feed).
+        _deleteSourceAfterExtraction = configuration.GetValue("Dicom:DeleteSourceAfterExtraction", true);
 
         // fo-dicom uses a manager pattern — wire ImageSharp + native codecs
         // (JPEG-LS, JPEG2000, JPEG-baseline transcoders) once. Idempotent
@@ -243,6 +246,9 @@ public class DicomExtractionService : IDicomExtractionService
         asset.ExtractionStatus = "Running";
         asset.ExtractionStartedAt = DateTime.UtcNow;
         asset.ExtractionError = null;
+        asset.ExtractionPhase = "Downloading";
+        asset.ExtractionProcessedSlices = 0;
+        asset.ExtractionTotalSlices = 0;
         if (study != null) study.Status = ImagingStudyStatus.Processing;
         await _db.SaveChangesAsync(cancellationToken);
 
@@ -272,6 +278,9 @@ public class DicomExtractionService : IDicomExtractionService
             asset.ExtractionSliceCount  = prior.Count;
             asset.ExtractionCompletedAt = DateTime.UtcNow;
             asset.ExtractionError       = null;
+            asset.ExtractionPhase       = null;
+            asset.ExtractionLeaseOwner  = null;
+            asset.ExtractionLeaseUntil  = null;
             if (study != null)
             {
                 study.Status   = ImagingStudyStatus.Ready;
@@ -312,6 +321,19 @@ public class DicomExtractionService : IDicomExtractionService
 
             if (parsedSlices.Count == 0)
                 throw new InvalidOperationException("No readable DICOM instances found in the upload.");
+
+            // Slice count is known now — publish the total so the viewer's bar
+            // becomes determinate ("Processing N / Total"), and flip the phase.
+            asset.ExtractionTotalSlices = parsedSlices.Count;
+            asset.ExtractionPhase = "Processing";
+            await _db.SaveChangesAsync(cancellationToken);
+
+            // Live progress: a throttled background flush of the processed count to
+            // the row, so ANY instance's status poll shows the bar advance without
+            // a DB write per slice. Stopped before the EF phase below.
+            var processedCount = 0;
+            using var progressCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var progressFlush = FlushProgressAsync(asset, () => Volatile.Read(ref processedCount), progressCts.Token);
 
             // 3. Group by series and order by InstanceNumber so the blob layout
             // is deterministic and the manifest comes out pre-sorted.
@@ -359,12 +381,19 @@ public class DicomExtractionService : IDicomExtractionService
                         cancellationToken.ThrowIfCancellationRequested();
                         var (seriesIndex, p, i) = item;
 
+                        // Re-open the DICOM HERE (not retained from gather) and dispose
+                        // it at the end of this slice, so peak memory is bounded to the
+                        // ~6 slices in flight rather than the whole study.
+                        var originalBytes = p.OriginalBytes;
+                        using var sliceMs = new MemoryStream(originalBytes, writable: false);
+                        var dicom = DicomFile.Open(sliceMs, FileReadOption.ReadAll); // DicomFile is not IDisposable; GC reclaims it
+
                         // Transcode to HTJ2K Lossless RPCL — shrinks the payload and,
                         // crucially, makes each slice resolution-progressive (a low-res
                         // image decodes from a byte-range prefix). Lossless = primary-
                         // diagnosis safe; falls back to original bytes on any error.
-                        var uploadBytes = TranscodeSliceBytes(p.DicomFile, p.OriginalBytes, out var didTranscode);
-                        Interlocked.Add(ref totalOriginalBytes, p.OriginalBytes.Length);
+                        var uploadBytes = TranscodeSliceBytes(dicom, originalBytes, out var didTranscode);
+                        Interlocked.Add(ref totalOriginalBytes, originalBytes.Length);
                         Interlocked.Add(ref totalUploadedBytes, uploadBytes.Length);
                         if (didTranscode) Interlocked.Increment(ref transcodedSliceCount);
 
@@ -398,7 +427,7 @@ public class DicomExtractionService : IDicomExtractionService
                         {
                             try
                             {
-                                using var thumb = RenderThumbnail(p.DicomFile);
+                                using var thumb = RenderThumbnail(dicom);
                                 if (thumb != null)
                                 {
                                     using var ms = new MemoryStream();
@@ -413,7 +442,16 @@ public class DicomExtractionService : IDicomExtractionService
                             }
                         }
 
-                        return new SliceResult(seriesIndex, p, i, sliceUrl, sliceBlobPath, thumbnailUrl, frameUrl);
+                        // Metadata JSON computed HERE (while the DICOM is open), then
+                        // carried in the result — the EF phase no longer needs the
+                        // parsed file, so nothing heavy survives this task.
+                        var metadataJson = ExtractMetadataJson(dicom, frameUrl);
+
+                        // Release the raw bytes now that this slice is fully uploaded,
+                        // so held memory shrinks as the study progresses.
+                        p.OriginalBytes = Array.Empty<byte>();
+
+                        return new SliceResult(seriesIndex, p, i, sliceUrl, sliceBlobPath, thumbnailUrl, frameUrl, metadataJson);
                     }
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                     {
@@ -427,12 +465,20 @@ public class DicomExtractionService : IDicomExtractionService
                     }
                     finally
                     {
+                        // Count every attempted slice (success OR skip) so the
+                        // progress bar always reaches the total.
+                        Interlocked.Increment(ref processedCount);
                         uploadGate.Release();
                     }
                 })
                 .ToList();
 
             var results = await Task.WhenAll(sliceTasks);
+
+            // Stop the progress flusher BEFORE the EF phase resumes using _db.
+            progressCts.Cancel();
+            try { await progressFlush; } catch { /* ignore */ }
+
             var uploaded = results.Where(r => r.HasValue).Select(r => r!.Value).ToList();
 
             // Total failure (nothing landed) is a real failure → surface it.
@@ -443,6 +489,8 @@ public class DicomExtractionService : IDicomExtractionService
                 _logger.LogWarning(
                     "[DICOM_EXTRACT] Asset {AssetId}: {Failed} slice(s) failed, {Ok} succeeded — delivering partial study.",
                     assetId, failedSliceCount, uploaded.Count);
+
+            asset.ExtractionPhase = "Finalizing";
 
             // Sequential EF phase — deterministic order (series, instance).
             foreach (var u in uploaded.OrderBy(x => x.SeriesIndex).ThenBy(x => x.I))
@@ -461,7 +509,7 @@ public class DicomExtractionService : IDicomExtractionService
                     BlobUrl           = u.SliceUrl,
                     BlobPath          = u.SliceBlobPath,
                     ThumbnailUrl      = u.I == 0 ? u.ThumbnailUrl : null,
-                    MetadataJson      = ExtractMetadataJson(u.P.DicomFile, u.FrameUrl),
+                    MetadataJson      = u.MetadataJson,
                     ExtractedAt       = DateTime.UtcNow,
                 });
                 sliceCount++;
@@ -471,6 +519,10 @@ public class DicomExtractionService : IDicomExtractionService
             asset.ExtractionSliceCount  = sliceCount;
             asset.ExtractionCompletedAt = DateTime.UtcNow;
             asset.ExtractionError       = null;
+            asset.ExtractionPhase       = null;
+            asset.ExtractionProcessedSlices = sliceCount;
+            asset.ExtractionLeaseOwner  = null;   // release the lease — job done
+            asset.ExtractionLeaseUntil  = null;
 
             // Storage metering (Phase 3): the asset's durable footprint is the
             // retained original blob (ZIPs are kept; per-instance staging gets
@@ -531,6 +583,8 @@ public class DicomExtractionService : IDicomExtractionService
             asset.ExtractionStatus      = "Failed";
             asset.ExtractionError       = Truncate(ex.Message, 2000);
             asset.ExtractionCompletedAt = DateTime.UtcNow;
+            asset.ExtractionPhase       = null;
+            // The worker owns retry-vs-final-fail and clears the lease there.
             if (study != null) study.Status = ImagingStudyStatus.Failed;
             await _db.SaveChangesAsync(CancellationToken.None);
             _logger.LogError(ex, "[DICOM_EXTRACT] Asset {AssetId} extraction failed.", assetId);
@@ -595,7 +649,11 @@ public class DicomExtractionService : IDicomExtractionService
         try
         {
             using var ms = new MemoryStream(bytes, writable: false);
-            var dicom = DicomFile.Open(ms, FileReadOption.ReadAll);
+            // ReadLargeOnDemand: parse the metadata WITHOUT pulling the pixel data
+            // into managed memory — we only need the tags here. The pixels are
+            // re-read from OriginalBytes by the processing task. Disposed at the
+            // end of this method (the `using`), so nothing heavy is retained.
+            var dicom = DicomFile.Open(ms, FileReadOption.ReadLargeOnDemand);
             var ds = dicom.Dataset;
             var seriesUid = ds.GetSingleValueOrDefault(DicomTag.SeriesInstanceUID, string.Empty);
             var sopUid    = ds.GetSingleValueOrDefault(DicomTag.SOPInstanceUID,    string.Empty);
@@ -618,7 +676,6 @@ public class DicomExtractionService : IDicomExtractionService
                 InstanceNumber    = ds.GetSingleValueOrDefault<int?>(DicomTag.InstanceNumber, null),
                 SeriesDescription = ds.GetSingleValueOrDefault<string?>(DicomTag.SeriesDescription, null),
                 Modality          = ds.GetSingleValueOrDefault<string?>(DicomTag.Modality, null),
-                DicomFile         = dicom,
                 OriginalBytes     = bytes,
             };
         }
@@ -658,30 +715,64 @@ public class DicomExtractionService : IDicomExtractionService
         catch { return null; }
     }
 
-    // Legacy path: download the study ZIP from blob and parse every entry.
+    // Throttled background flush of the live processed-slice count to the row so
+    // the status poll (on ANY instance) shows the bar advance without a DB write
+    // per slice. Runs only during the parallel slice phase, when _db is otherwise
+    // idle (the main flow is parked on Task.WhenAll), so there is no concurrent
+    // DbContext use; it's cancelled before the EF phase resumes.
+    private async Task FlushProgressAsync(StudyAsset asset, Func<int> getProcessed, CancellationToken ct)
+    {
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                await Task.Delay(2000, ct);
+                asset.ExtractionProcessedSlices = getProcessed();
+                await _db.SaveChangesAsync(ct);
+            }
+        }
+        catch (OperationCanceledException) { /* extraction finished or shutting down */ }
+        catch (Exception ex) { _logger.LogDebug(ex, "[DICOM_EXTRACT] progress flush failed (non-fatal)."); }
+    }
+
+    // ZIP path: stream the archive to a TEMP FILE (not a MemoryStream) so the
+    // compressed bytes never sit in managed memory, then parse each entry. Only
+    // metadata + the raw entry bytes are retained per slice; the parsed DicomFile
+    // is NOT (see ParseSlice) — the processing task re-opens it on demand. The
+    // temp file is always deleted.
     private async Task<List<ParsedSlice>> GatherSlicesFromZipAsync(StudyAsset asset, CancellationToken ct)
     {
-        using var zipStream = await _blob.DownloadFileAsync(asset.BlobUrl);
-        using var memory = new MemoryStream();
-        await zipStream.CopyToAsync(memory, ct);
-        memory.Position = 0;
-
-        using var archive = new ZipArchive(memory, ZipArchiveMode.Read);
-        var parsed = new List<ParsedSlice>(archive.Entries.Count);
-        foreach (var entry in archive.Entries)
+        var tempPath = Path.Combine(Path.GetTempPath(), $"dicomzip_{Guid.NewGuid():N}.zip");
+        try
         {
-            ct.ThrowIfCancellationRequested();
-            if (entry.Length == 0) continue;
-            if (entry.FullName.StartsWith("__MACOSX", StringComparison.OrdinalIgnoreCase)) continue;
-            if (entry.Name.StartsWith("._", StringComparison.Ordinal)) continue;
+            await using (var dl = await _blob.DownloadFileAsync(asset.BlobUrl))
+            await using (var fs = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20, useAsync: true))
+            {
+                await dl.CopyToAsync(fs, ct);
+            }
 
-            using var es = entry.Open();
-            using var ms = new MemoryStream((int)Math.Min(entry.Length, int.MaxValue));
-            await es.CopyToAsync(ms, ct);
-            var slice = ParseSlice(asset.Id, entry.Name, ms.ToArray());
-            if (slice != null) parsed.Add(slice);
+            using var zipFs = new FileStream(tempPath, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20, useAsync: true);
+            using var archive = new ZipArchive(zipFs, ZipArchiveMode.Read);
+            var parsed = new List<ParsedSlice>(archive.Entries.Count);
+            foreach (var entry in archive.Entries)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (entry.Length == 0) continue;
+                if (entry.FullName.StartsWith("__MACOSX", StringComparison.OrdinalIgnoreCase)) continue;
+                if (entry.Name.StartsWith("._", StringComparison.Ordinal)) continue;
+
+                using var es = entry.Open();
+                using var ms = new MemoryStream((int)Math.Min(entry.Length, int.MaxValue));
+                await es.CopyToAsync(ms, ct);
+                var slice = ParseSlice(asset.Id, entry.Name, ms.ToArray());
+                if (slice != null) parsed.Add(slice);
+            }
+            return parsed;
         }
-        return parsed;
+        finally
+        {
+            try { File.Delete(tempPath); } catch { /* best-effort temp cleanup */ }
+        }
     }
 
     // Single-DCM path: the asset blob IS the one instance. Normalised through
@@ -855,7 +946,8 @@ public class DicomExtractionService : IDicomExtractionService
     // can return SliceResult? (null = this slice failed and was skipped).
     private readonly record struct SliceResult(
         int SeriesIndex, ParsedSlice P, int I,
-        string SliceUrl, string SliceBlobPath, string? ThumbnailUrl, string? FrameUrl);
+        string SliceUrl, string SliceBlobPath, string? ThumbnailUrl, string? FrameUrl,
+        string? MetadataJson);
 
     private sealed class ParsedSlice
     {
@@ -871,7 +963,11 @@ public class DicomExtractionService : IDicomExtractionService
         public int? InstanceNumber      { get; set; }
         public string? SeriesDescription { get; set; }
         public string? Modality         { get; set; }
-        public DicomFile DicomFile      { get; set; } = null!;
+        // Raw bytes only — the parsed DicomFile is NOT retained (it holds the
+        // decoded pixel data, ~doubling RAM per slice). The processing task
+        // re-opens it on demand and disposes it, so peak memory is bounded to the
+        // few slices in flight rather than the WHOLE study at once. This is the
+        // fix for OOM-on-large-studies under concurrency.
         public byte[] OriginalBytes     { get; set; } = Array.Empty<byte>();
     }
 }

@@ -1,29 +1,31 @@
-using System.Threading.Channels;
 using _1Rad.Application.Interfaces;
 
 namespace _1Rad.Infrastructure.BackgroundJobs;
 
 /// <summary>
-/// Channel-backed implementation of <see cref="IDicomExtractionQueue"/>.
-/// The worker runs MULTIPLE parallel consumers, so SingleReader is false —
-/// System.Threading.Channels delivers each item to exactly one reader, so the
-/// consumers compete safely without any item being processed twice or lost.
+/// Wake-signal implementation of <see cref="IDicomExtractionQueue"/>. Backed by a
+/// counting semaphore: <see cref="Enqueue"/> releases a permit, the worker awaits
+/// one (with a timeout that doubles as its poll cadence). Durable work state lives
+/// in the StudyAssets table — this only minimises pick-up latency for uploads that
+/// land on THIS instance.
 /// </summary>
 public class DicomExtractionQueue : IDicomExtractionQueue
 {
-    private readonly Channel<Guid> _channel = Channel.CreateUnbounded<Guid>(
-        new UnboundedChannelOptions
-        {
-            SingleReader = false, // multiple parallel consumers in DicomExtractionWorker
-            SingleWriter = false,
-        });
+    private readonly SemaphoreSlim _signal = new(0);
 
     public void Enqueue(Guid assetId)
     {
-        // Channel writes to an unbounded channel never block and never return false.
-        _channel.Writer.TryWrite(assetId);
+        // Coalesce bursts: one pending permit is enough to wake the poller, which
+        // then drains everything that's ready. Avoid unbounded permit growth.
+        if (_signal.CurrentCount == 0)
+        {
+            try { _signal.Release(); } catch (SemaphoreFullException) { /* already signalled */ }
+        }
     }
 
-    public IAsyncEnumerable<Guid> DequeueAllAsync(CancellationToken cancellationToken)
-        => _channel.Reader.ReadAllAsync(cancellationToken);
+    public async Task WaitForWorkAsync(TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        try { await _signal.WaitAsync(timeout, cancellationToken); }
+        catch (OperationCanceledException) { /* shutting down */ }
+    }
 }

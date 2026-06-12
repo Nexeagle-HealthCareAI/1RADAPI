@@ -1166,6 +1166,84 @@ SELECT @v;";
         return Convert.ToInt32(result);
     }
 
+    // See IApplicationDbContext.ClaimNextExtractionJobAsync. The CTE selects the
+    // OLDEST ready job (FIFO) under READPAST/UPDLOCK/ROWLOCK — READPAST makes a
+    // concurrent claimer on another instance SKIP a row this one is locking, so
+    // N instances pull DISTINCT jobs with zero contention and nothing is
+    // processed twice. "Ready" = a Queued row past its backoff gate, OR a Running
+    // row whose lease expired (its owner crashed). The single UPDATE flips it to
+    // Running + stamps a fresh lease and returns the id.
+    public async Task<Guid?> ClaimNextExtractionJobAsync(string owner, int leaseSeconds, CancellationToken cancellationToken)
+    {
+        const string sql = @"
+SET NOCOUNT ON;
+DECLARE @claimed TABLE (Id UNIQUEIDENTIFIER);
+WITH nxt AS (
+    SELECT TOP (1) Id, ExtractionStatus, ExtractionLeaseOwner, ExtractionLeaseUntil, ExtractionStartedAt
+      FROM dbo.StudyAssets WITH (READPAST, UPDLOCK, ROWLOCK)
+     WHERE FileType IN ('zip','instances','dcm','dicom')
+       AND (
+             (ExtractionStatus = 'Queued'
+                AND (ExtractionNextAttemptAt IS NULL OR ExtractionNextAttemptAt <= SYSUTCDATETIME()))
+             OR
+             -- Running with an expired (or legacy NULL) lease = its owner died → reclaim.
+             (ExtractionStatus = 'Running'
+                AND (ExtractionLeaseUntil IS NULL OR ExtractionLeaseUntil < SYSUTCDATETIME()))
+           )
+     ORDER BY UploadedAt ASC
+)
+UPDATE nxt
+   SET ExtractionStatus     = 'Running',
+       ExtractionLeaseOwner = @owner,
+       ExtractionLeaseUntil = DATEADD(SECOND, @lease, SYSUTCDATETIME()),
+       ExtractionStartedAt  = COALESCE(ExtractionStartedAt, SYSUTCDATETIME())
+OUTPUT inserted.Id INTO @claimed;
+SELECT Id FROM @claimed;";
+
+        var conn = Database.GetDbConnection();
+        if (conn.State != ConnectionState.Open)
+            await conn.OpenAsync(cancellationToken);
+
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+        var ambient = Database.CurrentTransaction?.GetDbTransaction();
+        if (ambient != null) cmd.Transaction = ambient;
+
+        DbParameter P(string n, object v) { var p = cmd.CreateParameter(); p.ParameterName = n; p.Value = v; return p; }
+        cmd.Parameters.Add(P("@owner", owner));
+        cmd.Parameters.Add(P("@lease", leaseSeconds));
+
+        var result = await cmd.ExecuteScalarAsync(cancellationToken);
+        return result is Guid g ? g : (Guid?)null;
+    }
+
+    // See IApplicationDbContext.RenewExtractionLeaseAsync. Only extends the lease
+    // if THIS instance still owns it and the job is still Running — a no-op if it
+    // was already reclaimed/finished, which is the safe outcome.
+    public async Task RenewExtractionLeaseAsync(Guid assetId, string owner, int leaseSeconds, CancellationToken cancellationToken)
+    {
+        const string sql = @"
+UPDATE dbo.StudyAssets
+   SET ExtractionLeaseUntil = DATEADD(SECOND, @lease, SYSUTCDATETIME())
+ WHERE Id = @id AND ExtractionLeaseOwner = @owner AND ExtractionStatus = 'Running';";
+
+        var conn = Database.GetDbConnection();
+        if (conn.State != ConnectionState.Open)
+            await conn.OpenAsync(cancellationToken);
+
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+        var ambient = Database.CurrentTransaction?.GetDbTransaction();
+        if (ambient != null) cmd.Transaction = ambient;
+
+        DbParameter P(string n, object v) { var p = cmd.CreateParameter(); p.ParameterName = n; p.Value = v; return p; }
+        cmd.Parameters.Add(P("@id", assetId));
+        cmd.Parameters.Add(P("@owner", owner));
+        cmd.Parameters.Add(P("@lease", leaseSeconds));
+
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
     {
         // Sync foundations: keep Appointment.UpdatedAt fresh on every write
