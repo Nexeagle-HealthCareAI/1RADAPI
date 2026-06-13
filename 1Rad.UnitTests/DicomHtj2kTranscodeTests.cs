@@ -74,4 +74,57 @@ public class DicomHtj2kTranscodeTests
         var backBytes = DicomPixelData.Create(back.Dataset).GetFrame(0).Data;
         backBytes.Should().Equal(original);
     }
+
+    /// <summary>
+    /// Proves the EXACT pixel format that DicomExtractionService.BuildReformatDicomBytes
+    /// emits for server-side coronal/sagittal — 16-bit SIGNED MONOCHROME2,
+    /// BitsStored=16, with NEGATIVE values (HU-like) — survives HTJ2K Lossless RPCL
+    /// pixel-perfectly. Closes a verification gap: the reformat path is otherwise
+    /// only validatable against real DICOM, and the other test covers only unsigned
+    /// 12-bit.
+    /// </summary>
+    [Fact]
+    public void Transcode_Signed16_ReformatFormat_RoundTrips_Losslessly()
+    {
+        const int w = 48, h = 32;
+        var original = new byte[w * h * 2];
+        for (int i = 0; i < w * h; i++)
+        {
+            short v = (short)(((i * 37) % 4096) - 1024); // spans negative..positive like HU
+            original[i * 2] = (byte)(v & 0xFF);
+            original[i * 2 + 1] = (byte)((v >> 8) & 0xFF);
+        }
+
+        var ds = new DicomDataset(DicomTransferSyntax.ExplicitVRLittleEndian);
+        ds.AddOrUpdate(DicomTag.SOPClassUID, DicomUID.SecondaryCaptureImageStorage);
+        ds.AddOrUpdate(DicomTag.SOPInstanceUID, DicomUIDGenerator.GenerateDerivedFromUUID());
+        ds.AddOrUpdate(DicomTag.StudyInstanceUID, DicomUIDGenerator.GenerateDerivedFromUUID());
+        ds.AddOrUpdate(DicomTag.SeriesInstanceUID, DicomUIDGenerator.GenerateDerivedFromUUID());
+        ds.AddOrUpdate(DicomTag.Rows, (ushort)h);
+        ds.AddOrUpdate(DicomTag.Columns, (ushort)w);
+        ds.AddOrUpdate(DicomTag.BitsAllocated, (ushort)16);
+        ds.AddOrUpdate(DicomTag.BitsStored, (ushort)16);
+        ds.AddOrUpdate(DicomTag.HighBit, (ushort)15);
+        ds.AddOrUpdate(DicomTag.PixelRepresentation, (ushort)1); // signed — the reformat format
+        ds.AddOrUpdate(DicomTag.SamplesPerPixel, (ushort)1);
+        ds.AddOrUpdate(DicomTag.PhotometricInterpretation, "MONOCHROME2");
+
+        var px = DicomPixelData.Create(ds, true);
+        px.AddFrame(new MemoryByteBuffer(original));
+        var srcFile = new DicomFile(ds);
+
+        var htFile = new DicomTranscoder(srcFile.Dataset.InternalTransferSyntax, DicomTransferSyntax.HTJ2KLosslessRPCL)
+            .Transcode(srcFile);
+        htFile.Dataset.InternalTransferSyntax.Should().Be(DicomTransferSyntax.HTJ2KLosslessRPCL);
+
+        using var ms = new MemoryStream();
+        htFile.Save(ms);
+        ms.Position = 0;
+        var reloaded = DicomFile.Open(ms);
+
+        var back = new DicomTranscoder(DicomTransferSyntax.HTJ2KLosslessRPCL, DicomTransferSyntax.ExplicitVRLittleEndian)
+            .Transcode(reloaded);
+        var backBytes = DicomPixelData.Create(back.Dataset).GetFrame(0).Data;
+        backBytes.Should().Equal(original);
+    }
 }
