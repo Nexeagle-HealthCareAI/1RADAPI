@@ -46,6 +46,8 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<ReportTemplate> ReportTemplates => Set<ReportTemplate>();
     public DbSet<ReportingKeyword> ReportingKeywords => Set<ReportingKeyword>();
     public DbSet<DiagnosticReportField> DiagnosticReportFields => Set<DiagnosticReportField>();
+    public DbSet<ReportAddendum> ReportAddenda => Set<ReportAddendum>();
+    public DbSet<ReportAuditEvent> ReportAuditEvents => Set<ReportAuditEvent>();
     public DbSet<StudyAsset> StudyAssets => Set<StudyAsset>();
     public DbSet<ImagingStudy> ImagingStudies => Set<ImagingStudy>();
     public DbSet<StudySliceIndex> StudySliceIndexes => Set<StudySliceIndex>();
@@ -431,6 +433,18 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.FieldCount).HasDefaultValue(0);
             entity.Property(e => e.ReportPdfUrl).HasMaxLength(500);
 
+            // Sign-off state machine (21 CFR Part 11). Status defaults to Draft;
+            // signer fields are populated only when the report is signed.
+            entity.Property(e => e.Status).HasMaxLength(20).HasDefaultValue("Draft");
+            entity.Property(e => e.SignerName).HasMaxLength(200);
+            entity.Property(e => e.SignerCredentials).HasMaxLength(200);
+            entity.Property(e => e.SignedContentHash).HasMaxLength(64);
+
+            entity.HasMany(e => e.Addenda)
+                .WithOne(a => a.Report)
+                .HasForeignKey(a => a.ReportId)
+                .OnDelete(DeleteBehavior.Cascade);
+
             entity.HasMany(e => e.Fields)
                 .WithOne(f => f.Report)
                 .HasForeignKey(f => f.ReportId)
@@ -499,6 +513,35 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.FieldName).IsRequired().HasMaxLength(255);
             entity.Property(e => e.SectionName).HasMaxLength(255);
             entity.Property(e => e.FieldValue).IsRequired();
+        });
+
+        // ReportAddendum Configuration — append-only amendment records.
+        modelBuilder.Entity<ReportAddendum>(entity =>
+        {
+            entity.ToTable("ReportAddenda", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.AuthorName).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.AuthorCredentials).HasMaxLength(200);
+            entity.Property(e => e.Text).IsRequired();
+            entity.Property(e => e.ContentHash).HasMaxLength(64);
+            // The report → addenda relationship (FK, cascade) is declared on the
+            // DiagnosticReport side above; don't re-declare it here.
+            entity.HasIndex(e => new { e.ReportId, e.SortOrder });
+        });
+
+        // ReportAuditEvent Configuration — append-only, hash-chained audit trail.
+        modelBuilder.Entity<ReportAuditEvent>(entity =>
+        {
+            entity.ToTable("ReportAuditEvents", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.EventType).IsRequired().HasMaxLength(40);
+            entity.Property(e => e.ActorName).HasMaxLength(200);
+            entity.Property(e => e.ContentHash).HasMaxLength(64);
+            entity.Property(e => e.PreviousHash).HasMaxLength(64);
+            // No FK constraint to DiagnosticReports: the audit trail must survive
+            // even if a report row is ever hard-deleted (tamper evidence). Indexed
+            // for "show this report's history, oldest first".
+            entity.HasIndex(e => new { e.ReportId, e.Timestamp });
         });
 
         // ReportTemplate Configuration

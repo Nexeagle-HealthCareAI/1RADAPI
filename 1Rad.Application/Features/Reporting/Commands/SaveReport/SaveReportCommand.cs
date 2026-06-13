@@ -151,9 +151,12 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
                 Findings = request.Findings,
                 Impression = request.Impression,
                 Advice = request.Advice,
-                IsFinalized = request.IsFinalized,
+                // Save always creates a DRAFT. Finalisation (Preliminary/Final)
+                // is a separate, identity-bound, password-reauthenticated step
+                // handled by FinalizeReportCommand — it never happens via a
+                // plain content save (21 CFR Part 11). Status/IsFinalized keep
+                // their entity defaults ("Draft" / false).
                 ReportingMode = request.ReportingMode,
-                FinalizedAt = request.IsFinalized ? DateTime.UtcNow : null,
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
             };
@@ -168,14 +171,24 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
                 throw new UnauthorizedAccessException("You do not have permission to modify this report.");
             }
 
+            // 21 CFR Part 11 immutability: a signed-FINAL (or addended) report's
+            // clinical content is locked server-side. Edits after sign-off must
+            // go through a formal addendum, never a content save. Draft and
+            // Preliminary ("wet read") reports remain editable.
+            if (ReportStatuses.IsLocked(report.Status))
+            {
+                throw new ReportLockedException();
+            }
+
             report.TemplateId = request.TemplateId;
             report.Findings = request.Findings;
             report.Impression = request.Impression;
             report.Advice = request.Advice;
-            report.IsFinalized = request.IsFinalized;
             report.ReportingMode = request.ReportingMode;
-            report.FinalizedAt = request.IsFinalized ? DateTime.UtcNow : report.FinalizedAt;
             report.UpdatedAt = DateTime.UtcNow;
+            // Status/IsFinalized are intentionally NOT touched here — saving
+            // content doesn't sign or unsign. A Preliminary report stays
+            // Preliminary across content edits until it's signed Final.
 
             // B2 Track 3 — feed the client-supplied token into EF's
             // OriginalValues so the generated UPDATE includes it in WHERE.
@@ -227,67 +240,10 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
             }
         }
 
-        // If finalized, update the appointment status and the per-service
-        // status. When the report is scoped to a specific
-        // AppointmentService row (multi-service rollout), bump that row
-        // to "REPORTED" too so the workflow + progress badge reflects
-        // it. We only set the parent status to "REPORTED" when every
-        // live service on the visit has a finalised report — otherwise
-        // the worklist would prematurely flip a 1-of-3-reported visit
-        // into the green-finalised state.
-        // Study-based reports have no visit to advance — the appointment/
-        // service status rollup is appointment-only.
-        if (request.IsFinalized && appointment != null)
-        {
-            if (request.AppointmentServiceId.HasValue)
-            {
-                var thisService = await _context.AppointmentServices
-                    .FirstOrDefaultAsync(s =>
-                        s.Id == request.AppointmentServiceId.Value &&
-                        s.AppointmentId == appointment.AppointmentId,
-                        cancellationToken);
-                if (thisService != null && thisService.Status != "DELIVERED")
-                {
-                    thisService.Status = "REPORTED";
-                    // ReportedAt anchors the "Awaiting delivery for X" TAT
-                    // pill. Stamped on first finalisation; later edits to
-                    // the report don't bump it (the patient was already
-                    // waiting from the original sign-off).
-                    if (thisService.ReportedAt == null) thisService.ReportedAt = DateTime.UtcNow;
-                    if (thisService.ScanCompletedAt == null) thisService.ScanCompletedAt = thisService.ReportedAt;
-                }
-
-                var liveSiblings = await _context.AppointmentServices
-                    .Where(s => s.AppointmentId == appointment.AppointmentId
-                             && s.DeletedAt == null
-                             && s.Id != request.AppointmentServiceId.Value)
-                    .Select(s => s.Id)
-                    .ToListAsync(cancellationToken);
-
-                if (liveSiblings.Count == 0)
-                {
-                    appointment.Status = "REPORTED";
-                }
-                else
-                {
-                    var siblingFinalisedCount = await _context.DiagnosticReports
-                        .Where(r => r.AppointmentId == appointment.AppointmentId
-                                 && r.AppointmentServiceId.HasValue
-                                 && liveSiblings.Contains(r.AppointmentServiceId.Value)
-                                 && r.IsFinalized)
-                        .CountAsync(cancellationToken);
-                    if (siblingFinalisedCount == liveSiblings.Count)
-                    {
-                        appointment.Status = "REPORTED";
-                    }
-                }
-            }
-            else
-            {
-                // v1 path / single-service visit — same behaviour as before.
-                appointment.Status = "REPORTED";
-            }
-        }
+        // NOTE: the appointment/service "REPORTED" status rollup used to live
+        // here (fired when a save carried IsFinalized=true). It has moved to
+        // FinalizeReportCommand, since finalisation is no longer a side effect
+        // of saving content — it's its own signed, re-authenticated step.
 
         try
         {

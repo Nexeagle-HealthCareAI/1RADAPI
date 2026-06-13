@@ -25,6 +25,8 @@ public interface IApplicationDbContext
     DbSet<Expense> Expenses { get; }
     DbSet<DiagnosticReport> DiagnosticReports { get; }
     DbSet<DiagnosticReportField> DiagnosticReportFields { get; }
+    DbSet<ReportAddendum> ReportAddenda { get; }
+    DbSet<ReportAuditEvent> ReportAuditEvents { get; }
     DbSet<ReportTemplate> ReportTemplates { get; }
     DbSet<ReportingKeyword> ReportingKeywords { get; }
     DbSet<StudyAsset> StudyAssets { get; }

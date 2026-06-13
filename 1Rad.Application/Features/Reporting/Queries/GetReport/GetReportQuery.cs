@@ -35,6 +35,7 @@ public class GetReportQueryHandler : IRequestHandler<GetReportQuery, DiagnosticR
         if (request.ImagingStudyId is Guid studyId && studyId != Guid.Empty)
         {
             return await _context.DiagnosticReports
+                .Include(r => r.Addenda)
                 .FirstOrDefaultAsync(r => r.ImagingStudyId == studyId, cancellationToken);
         }
 
@@ -47,6 +48,7 @@ public class GetReportQueryHandler : IRequestHandler<GetReportQuery, DiagnosticR
             var serviceId = request.AppointmentServiceId.Value;
             return await _context.DiagnosticReports
                 .Include(r => r.Appointment)
+                .Include(r => r.Addenda)
                 .FirstOrDefaultAsync(r =>
                     r.AppointmentServiceId == serviceId &&
                     ((guidId != Guid.Empty && r.AppointmentId == guidId) ||
@@ -59,6 +61,7 @@ public class GetReportQueryHandler : IRequestHandler<GetReportQuery, DiagnosticR
         // "primary" service's report).
         return await _context.DiagnosticReports
             .Include(r => r.Appointment)
+            .Include(r => r.Addenda)
             .Where(r =>
                 (guidId != Guid.Empty && r.AppointmentId == guidId) ||
                 r.Appointment.DisplayId == request.AppointmentId)

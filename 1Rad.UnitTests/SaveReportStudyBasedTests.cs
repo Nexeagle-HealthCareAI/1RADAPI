@@ -72,22 +72,24 @@ public class SaveReportStudyBasedTests : BaseHandlerTest
     }
 
     [Fact]
-    public async Task Finalize_does_not_throw_without_an_appointment()
+    public async Task Save_never_finalizes_a_report()
     {
+        // 21 CFR Part 11: finalisation is a separate, password-reauthenticated
+        // step (FinalizeReportCommand). A plain save can never sign a report,
+        // even if a legacy client sends IsFinalized=true on the payload.
         var study = await SeedStudyAsync();
 
         var report = await SaveHandler().Handle(new SaveReportCommand
         {
             ImagingStudyId = study.Id,
             Findings = "Final.",
-            IsFinalized = true,
+            IsFinalized = true,           // ignored by save
             ReportingMode = "Narrative",
         }, CancellationToken.None);
 
-        // The appointment/service status rollup is appointment-only; a
-        // study-based finalize must simply finalize the report.
-        report.IsFinalized.Should().BeTrue();
-        report.FinalizedAt.Should().NotBeNull();
+        report.IsFinalized.Should().BeFalse();
+        report.FinalizedAt.Should().BeNull();
+        report.Status.Should().Be(ReportStatuses.Draft);
     }
 
     [Fact]

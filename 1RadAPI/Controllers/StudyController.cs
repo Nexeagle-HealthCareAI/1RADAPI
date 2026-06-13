@@ -1921,9 +1921,33 @@ namespace _1RadAPI.Controllers
                         Total     = g.Sum(x => x.ExtractionTotalSlices),
                     });
 
+                // Report status per study (None / Draft / Finalized). A report
+                // links to a study by ImagingStudyId (PACS-only) OR AppointmentId
+                // (appointment-linked), so match either. The global hospital query
+                // filter scopes these to the current centre automatically.
+                var pageApptIds = pageRows.Where(r => r.AppointmentId != null)
+                                          .Select(r => r.AppointmentId!.Value).Distinct().ToList();
+                var reportRows = await _context.DiagnosticReports
+                    .Where(r => (r.ImagingStudyId != null && pageIds.Contains(r.ImagingStudyId.Value))
+                             || (r.AppointmentId != null && pageApptIds.Contains(r.AppointmentId.Value)))
+                    .Select(r => new { r.ImagingStudyId, r.AppointmentId, r.IsFinalized, r.Status })
+                    .ToListAsync();
+
                 var items = pageRows.Select(s =>
                 {
                     byStudy.TryGetValue(s.Id, out var agg);
+                    // Sign-off precedence: Final/Addended > Preliminary > Draft.
+                    // (IsFinalized is the back-compat shim — true only for
+                    // Final/Addended — so old rows without a Status still resolve.)
+                    var studyReports = reportRows.Where(r =>
+                        r.ImagingStudyId == s.Id ||
+                        (s.AppointmentId != null && r.AppointmentId == s.AppointmentId.Value)).ToList();
+                    var reportStatus =
+                        studyReports.Count == 0 ? "None"
+                        : studyReports.Any(r => r.IsFinalized
+                                                || r.Status == "Final" || r.Status == "Addended") ? "Finalized"
+                        : studyReports.Any(r => r.Status == "Preliminary") ? "Preliminary"
+                        : "Draft";
                     return new
                     {
                         imagingStudyId = s.Id,
@@ -1941,6 +1965,7 @@ namespace _1RadAPI.Controllers
                         s.CreatedAt,
                         assetCount = agg?.Count ?? 0,
                         sizeBytes = agg?.Size ?? 0L,
+                        reportStatus, // "None" | "Draft" | "Finalized" — drives the worklist report badge
                         extractionError = string.Equals(s.Status, "Failed", StringComparison.OrdinalIgnoreCase) ? agg?.Error : null,
                         // Live progress for the loader + % shown on processing rows.
                         progressPhase = agg?.Phase,

@@ -4,6 +4,8 @@ using _1Rad.Application.Features.Reporting.Commands.FormatReport;
 using _1Rad.Application.Features.Reporting.Commands.DeleteKeyword;
 using _1Rad.Application.Features.Reporting.Commands.DeleteTemplate;
 using _1Rad.Application.Features.Reporting.Commands.SaveReport;
+using _1Rad.Application.Features.Reporting.Commands.FinalizeReport;
+using _1Rad.Application.Features.Reporting.Commands.AddAddendum;
 using _1Rad.Application.Features.Reporting.Commands.UpsertKeyword;
 using _1Rad.Application.Features.Reporting.Commands.UpsertTemplate;
 using _1Rad.Application.Features.Reporting.Queries.GetKeywords;
@@ -245,6 +247,13 @@ namespace _1RadAPI.Controllers
             {
                 return NotFound(new { success = false, error = ex.Message });
             }
+            catch (ReportLockedException ex)
+            {
+                // The report is signed-Final; its content is immutable. The
+                // frontend uses REPORT_LOCKED to stop autosave and prompt the
+                // radiologist to add an addendum instead of editing.
+                return Conflict(new { success = false, code = "REPORT_LOCKED", error = ex.Message });
+            }
             catch (UnauthorizedAccessException ex)
             {
                 return StatusCode(403, new { success = false, error = ex.Message });
@@ -266,6 +275,78 @@ namespace _1RadAPI.Controllers
             catch (Exception ex)
             {
                 return StatusCode(500, new { success = false, error = $"Failed to save report: {ex.Message}" });
+            }
+        }
+
+        /// <summary>
+        /// Electronically sign a report (21 CFR Part 11). Re-authenticates the
+        /// radiologist with their password, binds the signature to their
+        /// identity, hashes + (for Final) locks the content, and appends a
+        /// tamper-evident audit event. TargetStatus = "Preliminary" | "Final".
+        /// </summary>
+        [HttpPost("report/finalize")]
+        public async Task<IActionResult> FinalizeReport([FromBody] FinalizeReportCommand command)
+        {
+            try
+            {
+                var report = await _mediator.Send(command);
+                return Ok(new { success = true, data = report });
+            }
+            catch (ArgumentException ex)
+            {
+                return BadRequest(new { success = false, error = ex.Message });
+            }
+            catch (KeyNotFoundException ex)
+            {
+                return NotFound(new { success = false, error = ex.Message });
+            }
+            catch (ReportLockedException ex)
+            {
+                return Conflict(new { success = false, code = "REPORT_LOCKED", error = ex.Message });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                // Wrong password (signature not applied) or not the report owner.
+                return StatusCode(403, new { success = false, code = "SIGN_REAUTH_FAILED", error = ex.Message });
+            }
+            catch (OccConflictException ex)
+            {
+                return Conflict(new { success = false, code = "OCC_CONFLICT", error = ex.Message, data = ex.Server });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, error = $"Failed to finalize report: {ex.Message}" });
+            }
+        }
+
+        /// <summary>
+        /// Append a formal addendum to a finalised report (21 CFR Part 11). The
+        /// signed content is never altered — the addendum is its own immutable,
+        /// password-reauthenticated record and the report advances to "Addended".
+        /// </summary>
+        [HttpPost("report/addendum")]
+        public async Task<IActionResult> AddAddendum([FromBody] AddAddendumCommand command)
+        {
+            try
+            {
+                var report = await _mediator.Send(command);
+                return Ok(new { success = true, data = report });
+            }
+            catch (ArgumentException ex)
+            {
+                return BadRequest(new { success = false, error = ex.Message });
+            }
+            catch (KeyNotFoundException ex)
+            {
+                return NotFound(new { success = false, error = ex.Message });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return StatusCode(403, new { success = false, code = "SIGN_REAUTH_FAILED", error = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, error = $"Failed to add addendum: {ex.Message}" });
             }
         }
 
