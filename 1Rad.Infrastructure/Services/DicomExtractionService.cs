@@ -75,6 +75,25 @@ public class DicomExtractionService : IDicomExtractionService
     // Dicom:WriteSlicePreviews=false to skip it (e.g. to speed extraction).
     private readonly bool _writeSlicePreviews;
 
+    // ── Server-side MPR reformatting (Dicom:WriteReformattedPlanes) ───────────
+    // OFF by default. When ON, a reformat-eligible axial series ALSO gets
+    // backend-generated CORONAL + SAGITTAL stacks, delivered as ordinary 2D
+    // series (HTJ2K .dcm + previews). This brings proper coronal/sagittal to
+    // LOW-BANDWIDTH + MOBILE users without a client-side volume — "coronal on
+    // 3G" becomes just another fast 2D scroll.
+    //
+    // Memory safety (this path runs INSIDE the OOM-sensitive extraction): we
+    // accumulate a DOWNSAMPLED volume (≤ ReformatMaxDim per in-plane axis) into
+    // a single short[] buffer during the existing preview-decode pass — no second
+    // decode, no re-download. A series whose downsampled volume would exceed
+    // ReformatMaxVoxels is SKIPPED (client-side MPR remains the fallback), so a
+    // huge study can never reintroduce the OOM. Only ONE series reformats at a
+    // time (the largest eligible), bounding peak to a single buffer.
+    private readonly bool _writeReformattedPlanes;
+    private readonly int  _reformatMaxDim;     // cap in-plane resolution of the reformat volume
+    private readonly long _reformatMaxVoxels;  // skip reformat if W'*H'*D exceeds this (memory guard)
+    private readonly int  _reformatMinSlices;  // below this a series isn't worth reslicing
+
     public DicomExtractionService(
         IApplicationDbContext db,
         IBlobService blob,
@@ -92,6 +111,14 @@ public class DicomExtractionService : IDicomExtractionService
         // only to keep ZIPs (e.g. for debugging a problematic feed).
         _deleteSourceAfterExtraction = configuration.GetValue("Dicom:DeleteSourceAfterExtraction", true);
         _writeSlicePreviews = configuration.GetValue("Dicom:WriteSlicePreviews", true);
+        _writeReformattedPlanes = configuration.GetValue("Dicom:WriteReformattedPlanes", false);
+        // 256² in-plane keeps reformats triage-sharp while bounding memory + bytes
+        // (these planes serve low-bandwidth/mobile, not primary full-res reads).
+        _reformatMaxDim    = Math.Clamp(configuration.GetValue("Dicom:ReformatMaxDim", 256), 64, 512);
+        // 40M voxels ≈ 80 MB at int16 — e.g. 256×256×610. Above this we skip
+        // (client-side MPR remains) rather than risk the extraction OOM.
+        _reformatMaxVoxels = configuration.GetValue("Dicom:ReformatMaxVoxels", 40_000_000L);
+        _reformatMinSlices = Math.Max(configuration.GetValue("Dicom:ReformatMinSlices", 16), 8);
 
         // fo-dicom uses a manager pattern — wire the NATIVE codecs (JPEG-LS /
         // JPEG2000 / HTJ2K transcoders) once. Idempotent (second .Build() no-ops).
@@ -718,6 +745,12 @@ public class DicomExtractionService : IDicomExtractionService
                 InstanceNumber    = ds.GetSingleValueOrDefault<int?>(DicomTag.InstanceNumber, null),
                 SeriesDescription = ds.GetSingleValueOrDefault<string?>(DicomTag.SeriesDescription, null),
                 Modality          = ds.GetSingleValueOrDefault<string?>(DicomTag.Modality, null),
+                Rows              = ds.GetSingleValueOrDefault<int?>(DicomTag.Rows, null),
+                Columns           = ds.GetSingleValueOrDefault<int?>(DicomTag.Columns, null),
+                PixelSpacing            = ReadDoubles(ds, DicomTag.PixelSpacing),
+                ImageOrientationPatient = ReadDoubles(ds, DicomTag.ImageOrientationPatient),
+                ImagePositionPatient    = ReadDoubles(ds, DicomTag.ImagePositionPatient),
+                SliceThickness          = ds.GetSingleValueOrDefault<double?>(DicomTag.SliceThickness, null),
                 OriginalBytes     = bytes,
             };
         }
@@ -726,6 +759,16 @@ public class DicomExtractionService : IDicomExtractionService
             _logger.LogDebug(parseEx, "[DICOM_EXTRACT] Asset {AssetId} {Label} not a valid DICOM file — skipping.", assetId, label);
             return null;
         }
+    }
+
+    // Read a multi-valued double tag (PixelSpacing / IOP / IPP) into an array,
+    // or null when absent / malformed. Used to capture slice geometry cheaply
+    // during the metadata-only parse for server-side reformatting.
+    private static double[]? ReadDoubles(DicomDataset ds, DicomTag tag)
+    {
+        if (!ds.Contains(tag)) return null;
+        try { var v = ds.GetValues<double>(tag); return v != null && v.Length > 0 ? v : null; }
+        catch { return null; }
     }
 
     // DICOM StudyDate (0008,0020) is a DA value "YYYYMMDD"; StudyTime (0008,0030)
@@ -1057,6 +1100,16 @@ public class DicomExtractionService : IDicomExtractionService
         public int? InstanceNumber      { get; set; }
         public string? SeriesDescription { get; set; }
         public string? Modality         { get; set; }
+        // Geometry (read cheaply during the metadata-only parse) — used to decide
+        // reformat eligibility (uniform spacing / consistent orientation) and to
+        // compute the coronal/sagittal plane geometry. All optional; a series
+        // missing them simply isn't server-side reformatted.
+        public int? Rows                { get; set; }
+        public int? Columns             { get; set; }
+        public double[]? PixelSpacing            { get; set; } // [rowSpacing(Δy), colSpacing(Δx)]
+        public double[]? ImageOrientationPatient { get; set; } // [rowDir(3), colDir(3)]
+        public double[]? ImagePositionPatient    { get; set; } // [x,y,z] of voxel (0,0)
+        public double? SliceThickness            { get; set; }
         // Raw bytes only — the parsed DicomFile is NOT retained (it holds the
         // decoded pixel data, ~doubling RAM per slice). The processing task
         // re-opens it on demand and disposes it, so peak memory is bounded to the
