@@ -641,6 +641,9 @@ public class DicomExtractionService : IDicomExtractionService
             // viewable, so reslice the in-memory volume into coronal + sagittal
             // series and add them. A failure here NEVER affects the axial study —
             // the user already has it; reformats simply won't appear this run.
+            // `reformatBytes` is hoisted so the ZIP-reclaim metering below (which
+            // RE-SETS StorageBytes) still accounts for the reformatted planes.
+            long reformatBytes = 0;
             if (reformatAcc != null)
             {
                 try
@@ -649,7 +652,7 @@ public class DicomExtractionService : IDicomExtractionService
                     await _db.SaveChangesAsync(cancellationToken);
                     var (rfRows, rfBytes) = await ReformatAndUploadAsync(
                         reformatAcc, asset, hospitalIdN, appointmentIdN, assetIdN, reformatSeriesIndexBase, cancellationToken);
-                    if (rfRows > 0) asset.StorageBytes += rfBytes;
+                    if (rfRows > 0) { reformatBytes = rfBytes; asset.StorageBytes += rfBytes; }
                     asset.ExtractionPhase = null;
                     await _db.SaveChangesAsync(cancellationToken);
                 }
@@ -676,11 +679,11 @@ public class DicomExtractionService : IDicomExtractionService
                 try
                 {
                     await _blob.DeleteFileAsync(asset.BlobUrl, Container);
-                    asset.StorageBytes = totalUploadedBytes;   // ZIP reclaimed — drop it from the meter
+                    asset.StorageBytes = totalUploadedBytes + reformatBytes;   // ZIP reclaimed — drop it from the meter (keep reformat planes)
                     await _db.SaveChangesAsync(cancellationToken);
                     _logger.LogInformation(
                         "[DICOM_EXTRACT] Asset {AssetId}: source ZIP reclaimed after clean extraction — freed ~{MB:N1} MB (footprint now {Now:N1} MB).",
-                        assetId, originalBlobBytes / 1_048_576.0, totalUploadedBytes / 1_048_576.0);
+                        assetId, originalBlobBytes / 1_048_576.0, (totalUploadedBytes + reformatBytes) / 1_048_576.0);
                 }
                 catch (Exception delEx)
                 {
