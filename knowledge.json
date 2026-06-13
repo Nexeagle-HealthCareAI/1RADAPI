@@ -1,0 +1,441 @@
+{
+  "project": "1RadAPI",
+  "description": "Radiology / hospital management system (RIS + PACS) API. Clean Architecture (.NET) with controllers as the HTTP surface, delegating to MediatR commands/queries in 1Rad.Application.",
+  "apiVersion": "v1",
+  "basePath": "/api/v1",
+  "generatedAt": "2026-06-13",
+  "scope": "Controllers (pages) and their action methods (functions) in 1RadAPI/Controllers.",
+  "totals": {
+    "controllerFiles": 26,
+    "controllerClasses": 27,
+    "endpoints": 176
+  },
+  "legend": {
+    "auth": "Authorize = JWT required; AllowAnonymous = public; Policy/Roles = additional constraint.",
+    "requiresModule": "RequiresModule attribute gates the endpoint behind a subscribed module (Ris or Pacs).",
+    "mediator": "MediatR command/query the action dispatches, where applicable."
+  },
+  "pages": [
+    {
+      "controller": "AppointmentsController",
+      "file": "1RadAPI/Controllers/AppointmentsController.cs",
+      "routeBase": "api/v1/appointments",
+      "auth": "Authorize",
+      "requiresModule": "Ris",
+      "functions": [
+        { "name": "Get", "method": "GET", "route": "", "params": ["search?", "status?", "updatedAfter?", "includeDeleted=false"], "mediator": "GetAppointmentsQuery", "summary": "List/search appointments (worklist), optional delta + soft-deleted." },
+        { "name": "GetById", "method": "GET", "route": "{id}", "params": ["id"], "mediator": "GetAppointmentByIdQuery", "summary": "Single appointment by id." },
+        { "name": "Create", "method": "POST", "route": "", "params": ["CreateAppointmentCommand"], "mediator": "CreateAppointmentCommand", "summary": "Create appointment." },
+        { "name": "UpdateStatus", "method": "PATCH", "route": "{id}/status", "params": ["id", "status"], "mediator": "UpdateAppointmentStatusCommand", "summary": "Update visit-level status." },
+        { "name": "ChangeReferrer", "method": "POST", "route": "{id:guid}/change-referrer", "params": ["id", "ChangeReferrerBody"], "mediator": "ChangeReferrerCommand", "summary": "Correct 'Referred By'; may require approval if payment collected." },
+        { "name": "UpdateServiceStatus", "method": "PATCH", "route": "{id}/services/{serviceId}/status", "params": ["id", "serviceId", "UpdateServiceStatusBody"], "mediator": "UpdateAppointmentServiceStatusCommand", "summary": "Per-service status transition + TAT recompute." },
+        { "name": "UpdateServiceNotes", "method": "PATCH", "route": "{id}/services/{serviceId}/notes", "params": ["id", "serviceId", "UpdateServiceNotesBody"], "mediator": "UpdateAppointmentServiceNotesCommand", "summary": "Per-service technician notes." },
+        { "name": "Update", "method": "PUT", "route": "{id}", "params": ["id", "UpdateAppointmentCommand"], "mediator": "UpdateAppointmentCommand", "summary": "Full update; id must match body." },
+        { "name": "UpdateOperationsStatus", "method": "PUT", "route": "{id}/operations-status", "params": ["id", "UpdateReportProgressCommand"], "mediator": "UpdateReportProgressCommand", "summary": "Update report/operations progress." },
+        { "name": "GetOverdue", "method": "GET", "route": "overdue", "params": ["thresholdMinutes?"], "mediator": "GetOverdueAppointmentsQuery", "summary": "SLA-overdue (undelivered) appointments, longest-waiting first." },
+        { "name": "AcknowledgeOverdue", "method": "POST", "route": "{id:guid}/overdue-ack", "params": ["id", "AcknowledgeOverdueBody"], "mediator": "AcknowledgeOverdueCommand", "summary": "Silence/restore the SLA bell for an appointment." },
+        { "name": "AddComment", "method": "POST", "route": "{id:guid}/comments", "params": ["id", "AddCommentBody"], "mediator": "AddAppointmentCommentCommand", "summary": "Append comment to timeline." },
+        { "name": "GetComments", "method": "GET", "route": "{id:guid}/comments", "params": ["id"], "mediator": "GetAppointmentCommentsQuery", "summary": "Comment timeline, newest first." },
+        { "name": "GetCommentsBulk", "method": "POST", "route": "comments/bulk", "params": ["CommentsBulkBody"], "mediator": "GetCommentsForAppointmentsQuery", "summary": "Bulk comment fetch for Excel export (cap 500)." },
+        { "name": "Import", "method": "POST", "route": "import", "params": ["IFormFile file"], "mediator": "ImportAppointmentsCommand", "summary": "Import appointments from uploaded file." }
+      ]
+    },
+    {
+      "controller": "AuthController",
+      "file": "1RadAPI/Controllers/AuthController.cs",
+      "routeBase": "api/v1/auth",
+      "auth": "Mixed (per-endpoint)",
+      "requiresModule": null,
+      "functions": [
+        { "name": "SendOTP", "method": "POST", "route": "otp/send", "auth": "AllowAnonymous", "params": ["SendOTPCommand"], "mediator": "SendOTPCommand", "summary": "Send OTP." },
+        { "name": "VerifyOTP", "method": "POST", "route": "otp/verify", "auth": "AllowAnonymous", "params": ["VerifyOTPCommand"], "mediator": "VerifyOTPCommand", "summary": "Verify OTP." },
+        { "name": "IdentitySetup", "method": "POST", "route": "identity-setup", "auth": "Authorize(Policy=InitiationOnly)", "params": ["IdentitySetupCommand"], "mediator": "IdentitySetupCommand", "summary": "Set up identity (onboarding)." },
+        { "name": "DeployInfrastructure", "method": "POST", "route": "deploy-infrastructure", "auth": "Authorize(Policy=InitiationOnly)", "params": ["DeployInfrastructureCommand"], "mediator": "DeployInfrastructureCommand", "summary": "Provision tenant infrastructure." },
+        { "name": "Login", "method": "POST", "route": "login", "auth": "AllowAnonymous", "params": ["LoginCommand"], "mediator": "LoginCommand", "summary": "Login." },
+        { "name": "Refresh", "method": "POST", "route": "refresh", "auth": "AllowAnonymous", "params": ["RefreshTokenCommand"], "mediator": "RefreshTokenCommand", "summary": "Refresh JWT." },
+        { "name": "SwitchContext", "method": "POST", "route": "switch-context", "auth": "Authorize", "params": ["SwitchContextCommand"], "mediator": "SwitchContextCommand", "summary": "Switch active hospital context." },
+        { "name": "GetAuthorizedHospitals", "method": "GET", "route": "hubs", "auth": "Authorize", "params": [], "summary": "List hospitals the user can access." },
+        { "name": "ForgotPassword", "method": "POST", "route": "forgot-password", "auth": "AllowAnonymous", "params": ["ForgotPasswordCommand"], "mediator": "ForgotPasswordCommand", "summary": "Begin password reset." },
+        { "name": "VerifyResetCode", "method": "POST", "route": "verify-reset-code", "auth": "AllowAnonymous", "params": ["VerifyResetCodeCommand"], "mediator": "VerifyResetCodeCommand", "summary": "Verify reset code." },
+        { "name": "ResetPassword", "method": "POST", "route": "reset-password", "auth": "AllowAnonymous", "params": ["ResetPasswordCommand"], "mediator": "ResetPasswordCommand", "summary": "Complete password reset." }
+      ]
+    },
+    {
+      "controller": "ApprovalsController",
+      "file": "1RadAPI/Controllers/ApprovalsController.cs",
+      "routeBase": "api/v1/approvals",
+      "auth": "Authorize",
+      "requiresModule": null,
+      "functions": [
+        { "name": "Create", "method": "POST", "route": "", "params": ["CreateApprovalRequestCommand"], "mediator": "CreateApprovalRequestCommand", "summary": "Raise an approval request." },
+        { "name": "List", "method": "GET", "route": "", "params": ["status?"], "summary": "List approval requests by status." },
+        { "name": "Count", "method": "GET", "route": "count", "params": ["status?"], "summary": "Count approval requests by status." },
+        { "name": "Review", "method": "POST", "route": "{id:guid}/review", "auth": "Authorize(Roles=AdminDoctor,AdminOperator)", "params": ["id", "ReviewApprovalRequest"], "summary": "Approve/reject a request." }
+      ]
+    },
+    {
+      "controller": "AssistController",
+      "file": "1RadAPI/Controllers/AssistController.cs",
+      "routeBase": "api/v1/assist",
+      "auth": "Authorize",
+      "requiresModule": null,
+      "functions": [
+        { "name": "RadAi", "method": "POST", "route": "radai", "params": ["RadAiCommand"], "mediator": "RadAiCommand", "summary": "RadAI assistance request." },
+        { "name": "RetrainCandidates", "method": "GET", "route": "retrain-candidates", "params": ["GetRadAiRetrainCandidatesQuery"], "mediator": "GetRadAiRetrainCandidatesQuery", "summary": "List retrain candidates." },
+        { "name": "Usage", "method": "GET", "route": "usage", "params": ["GetRadAiUsageQuery"], "mediator": "GetRadAiUsageQuery", "summary": "RadAI usage metrics." }
+      ]
+    },
+    {
+      "controller": "AttendanceController",
+      "file": "1RadAPI/Controllers/AttendanceController.cs",
+      "routeBase": "api/v1/attendance",
+      "auth": "Authorize",
+      "requiresModule": null,
+      "functions": [
+        { "name": "GetAttendance", "method": "GET", "route": "", "params": ["month"], "summary": "Attendance for a month." },
+        { "name": "UpsertAttendance", "method": "PUT", "route": "{staffId:guid}", "params": ["staffId", "UpsertAttendanceRequest"], "summary": "Upsert a staff member's attendance." }
+      ]
+    },
+    {
+      "controller": "CustomRolesController",
+      "file": "1RadAPI/Controllers/CustomRolesController.cs",
+      "routeBase": "api/v1/customroles",
+      "auth": "Authorize",
+      "requiresModule": null,
+      "functions": [
+        { "name": "GetCustomRoles", "method": "GET", "route": "", "params": [], "summary": "List custom roles." },
+        { "name": "CreateCustomRole", "method": "POST", "route": "", "params": ["CreateCustomRoleRequest"], "summary": "Create a custom role." },
+        { "name": "UpdateCustomRole", "method": "PUT", "route": "{id}", "params": ["id", "UpdateCustomRoleRequest"], "summary": "Update a custom role." },
+        { "name": "DeleteCustomRole", "method": "DELETE", "route": "{id}", "params": ["id"], "summary": "Delete a custom role." }
+      ]
+    },
+    {
+      "controller": "DownloadController",
+      "file": "1RadAPI/Controllers/DownloadController.cs",
+      "routeBase": "api/v1/download",
+      "auth": "AllowAnonymous",
+      "requiresModule": null,
+      "functions": [
+        { "name": "Desktop", "method": "GET", "route": "desktop", "params": [], "summary": "Desktop app download." }
+      ]
+    },
+    {
+      "controller": "FinanceController",
+      "file": "1RadAPI/Controllers/FinanceController.cs",
+      "routeBase": "api/v1/finance",
+      "auth": "Authorize",
+      "requiresModule": "Ris",
+      "functions": [
+        { "name": "GetRegistry", "method": "GET", "route": "registry", "params": [], "summary": "Service charge registry." },
+        { "name": "UpsertRegistry", "method": "POST", "route": "registry", "params": ["UpsertServiceChargeCommand"], "mediator": "UpsertServiceChargeCommand", "summary": "Add service charge." },
+        { "name": "UpdateRegistry", "method": "PUT", "route": "registry/{id}", "params": ["id", "UpsertServiceChargeCommand"], "mediator": "UpsertServiceChargeCommand", "summary": "Update service charge." },
+        { "name": "DeleteRegistry", "method": "DELETE", "route": "registry/{id}", "params": ["id"], "summary": "Delete service charge." },
+        { "name": "GetInvoices", "method": "GET", "route": "invoices", "params": ["filters"], "summary": "List invoices." },
+        { "name": "GenerateInvoice", "method": "POST", "route": "invoices", "params": ["GenerateInvoiceCommand"], "mediator": "GenerateInvoiceCommand", "summary": "Generate invoice." },
+        { "name": "CollectPayment", "method": "POST", "route": "payments", "params": ["CollectPaymentCommand"], "mediator": "CollectPaymentCommand", "summary": "Collect payment." },
+        { "name": "GetStats", "method": "GET", "route": "stats", "params": [], "summary": "Finance stats." },
+        { "name": "SyncLegacy", "method": "POST", "route": "sync", "params": ["SyncLocalStorageInvoicesCommand"], "mediator": "SyncLocalStorageInvoicesCommand", "summary": "Sync legacy localStorage invoices." },
+        { "name": "Export", "method": "GET", "route": "export", "params": ["startDate?", "endDate?"], "summary": "Export finance data." },
+        { "name": "GetMatrix", "method": "GET", "route": "matrix", "params": ["startDate?", "endDate?"], "summary": "Finance matrix." },
+        { "name": "GetPendingBillables", "method": "GET", "route": "pending-billables/{patientId}", "params": ["patientId"], "summary": "Pending billables for a patient." },
+        { "name": "GetExpenses", "method": "GET", "route": "expenses", "params": ["filters"], "summary": "List expenses." },
+        { "name": "RecordExpense", "method": "POST", "route": "expense", "params": ["RecordExpenseCommand"], "mediator": "RecordExpenseCommand", "summary": "Record expense." },
+        { "name": "UpdateExpense", "method": "PUT", "route": "expenses/{id}", "params": ["id", "UpdateExpenseCommand"], "mediator": "UpdateExpenseCommand", "summary": "Update expense." },
+        { "name": "DeleteInvoice", "method": "DELETE", "route": "invoices/{id}", "params": ["id", "commissionId?"], "summary": "Delete invoice (optionally linked commission)." },
+        { "name": "DeleteExpense", "method": "DELETE", "route": "expenses/{id}", "params": ["id"], "summary": "Delete expense." },
+        { "name": "ApplyExtraDiscount", "method": "POST", "route": "adjust", "params": ["ApplyExtraDiscountCommand"], "mediator": "ApplyExtraDiscountCommand", "summary": "Apply extra discount adjustment." },
+        { "name": "ApplyDiscount", "method": "POST", "route": "invoices/{id}/discount", "params": ["id", "ApplyDiscountRequest"], "summary": "Apply discount to invoice." },
+        { "name": "UpdateExpenseStatus", "method": "PUT", "route": "expenses/{id}/status", "params": ["id", "UpdateExpenseStatusRequest"], "summary": "Update expense status." }
+      ]
+    },
+    {
+      "controller": "HealthController",
+      "file": "1RadAPI/Controllers/HealthController.cs",
+      "routeBase": "api/v1/health",
+      "auth": "AllowAnonymous",
+      "requiresModule": null,
+      "functions": [
+        { "name": "Get", "method": "GET", "route": "", "params": [], "summary": "Health check." },
+        { "name": "Options", "method": "OPTIONS", "route": "", "params": [], "summary": "CORS preflight / options." }
+      ]
+    },
+    {
+      "controller": "HospitalsController",
+      "file": "1RadAPI/Controllers/HospitalsController.cs",
+      "routeBase": "api/v1/hospitals",
+      "auth": "Authorize",
+      "requiresModule": null,
+      "functions": [
+        { "name": "GetHospital", "method": "GET", "route": "{id}", "params": ["id"], "summary": "Hospital details." },
+        { "name": "UpdateHospital", "method": "PUT", "route": "{id}", "params": ["id", "UpdateHospitalDetailsRequest"], "summary": "Update hospital details." },
+        { "name": "CreateChain", "method": "POST", "route": "chain", "params": ["CreateChainRequest"], "summary": "Create a hospital chain." },
+        { "name": "GetGroupHospitals", "method": "GET", "route": "group", "params": [], "summary": "List hospitals in the group." }
+      ]
+    },
+    {
+      "controller": "IntelligenceController",
+      "file": "1RadAPI/Controllers/IntelligenceController.cs",
+      "routeBase": "api/v1/intelligence",
+      "auth": "Authorize",
+      "requiresModule": "Ris",
+      "functions": [
+        { "name": "GetStrategicOutlook", "method": "GET", "route": "outlook", "params": ["dateRange?"], "returns": "StrategicOutlookDto", "summary": "Strategic outlook (KPIs, modality, revenue, demographics, referrals)." },
+        { "name": "GetIntelligenceExport", "method": "GET", "route": "export", "params": ["startDate?", "endDate?", "allTime=false"], "returns": "FileResult", "summary": "Export intelligence data as a file." }
+      ]
+    },
+    {
+      "controller": "LeaveController",
+      "file": "1RadAPI/Controllers/LeaveController.cs",
+      "routeBase": "api/v1/leave",
+      "auth": "Authorize",
+      "requiresModule": null,
+      "functions": [
+        { "name": "GetLeaveRequests", "method": "GET", "route": "", "params": ["staffId?"], "summary": "List leave requests." },
+        { "name": "ApplyLeave", "method": "POST", "route": "{staffId:guid}", "params": ["staffId", "ApplyLeaveRequest"], "summary": "Apply for leave." },
+        { "name": "ReviewLeave", "method": "PATCH", "route": "{leaveRequestId:guid}/status", "params": ["leaveRequestId", "ReviewLeaveRequest"], "summary": "Approve/reject leave." }
+      ]
+    },
+    {
+      "controller": "LeavePolicyController",
+      "file": "1RadAPI/Controllers/LeavePolicyController.cs",
+      "routeBase": "api/v1/leave-policy",
+      "auth": "Authorize",
+      "requiresModule": null,
+      "functions": [
+        { "name": "GetPolicy", "method": "GET", "route": "", "params": [], "summary": "Get leave policy." },
+        { "name": "SavePolicy", "method": "PUT", "route": "", "params": ["SaveLeavePolicyRequest"], "summary": "Save leave policy." }
+      ]
+    },
+    {
+      "controller": "MeSessionsController",
+      "file": "1RadAPI/Controllers/MeSessionsController.cs",
+      "routeBase": "api/v1/me/sessions",
+      "auth": "Authorize",
+      "requiresModule": null,
+      "functions": [
+        { "name": "List", "method": "GET", "route": "", "params": [], "summary": "List my active sessions." },
+        { "name": "Revoke", "method": "DELETE", "route": "{sessionId:guid}", "params": ["sessionId"], "summary": "Revoke a session." },
+        { "name": "RevokeOthers", "method": "DELETE", "route": "", "params": [], "summary": "Revoke all other sessions." }
+      ]
+    },
+    {
+      "controller": "PatientsController",
+      "file": "1RadAPI/Controllers/PatientsController.cs",
+      "routeBase": "api/v1/patients",
+      "auth": "Authorize",
+      "requiresModule": null,
+      "functions": [
+        { "name": "Get", "method": "GET", "route": "", "params": ["filters"], "summary": "List/search patients." },
+        { "name": "Create", "method": "POST", "route": "", "params": ["CreatePatientCommand"], "mediator": "CreatePatientCommand", "summary": "Create patient." },
+        { "name": "Update", "method": "PUT", "route": "{id}", "params": ["id", "UpdatePatientCommand"], "mediator": "UpdatePatientCommand", "summary": "Update patient." },
+        { "name": "GetTimeline", "method": "GET", "route": "{id}/timeline", "params": ["id"], "summary": "Patient timeline." }
+      ]
+    },
+    {
+      "controller": "PersonnelController",
+      "file": "1RadAPI/Controllers/PersonnelController.cs",
+      "routeBase": "api/v1/personnel",
+      "auth": "Authorize",
+      "requiresModule": null,
+      "functions": [
+        { "name": "GetPersonnel", "method": "GET", "route": "", "params": [], "summary": "List hospital personnel." },
+        { "name": "RegisterStaff", "method": "POST", "route": "", "params": ["RegisterStaffCommand"], "mediator": "RegisterStaffCommand", "summary": "Register staff." },
+        { "name": "UpdateStaff", "method": "PUT", "route": "{id}", "params": ["id", "UpdateStaffCommand"], "mediator": "UpdateStaffCommand", "summary": "Update staff." },
+        { "name": "UpdatePreference", "method": "PATCH", "route": "preferences", "params": ["UpdatePreferenceCommand"], "mediator": "UpdatePreferenceCommand", "summary": "Update personal preferences." },
+        { "name": "UpdateClinicalCredentials", "method": "PATCH", "route": "{id}/clinical-credentials", "params": ["id", "UpdateClinicalCredentialsBody"], "summary": "Update clinical credentials." },
+        { "name": "RemoveStaff", "method": "DELETE", "route": "{id}", "params": ["id"], "summary": "Remove staff." }
+      ]
+    },
+    {
+      "controller": "PrescriptionController",
+      "file": "1RadAPI/Controllers/PrescriptionController.cs",
+      "routeBase": "api/v1/prescription",
+      "auth": "Authorize",
+      "requiresModule": "Ris",
+      "functions": [
+        { "name": "GetMyProtocol", "method": "GET", "route": "me", "params": [], "summary": "Current user's prescription protocol." },
+        { "name": "GetProtocol", "method": "GET", "route": "{doctorId:guid}", "params": ["doctorId"], "summary": "A doctor's prescription protocol." },
+        { "name": "SaveProtocol", "method": "POST", "route": "", "auth": "Authorize(Roles=AdminDoctor,AdminOperator,Doctor)", "params": ["PrescriptionRequest (FromForm)"], "summary": "Save prescription protocol (with assets)." }
+      ]
+    },
+    {
+      "controller": "PublicReferralController",
+      "file": "1RadAPI/Controllers/PublicReferralController.cs",
+      "routeBase": "api/v1/public/referral",
+      "auth": "AllowAnonymous",
+      "requiresModule": null,
+      "functions": [
+        { "name": "Get", "method": "GET", "route": "{referrerId:guid}", "params": ["referrerId", "token?"], "summary": "Public referrer view (token-gated)." },
+        { "name": "UpdateProfile", "method": "PUT", "route": "{referrerId:guid}/profile", "params": ["referrerId", "token?", "UpdateProfileBody"], "summary": "Public referrer profile update (token-gated)." }
+      ]
+    },
+    {
+      "controller": "PublicTrackingController",
+      "file": "1RadAPI/Controllers/PublicTrackingController.cs",
+      "routeBase": "api/v1/public/tracking",
+      "auth": "AllowAnonymous",
+      "requiresModule": null,
+      "functions": [
+        { "name": "Get", "method": "GET", "route": "{appointmentId:guid}", "params": ["appointmentId", "token?"], "summary": "Public appointment tracking (token-gated)." }
+      ]
+    },
+    {
+      "controller": "AppointmentTrackingTokenController",
+      "file": "1RadAPI/Controllers/PublicTrackingController.cs",
+      "routeBase": "api/v1/appointments",
+      "auth": "Authorize",
+      "requiresModule": null,
+      "note": "Second controller class defined in PublicTrackingController.cs.",
+      "functions": [
+        { "name": "Issue", "method": "GET", "route": "{id:guid}/tracking-token", "params": ["id"], "summary": "Issue a public tracking token for an appointment." }
+      ]
+    },
+    {
+      "controller": "ReferrersController",
+      "file": "1RadAPI/Controllers/ReferrersController.cs",
+      "routeBase": "api/v1/referrers",
+      "auth": "Authorize",
+      "requiresModule": "Ris",
+      "functions": [
+        { "name": "Get", "method": "GET", "route": "", "params": ["filters"], "summary": "List/search referrers." },
+        { "name": "Create", "method": "POST", "route": "", "params": ["CreateReferrerCommand"], "mediator": "CreateReferrerCommand", "summary": "Create referrer." },
+        { "name": "CreateBulk", "method": "POST", "route": "bulk", "params": ["CreateReferrersBulkCommand"], "mediator": "CreateReferrersBulkCommand", "summary": "Bulk create referrers." },
+        { "name": "ShareLink", "method": "GET", "route": "{id:guid}/share-link", "params": ["id"], "summary": "Get a referrer share link." },
+        { "name": "ShareLinks", "method": "POST", "route": "share-links", "params": ["ShareLinksBody"], "summary": "Get share links for multiple referrers." },
+        { "name": "SendLinks", "method": "POST", "route": "send-links", "params": ["SendReferralLinksCommand"], "mediator": "SendReferralLinksCommand", "summary": "Send referral links." },
+        { "name": "UpdateReferrer", "method": "PUT", "route": "{id}", "params": ["id", "UpdateReferrerCommand"], "mediator": "UpdateReferrerCommand", "summary": "Update referrer." },
+        { "name": "DeleteReferrer", "method": "DELETE", "route": "{id}", "params": ["id"], "summary": "Delete referrer." },
+        { "name": "GetIntelligence", "method": "GET", "route": "intelligence", "params": ["startDate?", "endDate?", "referrerId?"], "summary": "Referrer intelligence metrics." },
+        { "name": "GetMatrix", "method": "GET", "route": "matrix", "params": ["filters"], "summary": "Referrer matrix." },
+        { "name": "RecordCommission", "method": "POST", "route": "commissions", "params": ["RecordReferralCommissionCommand"], "mediator": "RecordReferralCommissionCommand", "summary": "Record a commission." },
+        { "name": "RecordCommissions", "method": "POST", "route": "commissions/batch", "params": ["RecordReferralCommissionsCommand"], "mediator": "RecordReferralCommissionsCommand", "summary": "Batch record commissions." },
+        { "name": "GetCommissions", "method": "GET", "route": "commissions", "params": ["filters"], "summary": "List commissions." },
+        { "name": "GetLedger", "method": "GET", "route": "ledger", "params": ["startDate?", "endDate?", "referrerId?"], "summary": "Commission ledger." },
+        { "name": "Update", "method": "PUT", "route": "commissions/{id}", "params": ["id", "UpdateReferralCommissionCommand"], "mediator": "UpdateReferralCommissionCommand", "summary": "Update a commission." },
+        { "name": "UpdateStatus", "method": "PATCH", "route": "commissions/{id}/status", "params": ["id", "status"], "summary": "Update commission status." }
+      ]
+    },
+    {
+      "controller": "ReportingController",
+      "file": "1RadAPI/Controllers/ReportingController.cs",
+      "routeBase": "api/v1/reporting",
+      "auth": "Authorize",
+      "requiresModule": null,
+      "functions": [
+        { "name": "GetTemplates", "method": "GET", "route": "templates", "params": ["modality?"], "summary": "List report templates." },
+        { "name": "UpsertTemplate", "method": "POST", "route": "templates/upsert", "params": ["UpsertTemplateCommand"], "mediator": "UpsertTemplateCommand", "summary": "Create/update template." },
+        { "name": "DeleteTemplate", "method": "DELETE", "route": "templates/{id}", "params": ["id"], "summary": "Delete template." },
+        { "name": "GetKeywords", "method": "GET", "route": "keywords", "params": [], "summary": "List keywords." },
+        { "name": "UpsertKeyword", "method": "POST", "route": "keywords/upsert", "params": ["UpsertKeywordCommand"], "mediator": "UpsertKeywordCommand", "summary": "Create/update keyword." },
+        { "name": "DeleteKeyword", "method": "DELETE", "route": "keywords/{id}", "params": ["id"], "summary": "Delete keyword." },
+        { "name": "GetReport", "method": "GET", "route": "report/{appointmentId}", "params": ["appointmentId", "serviceId?"], "summary": "Get report for an appointment/service." },
+        { "name": "GetReportByStudy", "method": "GET", "route": "report/by-study/{studyId:guid}", "params": ["studyId"], "summary": "Get report by study id." },
+        { "name": "GetReportsDelta", "method": "GET", "route": "reports", "params": ["filters"], "summary": "Delta sync of reports." },
+        { "name": "SaveReport", "method": "POST", "route": "save", "params": ["SaveReportCommand"], "mediator": "SaveReportCommand", "summary": "Save report." },
+        { "name": "GenerateVoiceReport", "method": "POST", "route": "voice-generate", "params": ["GenerateVoiceReportCommand"], "mediator": "GenerateVoiceReportCommand", "summary": "Generate report from voice." },
+        { "name": "AiAssist", "method": "POST", "route": "ai-assist", "params": ["AiAssistCommand"], "mediator": "AiAssistCommand", "summary": "AI report assistance." },
+        { "name": "SuggestTerms", "method": "GET", "route": "terms/suggest", "params": ["q?", "limit=8"], "summary": "Suggest terms." },
+        { "name": "CheckSpelling", "method": "POST", "route": "terms/check", "params": ["SpellCheckBody"], "summary": "Spell-check terms." },
+        { "name": "TermFrequency", "method": "GET", "route": "terms/frequency", "params": ["maxNgram=5"], "summary": "Term frequency analysis." },
+        { "name": "Format", "method": "POST", "route": "format", "params": ["FormatReportCommand"], "mediator": "FormatReportCommand", "summary": "Format report." }
+      ]
+    },
+    {
+      "controller": "StaffController",
+      "file": "1RadAPI/Controllers/StaffController.cs",
+      "routeBase": "api/v1/staff",
+      "auth": "Authorize",
+      "requiresModule": null,
+      "functions": [
+        { "name": "GetStaff", "method": "GET", "route": "", "params": [], "summary": "List staff." },
+        { "name": "AddStaff", "method": "POST", "route": "", "params": ["AddStaffMemberCommand"], "mediator": "AddStaffMemberCommand", "summary": "Add staff member." },
+        { "name": "UpdateStaff", "method": "PUT", "route": "{id:guid}", "params": ["id", "UpdateStaffMemberCommand"], "mediator": "UpdateStaffMemberCommand", "summary": "Update staff member." },
+        { "name": "RemoveStaff", "method": "DELETE", "route": "{id:guid}", "params": ["id"], "summary": "Remove staff member." },
+        { "name": "GetDocuments", "method": "GET", "route": "{id:guid}/documents", "params": ["id"], "summary": "List staff documents." },
+        { "name": "UploadDocument", "method": "POST", "route": "{id:guid}/documents", "params": ["id", "IFormFile file", "category=Other"], "summary": "Upload staff document." },
+        { "name": "DeleteDocument", "method": "DELETE", "route": "{id:guid}/documents/{docId:guid}", "params": ["id", "docId"], "summary": "Delete staff document." },
+        { "name": "UploadPhoto", "method": "POST", "route": "{id:guid}/photo", "params": ["id", "IFormFile photo"], "summary": "Upload staff photo." },
+        { "name": "DeletePhoto", "method": "DELETE", "route": "{id:guid}/photo", "params": ["id"], "summary": "Delete staff photo." },
+        { "name": "GetSalary", "method": "GET", "route": "{id:guid}/salary", "params": ["id"], "summary": "Get salary info." },
+        { "name": "SaveSalaryRevision", "method": "POST", "route": "{id:guid}/salary/revisions", "params": ["id", "SaveSalaryRevisionRequest"], "summary": "Add salary revision." },
+        { "name": "DeleteSalaryRevision", "method": "DELETE", "route": "{id:guid}/salary/revisions/{revId:guid}", "params": ["id", "revId"], "summary": "Delete salary revision." },
+        { "name": "AddDisbursement", "method": "POST", "route": "{id:guid}/salary/disbursements", "params": ["id", "AddDisbursementRequest"], "summary": "Add salary disbursement." },
+        { "name": "DeleteDisbursement", "method": "DELETE", "route": "{id:guid}/salary/disbursements/{disbId:guid}", "params": ["id", "disbId"], "summary": "Delete disbursement." },
+        { "name": "SetDisbursementStatus", "method": "PATCH", "route": "{id:guid}/salary/disbursements/{disbId:guid}/status", "params": ["id", "disbId", "SetDisbursementStatusRequest"], "summary": "Set disbursement status." }
+      ]
+    },
+    {
+      "controller": "StudyController",
+      "file": "1RadAPI/Controllers/StudyController.cs",
+      "routeBase": "api/v1/study",
+      "auth": "Authorize",
+      "requiresModule": "Pacs (on most endpoints; some AllowAnonymous via token)",
+      "functions": [
+        { "name": "GetStudyAssets", "method": "GET", "route": "{appointmentId}/assets", "params": ["appointmentId"], "summary": "List study assets for an appointment." },
+        { "name": "GetManifest", "method": "GET", "route": "{appointmentId}/manifest", "requiresModule": "Pacs", "params": ["appointmentId", "CancellationToken"], "summary": "DICOM manifest for an appointment." },
+        { "name": "GetManifestByStudy", "method": "GET", "route": "by-study/{imagingStudyId:guid}/manifest", "requiresModule": "Pacs", "params": ["imagingStudyId", "CancellationToken"], "summary": "Manifest by study id." },
+        { "name": "GetExtractionStatusByStudy", "method": "GET", "route": "by-study/{imagingStudyId:guid}/extraction-status", "requiresModule": "Pacs", "params": ["imagingStudyId", "CancellationToken"], "summary": "Extraction status by study id." },
+        { "name": "CreateShareLink", "method": "POST", "route": "studies/{studyId:guid}/share", "requiresModule": "Pacs", "params": ["studyId"], "summary": "Create a study share link." },
+        { "name": "GetSharedManifest", "method": "GET", "route": "shared/{token}/manifest", "auth": "AllowAnonymous", "params": ["token", "CancellationToken"], "summary": "Manifest via share token (public)." },
+        { "name": "ReextractStudy", "method": "POST", "route": "studies/{studyId:guid}/reextract", "requiresModule": "Pacs", "params": ["studyId"], "summary": "Re-run extraction for a study." },
+        { "name": "GetExtractionStatus", "method": "GET", "route": "{appointmentId}/extraction-status", "requiresModule": "Pacs", "params": ["appointmentId", "CancellationToken"], "summary": "Extraction status for an appointment." },
+        { "name": "GetDicomViewerConfig", "method": "GET", "route": "{appointmentId}/viewer", "requiresModule": "Pacs", "params": ["appointmentId"], "summary": "DICOM viewer config." },
+        { "name": "UploadStudyAsset", "method": "POST", "route": "upload", "params": ["StudyUploadRequest (FromForm)"], "summary": "Upload a study asset." },
+        { "name": "CompleteStudy", "method": "POST", "route": "complete", "params": ["StudyCompletionRequest"], "summary": "Mark study upload complete." },
+        { "name": "RequestSasUploadToken", "method": "POST", "route": "upload-token", "params": ["SasUploadTokenRequest"], "summary": "Request SAS upload token." },
+        { "name": "ConfirmSasUploadComplete", "method": "POST", "route": "upload-complete", "params": ["SasUploadCompleteRequest"], "summary": "Confirm SAS upload complete." },
+        { "name": "RequestInstanceUploadSas", "method": "POST", "route": "instance-upload/request-sas", "requiresModule": "Pacs", "params": ["InstanceUploadSasRequest"], "summary": "Request SAS for instance upload." },
+        { "name": "RegisterInstanceUpload", "method": "POST", "route": "instance-upload/register", "requiresModule": "Pacs", "params": ["InstanceUploadRegisterRequest"], "summary": "Register instance upload." },
+        { "name": "RegisterStudy", "method": "POST", "route": "studies/register", "requiresModule": "Pacs", "params": ["StudyRegisterRequest"], "summary": "Register a study." },
+        { "name": "RequestStudyUploadToken", "method": "POST", "route": "studies/{studyId:guid}/upload-token", "requiresModule": "Pacs", "params": ["studyId", "StudyUploadTokenRequest"], "summary": "Request study upload token." },
+        { "name": "CompleteStudyUpload", "method": "POST", "route": "studies/{studyId:guid}/upload-complete", "requiresModule": "Pacs", "params": ["studyId", "StudyUploadCompleteRequest"], "summary": "Complete study upload." },
+        { "name": "RequestStudyInstanceSas", "method": "POST", "route": "studies/{studyId:guid}/instance-upload/request-sas", "requiresModule": "Pacs", "params": ["studyId", "StudyInstanceSasRequest"], "summary": "Request SAS for study instance upload." },
+        { "name": "RegisterStudyInstanceUpload", "method": "POST", "route": "studies/{studyId:guid}/instance-upload/register", "requiresModule": "Pacs", "params": ["studyId", "StudyInstanceRegisterRequest"], "summary": "Register study instance upload." },
+        { "name": "ListStudies", "method": "GET", "route": "studies", "requiresModule": "Pacs", "params": ["filters"], "summary": "List studies (worklist)." },
+        { "name": "GetStudyDetail", "method": "GET", "route": "studies/{studyId:guid}", "requiresModule": "Pacs", "params": ["studyId"], "summary": "Study detail." },
+        { "name": "AssignStudy", "method": "POST", "route": "studies/{studyId:guid}/assign", "requiresModule": "Pacs", "params": ["studyId", "StudyAssignRequest"], "summary": "Assign study to a radiologist." },
+        { "name": "DeleteStudy", "method": "DELETE", "route": "studies/{studyId:guid}", "requiresModule": "Pacs", "params": ["studyId"], "summary": "Delete study." },
+        { "name": "ExportStudy", "method": "GET", "route": "studies/{studyId:guid}/export", "requiresModule": "Pacs", "params": ["studyId"], "summary": "Export study." },
+        { "name": "ProxyAsset", "method": "GET", "route": "proxy-asset", "auth": "AllowAnonymous", "params": ["url", "exp?", "sig?"], "summary": "Signed proxy for study assets (public, signature-gated)." }
+      ]
+    },
+    {
+      "controller": "SubscriptionsController",
+      "file": "1RadAPI/Controllers/SubscriptionsController.cs",
+      "routeBase": "api/v1/subscriptions",
+      "auth": "Authorize",
+      "requiresModule": null,
+      "functions": [
+        { "name": "GetStatus", "method": "GET", "route": "status", "params": [], "summary": "Subscription status." },
+        { "name": "GetAdminPaymentRequests", "method": "GET", "route": "admin/payment-requests", "params": [], "summary": "Admin: list payment requests." },
+        { "name": "SubmitPaymentRequest", "method": "POST", "route": "payment-request", "params": ["SubmitPaymentRequestCommand"], "mediator": "SubmitPaymentRequestCommand", "summary": "Submit a payment request." },
+        { "name": "ApprovePayment", "method": "POST", "route": "approve-payment/{requestId:guid}", "params": ["requestId", "ApprovePaymentBody"], "summary": "Approve a payment request." },
+        { "name": "GetInvoices", "method": "GET", "route": "invoices", "params": [], "summary": "Subscription invoices." },
+        { "name": "GetPlans", "method": "GET", "route": "plans", "auth": "AllowAnonymous", "params": [], "summary": "List subscription plans (public)." },
+        { "name": "GetEstimate", "method": "GET", "route": "estimate", "params": ["planId"], "summary": "Price estimate for a plan." },
+        { "name": "SetModules", "method": "POST", "route": "modules", "auth": "Authorize(Roles=AdminDoctor,AdminOperator)", "params": ["SetModulesBody"], "summary": "Set subscribed modules." }
+      ]
+    },
+    {
+      "controller": "SystemController",
+      "file": "1RadAPI/Controllers/SystemController.cs",
+      "routeBase": "api/v1/system",
+      "auth": "AllowAnonymous",
+      "requiresModule": null,
+      "functions": [
+        { "name": "Now", "method": "GET", "route": "now", "params": [], "summary": "Server time." }
+      ]
+    },
+    {
+      "controller": "WeatherForecastController",
+      "file": "1RadAPI/Controllers/WeatherForecastController.cs",
+      "routeBase": "WeatherForecast",
+      "auth": "None (default template)",
+      "requiresModule": null,
+      "note": "Default ASP.NET scaffold; not a product endpoint.",
+      "functions": [
+        { "name": "GetWeatherForecast", "method": "GET", "route": "", "params": [], "summary": "Sample weather forecast (template)." }
+      ]
+    }
+  ]
+}

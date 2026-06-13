@@ -6,6 +6,7 @@ using FellowOakDicom;
 using FellowOakDicom.Imaging;
 using FellowOakDicom.Imaging.Codec;
 using FellowOakDicom.Imaging.NativeCodec;
+using FellowOakDicom.IO.Buffer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -411,6 +412,22 @@ public class DicomExtractionService : IDicomExtractionService
             var appointmentIdN = (asset.AppointmentId ?? asset.ImagingStudyId ?? asset.Id).ToString("N");
             var sliceCount     = 0;
 
+            // Server-side MPR (opt-in, best-effort): pick the LARGEST series and
+            // build a memory-bounded downsampled-volume accumulator, filled plane-
+            // by-plane during the decode pass below. Only one accumulator exists at
+            // a time, so peak added memory is a single (capped) short[] volume.
+            ReformatAccumulator? reformatAcc = null;
+            int reformatSeriesIndexBase = bySeries.Count; // coronal/sagittal series go after the axial ones
+            if (_writeReformattedPlanes && bySeries.Count > 0)
+            {
+                var largest = bySeries.OrderByDescending(s => s.Slices.Count).First();
+                reformatAcc = TryBuildReformatAccumulator(largest.Slices);
+                if (reformatAcc != null)
+                    _logger.LogInformation(
+                        "[REFORMAT] Asset {AssetId}: eligible series ({D} slices) → reformat volume {W}×{H}×{D2} (factor {F}).",
+                        assetId, largest.Slices.Count, reformatAcc.Width, reformatAcc.Height, reformatAcc.Depth, reformatAcc.Factor);
+            }
+
             // Compression-stats accumulators — logged at end of extraction so
             // we can see the byte savings (and confirm transcoding actually ran).
             long totalOriginalBytes  = 0;
@@ -516,6 +533,16 @@ public class DicomExtractionService : IDicomExtractionService
                         // parsed file, so nothing heavy survives this task.
                         var metadataJson = ExtractMetadataJson(dicom, frameUrl, previewUrl);
 
+                        // Server-side MPR: write this slice's downsampled plane into
+                        // the volume accumulator. Its z-index is fixed by SopUid, so
+                        // each task writes a DISTINCT plane — lock-free. Best-effort:
+                        // a failure just leaves that plane zero, never fails the slice.
+                        if (reformatAcc != null && reformatAcc.ZBySop.TryGetValue(p.SopUid, out var rz))
+                        {
+                            if (FillReformatPlane(dicom, reformatAcc, rz))
+                                Interlocked.Increment(ref reformatAcc.FilledPlanes);
+                        }
+
                         // Release the raw bytes now that this slice is fully uploaded,
                         // so held memory shrinks as the study progresses.
                         p.OriginalBytes = Array.Empty<byte>();
@@ -609,6 +636,35 @@ public class DicomExtractionService : IDicomExtractionService
             // source deletion — so a crash can never leave a study with neither a
             // re-gatherable source nor a saved index.
             await _db.SaveChangesAsync(cancellationToken);
+
+            // Server-side MPR (best-effort): axial is now durably committed AND
+            // viewable, so reslice the in-memory volume into coronal + sagittal
+            // series and add them. A failure here NEVER affects the axial study —
+            // the user already has it; reformats simply won't appear this run.
+            if (reformatAcc != null)
+            {
+                try
+                {
+                    asset.ExtractionPhase = "Reformatting";
+                    await _db.SaveChangesAsync(cancellationToken);
+                    var (rfRows, rfBytes) = await ReformatAndUploadAsync(
+                        reformatAcc, asset, hospitalIdN, appointmentIdN, assetIdN, reformatSeriesIndexBase, cancellationToken);
+                    if (rfRows > 0) asset.StorageBytes += rfBytes;
+                    asset.ExtractionPhase = null;
+                    await _db.SaveChangesAsync(cancellationToken);
+                }
+                catch (Exception rfEx)
+                {
+                    _logger.LogWarning(rfEx, "[REFORMAT] Asset {AssetId}: reformatting failed — axial study unaffected.", assetId);
+                    asset.ExtractionPhase = null;
+                    try { await _db.SaveChangesAsync(cancellationToken); } catch { /* best-effort */ }
+                }
+                finally
+                {
+                    // Free the volume buffer promptly regardless of outcome.
+                    reformatAcc = null;
+                }
+            }
 
             // Storage-saving (opt-in): the per-slice HTJ2K blobs are now committed
             // and ARE the viewable study, so the original ZIP is redundant. Reclaim
@@ -751,6 +807,9 @@ public class DicomExtractionService : IDicomExtractionService
                 ImageOrientationPatient = ReadDoubles(ds, DicomTag.ImageOrientationPatient),
                 ImagePositionPatient    = ReadDoubles(ds, DicomTag.ImagePositionPatient),
                 SliceThickness          = ds.GetSingleValueOrDefault<double?>(DicomTag.SliceThickness, null),
+                WindowCenter            = ds.GetSingleValueOrDefault<double?>(DicomTag.WindowCenter, null),
+                WindowWidth             = ds.GetSingleValueOrDefault<double?>(DicomTag.WindowWidth, null),
+                FrameOfReferenceUid     = ds.GetSingleValueOrDefault<string?>(DicomTag.FrameOfReferenceUID, null),
                 OriginalBytes     = bytes,
             };
         }
@@ -1003,6 +1062,310 @@ public class DicomExtractionService : IDicomExtractionService
         }
     }
 
+    // ══════════════════════════════════════════════════════════════════════════
+    // SERVER-SIDE MPR REFORMATTING (Dicom:WriteReformattedPlanes)
+    //
+    // Brings proper coronal/sagittal to LOW-BANDWIDTH + MOBILE users by reslicing
+    // the axial volume into 2D stacks server-side, so the viewer never needs a
+    // client volume. The whole path is BEST-EFFORT + memory-bounded: anything
+    // failing logs + leaves the axial study untouched, and a study whose
+    // downsampled volume would exceed the voxel cap is skipped entirely (the
+    // client-side MPR overlay remains the fallback). The pure reslice + geometry
+    // math lives in VolumeReformatter (unit-tested); this part is the decode →
+    // accumulate → encode → upload plumbing.
+    // ══════════════════════════════════════════════════════════════════════════
+
+    private static double Dot(double[] a, double[] b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+
+    // Per-series accumulator: a single downsampled short[] volume filled plane-by-
+    // plane during the existing decode pass (each axial slice writes its own z),
+    // plus the geometry needed to reslice it. Bounded to ReformatMaxVoxels.
+    private sealed class ReformatAccumulator
+    {
+        public int SrcWidth, SrcHeight;            // source cols/rows (each slice must match)
+        public int Width, Height, Depth;           // downsampled W', H', and slice count D
+        public int Factor;                         // integer box-downsample factor
+        public short[] Voxels = System.Array.Empty<short>();
+        public int FilledPlanes;                   // Interlocked — coverage check
+        public Dictionary<string, int> ZBySop = new(); // SopUid → z-plane index
+        public double[] RowDir = { 1, 0, 0 }, ColDir = { 0, 1, 0 }, SliceDir = { 0, 0, 1 };
+        public double ColSpacing = 1, RowSpacing = 1, SliceSpacing = 1; // dx', dy', dz (mm)
+        public double[] Origin = { 0, 0, 0 };
+        public string StudyUid = string.Empty;
+        public string? FrameOfReferenceUid;
+        public string? Modality;
+        public double? WindowCenter, WindowWidth;
+    }
+
+    // Decide eligibility + build the accumulator for ONE series (the largest), or
+    // null to skip. Caps memory: a volume above ReformatMaxVoxels is rejected.
+    private ReformatAccumulator? TryBuildReformatAccumulator(List<ParsedSlice> slices)
+    {
+        try
+        {
+            if (slices.Count < _reformatMinSlices) return null;
+            var f = slices[0];
+            if (f.Rows is not int rows || f.Columns is not int cols || rows <= 0 || cols <= 0) return null;
+            if (f.PixelSpacing is not { Length: >= 2 } ps) return null;
+            if (f.ImageOrientationPatient is not { Length: >= 6 } iop) return null;
+
+            int factor = Math.Max(1, (int)Math.Ceiling(Math.Max(cols, rows) / (double)_reformatMaxDim));
+            int W = Math.Max(1, cols / factor), H = Math.Max(1, rows / factor), D = slices.Count;
+            if ((long)W * H * D > _reformatMaxVoxels)
+            {
+                _logger.LogInformation("[REFORMAT] series skipped — {V} voxels exceeds cap {Cap}; client-side MPR remains.", (long)W * H * D, _reformatMaxVoxels);
+                return null;
+            }
+
+            var rowDir = new[] { iop[0], iop[1], iop[2] };
+            var colDir = new[] { iop[3], iop[4], iop[5] };
+            var sliceDir = VolumeReformatter.Normalize(VolumeReformatter.Cross(rowDir, colDir));
+
+            // z-order: by IPP projected on the slice normal when every slice has a
+            // position (robust to InstanceNumber quirks); else InstanceNumber order.
+            bool haveIpp = slices.All(s => s.ImagePositionPatient is { Length: >= 3 });
+            var ordered = haveIpp
+                ? slices.OrderBy(s => Dot(s.ImagePositionPatient!, sliceDir)).ToList()
+                : slices;
+
+            var zBySop = new Dictionary<string, int>(D);
+            for (int z = 0; z < ordered.Count; z++)
+                if (!string.IsNullOrEmpty(ordered[z].SopUid)) zBySop[ordered[z].SopUid] = z;
+
+            double dz;
+            if (haveIpp && ordered.Count > 1)
+            {
+                var a = ordered[0].ImagePositionPatient!; var b = ordered[^1].ImagePositionPatient!;
+                double span = Math.Abs(Dot(new[] { b[0] - a[0], b[1] - a[1], b[2] - a[2] }, sliceDir));
+                dz = span > 1e-6 ? span / (ordered.Count - 1) : (f.SliceThickness ?? 1.0);
+            }
+            else dz = f.SliceThickness ?? 1.0;
+            if (dz <= 0) dz = 1.0;
+
+            var origin = ordered[0].ImagePositionPatient is { Length: >= 3 } o
+                ? new[] { o[0], o[1], o[2] } : new[] { 0.0, 0, 0 };
+
+            return new ReformatAccumulator
+            {
+                SrcWidth = cols, SrcHeight = rows, Width = W, Height = H, Depth = D, Factor = factor,
+                Voxels = new short[(long)W * H * D],
+                ZBySop = zBySop, RowDir = rowDir, ColDir = colDir, SliceDir = sliceDir,
+                ColSpacing = ps[1] * factor, RowSpacing = ps[0] * factor, SliceSpacing = dz,
+                Origin = origin, StudyUid = f.StudyUid ?? string.Empty, Modality = f.Modality,
+                WindowCenter = f.WindowCenter, WindowWidth = f.WindowWidth,
+                FrameOfReferenceUid = f.FrameOfReferenceUid,
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[REFORMAT] accumulator build failed — skipping reformat for this study.");
+            return null;
+        }
+    }
+
+    // Decode one axial slice's pixels (rescaled to intensity) and box-downsample
+    // them into the accumulator's z-plane. Returns false (leaving the plane zero)
+    // on any mismatch/error — never throws into the slice task.
+    private bool FillReformatPlane(DicomFile file, ReformatAccumulator acc, int z)
+    {
+        try
+        {
+            var ds = file.Dataset;
+            if (ds.InternalTransferSyntax.IsEncapsulated)
+                ds = new DicomTranscoder(ds.InternalTransferSyntax, DicomTransferSyntax.ExplicitVRLittleEndian).Transcode(file).Dataset;
+
+            var pd = DicomPixelData.Create(ds);
+            int cols = pd.Width, srows = pd.Height;
+            if (cols != acc.SrcWidth || srows != acc.SrcHeight || pd.SamplesPerPixel != 1) return false;
+
+            var frame = pd.GetFrame(0).Data;
+            int bits = ds.GetSingleValueOrDefault<ushort>(DicomTag.BitsAllocated, 16);
+            bool signed = ds.GetSingleValueOrDefault<ushort>(DicomTag.PixelRepresentation, (ushort)0) == 1;
+            double slope = ds.GetSingleValueOrDefault(DicomTag.RescaleSlope, 1.0);
+            double intercept = ds.GetSingleValueOrDefault(DicomTag.RescaleIntercept, 0.0);
+            int bpp = bits > 8 ? 2 : 1;
+            if (frame.Length < cols * srows * bpp) return false;
+
+            double ReadStored(int i) => bits > 8
+                ? (signed ? BitConverter.ToInt16(frame, i * 2) : BitConverter.ToUInt16(frame, i * 2))
+                : (signed ? (sbyte)frame[i] : frame[i]);
+
+            int W = acc.Width, H = acc.Height, fac = acc.Factor;
+            long planeBase = (long)z * W * H;
+            for (int oy = 0; oy < H; oy++)
+            {
+                int sy0 = oy * fac, sy1 = Math.Min(sy0 + fac, srows);
+                for (int ox = 0; ox < W; ox++)
+                {
+                    int sx0 = ox * fac, sx1 = Math.Min(sx0 + fac, cols);
+                    double sum = 0; int cnt = 0;
+                    for (int sy = sy0; sy < sy1; sy++)
+                    {
+                        int rowBase = sy * cols;
+                        for (int sx = sx0; sx < sx1; sx++) { sum += ReadStored(rowBase + sx) * slope + intercept; cnt++; }
+                    }
+                    double avg = cnt > 0 ? sum / cnt : 0;
+                    acc.Voxels[planeBase + oy * W + ox] = (short)Math.Clamp(Math.Round(avg), short.MinValue, short.MaxValue);
+                }
+            }
+            return true;
+        }
+        catch { return false; }
+    }
+
+    // Reslice the accumulated volume into coronal + sagittal series and upload
+    // each plane as an HTJ2K .dcm (+ preview, + first-plane thumbnail), adding a
+    // StudySliceIndex row per plane. Returns (rows added, bytes uploaded).
+    private async Task<(int rows, long bytes)> ReformatAndUploadAsync(
+        ReformatAccumulator acc, StudyAsset asset,
+        string hospitalIdN, string appointmentIdN, string assetIdN,
+        int firstNewSeriesIndex, CancellationToken ct)
+    {
+        // Require meaningful coverage — a half-empty volume reslices to garbage.
+        if (acc.FilledPlanes < acc.Depth * 0.6)
+        {
+            _logger.LogWarning("[REFORMAT] only {Filled}/{Depth} planes filled — skipping reslice (insufficient coverage).", acc.FilledPlanes, acc.Depth);
+            return (0, 0);
+        }
+
+        var vol = new VolumeReformatter.AxialVolume
+        {
+            Voxels = acc.Voxels, Width = acc.Width, Height = acc.Height, Depth = acc.Depth,
+            RowDir = acc.RowDir, ColDir = acc.ColDir, SliceDir = acc.SliceDir,
+            ColSpacing = acc.ColSpacing, RowSpacing = acc.RowSpacing, SliceSpacing = acc.SliceSpacing,
+            Origin = acc.Origin,
+        };
+
+        int rows = 0; long bytes = 0;
+        var orientations = new (VolumeReformatter.Plane plane, string desc, int seriesIndex)[]
+        {
+            (VolumeReformatter.Plane.Coronal,  "CORONAL (MPR)",  firstNewSeriesIndex),
+            (VolumeReformatter.Plane.Sagittal, "SAGITTAL (MPR)", firstNewSeriesIndex + 1),
+        };
+
+        foreach (var (plane, desc, seriesIndex) in orientations)
+        {
+            var seriesUid = DicomUIDGenerator.GenerateDerivedFromUUID().UID;
+            int seriesNumber = 9000 + seriesIndex; // clearly distinct from acquisition series
+            int planeNo = 0;
+            foreach (var rp in VolumeReformatter.Reslice(vol, plane, _reformatMaxDim))
+            {
+                ct.ThrowIfCancellationRequested();
+                try
+                {
+                    var sopUid = DicomUIDGenerator.GenerateDerivedFromUUID().UID;
+                    var dcmBytes = BuildReformatDicomBytes(rp, acc, sopUid, seriesUid, seriesNumber, desc, out var builtFile);
+                    var blobPath = $"{hospitalIdN}/{appointmentIdN}/extracted/{assetIdN}/series/{seriesIndex:D3}/{rp.PlaneIndex:D4}.dcm";
+                    var url = await UploadWithRetryAsync(dcmBytes, blobPath, "application/dicom", ct);
+                    bytes += dcmBytes.Length;
+
+                    string? previewUrl = null, thumbnailUrl = null;
+                    try
+                    {
+                        var prev = RenderGrayscaleJpeg(builtFile, PreviewMaxDim, 55);
+                        if (prev != null)
+                        {
+                            var pp = $"{hospitalIdN}/{appointmentIdN}/extracted/{assetIdN}/series/{seriesIndex:D3}/{rp.PlaneIndex:D4}_prev.jpg";
+                            previewUrl = await UploadWithRetryAsync(prev, pp, "image/jpeg", ct);
+                            bytes += prev.Length;
+                        }
+                        if (planeNo == 0)
+                        {
+                            var thumb = RenderGrayscaleJpeg(builtFile, ThumbnailMaxDim, 70);
+                            if (thumb != null)
+                            {
+                                var tp = $"{hospitalIdN}/{appointmentIdN}/extracted/{assetIdN}/thumbs/{seriesIndex:D3}.jpg";
+                                thumbnailUrl = await UploadWithRetryAsync(thumb, tp, "image/jpeg", ct);
+                                bytes += thumb.Length;
+                            }
+                        }
+                    }
+                    catch (Exception pvEx) { _logger.LogDebug(pvEx, "[REFORMAT] preview/thumb render failed for {Desc} plane {P}.", desc, rp.PlaneIndex); }
+
+                    var metadataJson = ExtractMetadataJson(builtFile, null, previewUrl);
+                    _db.StudySliceIndexes.Add(new StudySliceIndex
+                    {
+                        SliceId = Guid.NewGuid(),
+                        AssetId = asset.Id,
+                        AppointmentId = asset.AppointmentId,
+                        HospitalId = asset.HospitalId,
+                        SeriesUID = seriesUid,
+                        SopInstanceUID = sopUid,
+                        InstanceNumber = rp.PlaneIndex + 1,
+                        SeriesDescription = desc,
+                        Modality = Truncate(acc.Modality, 16),
+                        BlobUrl = url,
+                        BlobPath = blobPath,
+                        ThumbnailUrl = planeNo == 0 ? thumbnailUrl : null,
+                        MetadataJson = metadataJson,
+                        ExtractedAt = DateTime.UtcNow,
+                    });
+                    rows++; planeNo++;
+                }
+                catch (Exception ex) { _logger.LogDebug(ex, "[REFORMAT] {Desc} plane {P} failed — skipping.", desc, rp.PlaneIndex); }
+            }
+            _logger.LogInformation("[REFORMAT] {Desc}: {N} planes uploaded.", desc, planeNo);
+        }
+        return (rows, bytes);
+    }
+
+    // Construct a single-frame 16-bit MONOCHROME2 DICOM from a reformatted plane
+    // (+ its geometry), then transcode to HTJ2K Lossless RPCL for storage. The
+    // out param is the UNCOMPRESSED file so the caller renders the preview without
+    // a second decode. Pixel values are rescaled intensity (slope=1, intercept=0).
+    private byte[] BuildReformatDicomBytes(
+        VolumeReformatter.ReformatPlane rp, ReformatAccumulator acc,
+        string sopUid, string seriesUid, int seriesNumber, string seriesDesc, out DicomFile builtFile)
+    {
+        var ds = new DicomDataset(DicomTransferSyntax.ExplicitVRLittleEndian);
+        ds.AddOrUpdate(DicomTag.SOPClassUID, DicomUID.SecondaryCaptureImageStorage);
+        ds.AddOrUpdate(DicomTag.SOPInstanceUID, sopUid);
+        if (!string.IsNullOrEmpty(acc.StudyUid)) ds.AddOrUpdate(DicomTag.StudyInstanceUID, acc.StudyUid);
+        ds.AddOrUpdate(DicomTag.SeriesInstanceUID, seriesUid);
+        if (!string.IsNullOrEmpty(acc.FrameOfReferenceUid)) ds.AddOrUpdate(DicomTag.FrameOfReferenceUID, acc.FrameOfReferenceUid);
+        ds.AddOrUpdate(DicomTag.Modality, string.IsNullOrEmpty(acc.Modality) ? "OT" : acc.Modality);
+        ds.AddOrUpdate(DicomTag.SeriesDescription, seriesDesc);
+        ds.AddOrUpdate(DicomTag.SeriesNumber, seriesNumber);
+        ds.AddOrUpdate(DicomTag.InstanceNumber, rp.PlaneIndex + 1);
+        ds.AddOrUpdate(DicomTag.ImageType, "DERIVED", "SECONDARY", "REFORMATTED");
+        ds.AddOrUpdate(DicomTag.Rows, (ushort)rp.Height);
+        ds.AddOrUpdate(DicomTag.Columns, (ushort)rp.Width);
+        ds.AddOrUpdate(DicomTag.BitsAllocated, (ushort)16);
+        ds.AddOrUpdate(DicomTag.BitsStored, (ushort)16);
+        ds.AddOrUpdate(DicomTag.HighBit, (ushort)15);
+        ds.AddOrUpdate(DicomTag.PixelRepresentation, (ushort)1); // signed (rescaled intensity)
+        ds.AddOrUpdate(DicomTag.SamplesPerPixel, (ushort)1);
+        ds.AddOrUpdate(DicomTag.PhotometricInterpretation, "MONOCHROME2");
+        ds.AddOrUpdate(DicomTag.PixelSpacing, rp.RowSpacing, rp.ColSpacing);
+        ds.AddOrUpdate(DicomTag.ImageOrientationPatient, rp.ImageOrientationPatient);
+        ds.AddOrUpdate(DicomTag.ImagePositionPatient, rp.ImagePositionPatient);
+        ds.AddOrUpdate(DicomTag.RescaleSlope, 1.0);
+        ds.AddOrUpdate(DicomTag.RescaleIntercept, 0.0);
+        if (acc.WindowCenter is double wc) ds.AddOrUpdate(DicomTag.WindowCenter, wc);
+        if (acc.WindowWidth is double ww) ds.AddOrUpdate(DicomTag.WindowWidth, ww);
+
+        var raw = new byte[rp.Pixels.Length * 2];
+        Buffer.BlockCopy(rp.Pixels, 0, raw, 0, raw.Length);
+        var px = DicomPixelData.Create(ds, true);
+        px.AddFrame(new MemoryByteBuffer(raw));
+
+        builtFile = new DicomFile(ds); // uncompressed — preview renders directly from this
+        try
+        {
+            var ht = new DicomTranscoder(DicomTransferSyntax.ExplicitVRLittleEndian, DicomTransferSyntax.HTJ2KLosslessRPCL).Transcode(builtFile);
+            using var ms = new MemoryStream();
+            ht.Save(ms);
+            return ms.ToArray();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "[REFORMAT] HTJ2K transcode of reformat plane failed — storing uncompressed.");
+            using var ms = new MemoryStream();
+            builtFile.Save(ms);
+            return ms.ToArray();
+        }
+    }
+
     /// <summary>
     /// Cherry-picks the viewer-relevant tags into a compact JSON blob so the
     /// manifest stays tiny. Anything missing is omitted.
@@ -1110,6 +1473,9 @@ public class DicomExtractionService : IDicomExtractionService
         public double[]? ImageOrientationPatient { get; set; } // [rowDir(3), colDir(3)]
         public double[]? ImagePositionPatient    { get; set; } // [x,y,z] of voxel (0,0)
         public double? SliceThickness            { get; set; }
+        public double? WindowCenter              { get; set; }
+        public double? WindowWidth               { get; set; }
+        public string? FrameOfReferenceUid       { get; set; }
         // Raw bytes only — the parsed DicomFile is NOT retained (it holds the
         // decoded pixel data, ~doubling RAM per slice). The processing task
         // re-opens it on demand and disposes it, so peak memory is bounded to the
