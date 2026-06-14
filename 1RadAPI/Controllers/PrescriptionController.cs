@@ -13,7 +13,9 @@ namespace _1RadAPI.Controllers
     [Route("api/v1/[controller]")]
     [ApiController]
     [Authorize] // All endpoints require a valid JWT. Hospital isolation is enforced via HospitalId claim in the DB query.
-    [_1RadAPI.Authorization.RequiresModule(_1Rad.Domain.Constants.ModuleConstants.Ris)]
+    // The report letterhead/margins apply to EVERY SKU's reports (RIS and Cloud
+    // PACS both generate reports), so this is not RIS-gated. The setting is now a
+    // single per-centre protocol shared by all doctors (no per-doctor variation).
     public class PrescriptionController : ControllerBase
     {
         private readonly IApplicationDbContext _context;
@@ -33,6 +35,13 @@ namespace _1RadAPI.Controllers
             return await GetProtocol(_userContext.UserId);
         }
 
+        // The {doctorId} route is retained for client compatibility (ReportingPage
+        // still calls /Prescription/{doctorId} for the report's author), but the
+        // protocol is now SINGLE PER CENTRE — the same letterhead/margins for every
+        // doctor — so the id is ignored and we always return the hospital's one
+        // protocol. The ordering keeps a deterministic answer during the transition
+        // window where a centre might still have stale per-doctor rows (preferring
+        // the one with a letterhead, then the earliest = the centre's original setup).
         [HttpGet("{doctorId:guid}")]
         public async Task<IActionResult> GetProtocol(Guid doctorId)
         {
@@ -41,23 +50,10 @@ namespace _1RadAPI.Controllers
                 var hospitalId = _userContext.HospitalId;
                 var protocol = await _context.PrescriptionProtocols
                     .Include(p => p.Doctor)
-                    .FirstOrDefaultAsync(p => p.DoctorId == doctorId && p.HospitalId == hospitalId);
-
-                // Fall back to the centre's default letterhead/margins when this
-                // doctor has no protocol of their own — any protocol configured for
-                // this hospital (preferring one that actually has a letterhead, then
-                // the earliest-configured = the centre's original setup). Without
-                // this, reports by doctors who never set up a protocol print on a
-                // plain page with no header margin reserved.
-                if (protocol == null)
-                {
-                    protocol = await _context.PrescriptionProtocols
-                        .Include(p => p.Doctor)
-                        .Where(p => p.HospitalId == hospitalId)
-                        .OrderByDescending(p => p.LetterheadBlobUrl != null)
-                        .ThenBy(p => p.CreatedAt)
-                        .FirstOrDefaultAsync();
-                }
+                    .Where(p => p.HospitalId == hospitalId)
+                    .OrderByDescending(p => p.LetterheadBlobUrl != null)
+                    .ThenBy(p => p.CreatedAt)
+                    .FirstOrDefaultAsync();
 
                 if (protocol == null)
                 {
@@ -95,8 +91,16 @@ namespace _1RadAPI.Controllers
                     return BadRequest(new { success = false, error = "TYPOGRAPHIC FAILURE: Font size must be at least 8px for readability standards." });
                 }
 
+                // Single per-centre protocol: upsert the hospital's one row,
+                // regardless of which doctor is saving (request.DoctorId is ignored
+                // now). The ordering matches GetProtocol so we update the SAME row
+                // the centre reads, even if stale per-doctor rows still linger
+                // pre-migration.
                 var protocol = await _context.PrescriptionProtocols
-                    .FirstOrDefaultAsync(p => p.DoctorId == request.DoctorId && p.HospitalId == hospitalId);
+                    .Where(p => p.HospitalId == hospitalId)
+                    .OrderByDescending(p => p.LetterheadBlobUrl != null)
+                    .ThenBy(p => p.CreatedAt)
+                    .FirstOrDefaultAsync();
 
                 string? letterheadUrl = protocol?.LetterheadBlobUrl;
 
@@ -118,7 +122,10 @@ namespace _1RadAPI.Controllers
                     protocol = new PrescriptionProtocol
                     {
                         Id = Guid.NewGuid(),
-                        DoctorId = request.DoctorId,
+                        // DoctorId is now just provenance (the setting is centre-wide).
+                        // Stamp the saver when the client doesn't send a valid id so
+                        // the non-null FK to Users always resolves.
+                        DoctorId = request.DoctorId == Guid.Empty ? _userContext.UserId : request.DoctorId,
                         HospitalId = hospitalId,
                         HeaderMargin = request.HeaderMargin,
                         LeftMargin = request.LeftMargin,
