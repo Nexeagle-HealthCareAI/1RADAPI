@@ -98,6 +98,7 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
         if (req.InvoiceId == null) return;
 
         var invoice = await _context.Invoices
+            .Include(i => i.Items)
             .FirstOrDefaultAsync(i => i.Id == req.InvoiceId && i.HospitalId == req.HospitalId && i.DeletedAt == null, ct);
         if (invoice == null || invoice.Status == "CANCELLED") return;
 
@@ -169,6 +170,24 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
         else
         {
             invoice.Status = "PENDING";
+        }
+
+        // Free → payment: reopening a free bill and charging for it (the edit
+        // leaves a payable total) must clear the "free test" flag, so the bill
+        // and reports no longer show it as free once money is owed/taken. Only a
+        // WHOLE-invoice free sets invoice.IsFree=true; a mixed per-service free
+        // leaves it false, so this won't un-free a partially-free visit.
+        if (invoice.IsFree && invoice.TotalAmount > 0.01m)
+        {
+            invoice.IsFree = false;
+            foreach (var it in invoice.Items) it.IsFree = false;
+            if (invoice.AppointmentId.HasValue)
+            {
+                var freedServices = await _context.AppointmentServices
+                    .Where(s => s.AppointmentId == invoice.AppointmentId.Value && s.HospitalId == req.HospitalId)
+                    .ToListAsync(ct);
+                foreach (var s in freedServices) { s.IsFree = false; s.UpdatedAt = DateTime.UtcNow; }
+            }
         }
 
         invoice.UpdatedAt = DateTime.UtcNow;

@@ -17,4 +17,10 @@ public class MockSmsService : ISmsService
         _logger.LogInformation("Sending OTP {Otp} to mobile number {Mobile} via MockSmsService (WhatsAPI integration pending).", otp, mobile);
         return Task.CompletedTask;
     }
+
+    public Task SendReferralLinkAsync(string mobile, string doctorName, string centreName, string link)
+    {
+        _logger.LogInformation("Sending referral portal link to Dr. {Doctor} at {Mobile} via MockSmsService: {Link}", doctorName, mobile, link);
+        return Task.CompletedTask;
+    }
 }

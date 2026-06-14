@@ -23,7 +23,9 @@ public record DoctorPortalPatientDto(
     string Status,
     decimal Eligible,
     decimal Paid,
-    decimal Unpaid
+    decimal Unpaid,
+    decimal Total,     // per-service bill amount (this referral's InvoiceItem subtotal)
+    decimal Discount   // referrer concession attributed to this referral (pro-rata per service)
 );
 
 public record DoctorPortalDto(
@@ -92,7 +94,7 @@ public class GetDoctorPortalQueryHandler : IRequestHandler<GetDoctorPortalQuery,
             .Where(c => c.ReferrerId == request.ReferrerId && c.HospitalId == hospitalId
                         && c.DeletedAt == null && c.Status != "Cancelled")
             .OrderByDescending(c => c.ServiceDate)
-            .Select(c => new { c.PatientName, c.Modality, c.ServiceDate, c.TransactionDate, c.AppointmentId, c.CommissionAmount, c.Status })
+            .Select(c => new { c.PatientName, c.Modality, c.ServiceDate, c.TransactionDate, c.AppointmentId, c.AppointmentServiceId, c.CommissionAmount, c.Status })
             .ToListAsync(ct);
 
         // Study status + PTID per referred appointment.
@@ -105,6 +107,26 @@ public class GetDoctorPortalQueryHandler : IRequestHandler<GetDoctorPortalQuery,
                 .ToListAsync(ct))
               .GroupBy(a => a.AppointmentId)
               .ToDictionary(g => g.Key, g => (g.First().Status ?? string.Empty, g.First().Ptid ?? string.Empty, g.First().FullName ?? string.Empty, g.First().ArrivedAt));
+
+        // Per-visit invoice lines so each referral row can show the patient's bill
+        // for that study and the referrer concession on it. One invoice per visit;
+        // a line maps 1:1 to an AppointmentService (migration 57), so we match the
+        // commission's service line for the per-study price and allocate the
+        // invoice's ReferrerDiscount pro-rata across its lines. Flattened via
+        // SelectMany (a join) to avoid a nested collection projection.
+        var invoiceLines = apptIds.Count == 0
+            ? new List<InvoiceLine>()
+            : await _context.Invoices.AsNoTracking().IgnoreQueryFilters()
+                .Where(inv => inv.AppointmentId != null && apptIds.Contains(inv.AppointmentId.Value)
+                              && inv.DeletedAt == null && inv.Status != "CANCELLED")
+                .SelectMany(inv => inv.Items.Select(it => new InvoiceLine(
+                    inv.AppointmentId, inv.GrossAmount, inv.ReferrerDiscount,
+                    it.AppointmentServiceId, it.Amount, it.Quantity)))
+                .ToListAsync(ct);
+        var linesByAppt = invoiceLines
+            .Where(l => l.AppointmentId != null)
+            .GroupBy(l => l.AppointmentId!.Value)
+            .ToDictionary(g => g.Key, g => g.ToList());
 
         var patients = commissions.Select(c =>
         {
@@ -128,6 +150,31 @@ public class GetDoctorPortalQueryHandler : IRequestHandler<GetDoctorPortalQuery,
                 : (string.IsNullOrWhiteSpace(c.PatientName) ? "—" : c.PatientName);
             var label = string.IsNullOrWhiteSpace(ptid) ? name : $"{name} · {ptid}";
 
+            // The referrer concession given to the patient out of this doctor's cut.
+            // Allocated pro-rata by the referred service's share of the bill (the
+            // ReferrerDiscount is invoice-level; one service = one line, migration 57).
+            decimal discount = 0m;
+            if (c.AppointmentId != null && linesByAppt.TryGetValue(c.AppointmentId.Value, out var lines) && lines.Count > 0)
+            {
+                var gross = lines.Sum(x => x.Amount * x.Quantity);
+                if (gross <= 0) gross = lines[0].GrossAmount;
+                var refDiscount = lines[0].ReferrerDiscount;
+
+                var line = c.AppointmentServiceId != null
+                    ? lines.FirstOrDefault(x => x.AppointmentServiceId == c.AppointmentServiceId)
+                    : null;
+                decimal lineSubtotal = line != null ? line.Amount * line.Quantity
+                    : (lines.Count == 1 ? lines[0].Amount * lines[0].Quantity : gross);
+
+                var share = gross > 0 ? lineSubtotal / gross : 1m;
+                discount = Math.Round(refDiscount * share, 2);
+            }
+
+            // "Total amount" on the portal = the doctor's TOTAL ELIGIBLE INCENTIVE
+            // (gross): what they net (CommissionAmount, which is already after the
+            // concession) plus the concession they gave the patient. Net + discount.
+            var total = c.CommissionAmount + discount;
+
             return new DoctorPortalPatientDto(
                 label,
                 date.ToString("yyyy-MM-dd"),
@@ -136,7 +183,9 @@ public class GetDoctorPortalQueryHandler : IRequestHandler<GetDoctorPortalQuery,
                 status,
                 c.CommissionAmount,
                 paid ? c.CommissionAmount : 0,
-                paid ? 0 : c.CommissionAmount
+                paid ? 0 : c.CommissionAmount,
+                total,
+                discount
             );
         }).ToList();
 
@@ -164,4 +213,14 @@ public class GetDoctorPortalQueryHandler : IRequestHandler<GetDoctorPortalQuery,
             patients
         );
     }
+
+    // Flattened invoice-line projection (one row per line, carrying its parent
+    // invoice's gross + referrer discount) used to price each referral row.
+    private sealed record InvoiceLine(
+        Guid? AppointmentId,
+        decimal GrossAmount,
+        decimal ReferrerDiscount,
+        Guid? AppointmentServiceId,
+        decimal Amount,
+        int Quantity);
 }

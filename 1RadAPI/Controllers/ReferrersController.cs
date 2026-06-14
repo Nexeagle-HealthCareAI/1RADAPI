@@ -6,6 +6,7 @@ using _1Rad.Application.Features.Referrers.Queries.GetDetailedReferralLedger;
 using _1Rad.Application.Features.Referrers.Commands.CreateReferrer;
 using _1Rad.Application.Features.Referrers.Commands.CreateReferrersBulk;
 using _1Rad.Application.Features.Referrers.Commands.SendReferralLinks;
+using _1Rad.Application.Features.Referrers.Commands.SendReferralLinksWhatsApp;
 using _1Rad.Application.Features.Referrers.Commands.UpdateReferrer;
 using _1Rad.Application.Interfaces;
 using _1Rad.Application.Features.Referrers.Commands.DeleteReferrer;
@@ -78,6 +79,15 @@ public class ReferrersController : ControllerBase
     // Email each named referrer their personal portal link.
     [HttpPost("send-links")]
     public async Task<IActionResult> SendLinks([FromBody] SendReferralLinksCommand command)
+    {
+        var result = await _mediator.Send(command);
+        return Ok(result);
+    }
+
+    // WhatsApp each named referrer their personal portal link via NexEagle's
+    // WhatsApp Business API (one-click send, no app hand-off).
+    [HttpPost("send-links-whatsapp")]
+    public async Task<IActionResult> SendLinksWhatsApp([FromBody] SendReferralLinksWhatsAppCommand command)
     {
         var result = await _mediator.Send(command);
         return Ok(result);

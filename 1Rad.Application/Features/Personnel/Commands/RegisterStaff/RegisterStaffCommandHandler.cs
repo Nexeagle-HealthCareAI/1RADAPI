@@ -69,8 +69,12 @@ public class RegisterStaffCommandHandler : IRequestHandler<RegisterStaffCommand,
         }
         else
         {
-            // If the user already exists, update their profile, activate them, and set password if provided
-            user.FullName = request.FullName;
+            // Existing user — e.g. the same person already works at another centre
+            // in the chain, so we're adding them to THIS centre. Activate the seat
+            // and (only if provided) set their password, but DON'T overwrite their
+            // canonical identity: a typo'd email that happens to match someone else
+            // must not silently rename that person. Only fill a blank name.
+            if (string.IsNullOrWhiteSpace(user.FullName)) user.FullName = request.FullName;
             user.Status = UserStatus.Active;
             user.IsVerified = true;
             if (!string.IsNullOrWhiteSpace(request.Password))
@@ -83,39 +87,34 @@ public class RegisterStaffCommandHandler : IRequestHandler<RegisterStaffCommand,
             if (!string.IsNullOrWhiteSpace(request.LicenseNo)) user.LicenseNo = request.LicenseNo;
         }
 
-        // 4. Check for existing Mapping
+        // 4. Same-centre duplicate guard. We don't OTP-verify staff emails, so the
+        // database IS the source of truth: if this person (matched by email OR
+        // mobile above) is already on THIS centre's roster, onboarding is a
+        // duplicate — reject it clearly instead of silently re-using/overwriting
+        // the existing record (which produced the "two staff, one email" bug).
+        // Editing an existing member goes through the dedicated update endpoint.
         var existingMapping = await _context.UserHospitalMappings
-            .Include(m => m.Roles)
-            .Include(m => m.CustomRoles)
             .FirstOrDefaultAsync(m => m.UserId == user.UserId && m.HospitalId == request.HospitalId, cancellationToken);
 
         if (existingMapping != null)
         {
-            // Update roles if they differ
-            existingMapping.Roles.Clear();
-            foreach (var role in roles) existingMapping.Roles.Add(role);
-
-            existingMapping.CustomRoles.Clear();
-            foreach (var cr in customRoles) existingMapping.CustomRoles.Add(cr);
+            return (Guid.Empty, "A staff member with this email or mobile already exists at this centre. Open their profile to edit it instead of adding them again.");
         }
-        else
+
+        // New seat — enforce the plan's user cap.
+        var seats = await _limits.GetUserLimitAsync(request.HospitalId, cancellationToken);
+        if (seats.AtLimit)
+            return (Guid.Empty, $"USER_LIMIT_REACHED: Your plan includes {seats.Max} users ({seats.Current} in use). Upgrade your plan to add more staff.");
+
+        var mapping = new UserHospitalMapping
         {
-            // New seat — enforce the plan's user cap (existing members can always
-            // have their roles updated above; only NET-NEW seats are capped).
-            var seats = await _limits.GetUserLimitAsync(request.HospitalId, cancellationToken);
-            if (seats.AtLimit)
-                return (Guid.Empty, $"USER_LIMIT_REACHED: Your plan includes {seats.Max} users ({seats.Current} in use). Upgrade your plan to add more staff.");
-
-            var mapping = new UserHospitalMapping
-            {
-                UserId = user.UserId,
-                HospitalId = request.HospitalId,
-                AssignedAt = DateTime.UtcNow,
-                Roles = roles,
-                CustomRoles = customRoles
-            };
-            _context.UserHospitalMappings.Add(mapping);
-        }
+            UserId = user.UserId,
+            HospitalId = request.HospitalId,
+            AssignedAt = DateTime.UtcNow,
+            Roles = roles,
+            CustomRoles = customRoles
+        };
+        _context.UserHospitalMappings.Add(mapping);
 
         await _context.SaveChangesAsync(cancellationToken);
         return (user.UserId, null);

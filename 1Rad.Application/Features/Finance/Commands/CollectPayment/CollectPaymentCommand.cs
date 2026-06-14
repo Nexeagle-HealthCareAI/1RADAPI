@@ -163,6 +163,23 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
                 invoice.Status = "PARTIAL";
             }
 
+            // Free → paid: once the patient actually pays, the "free test" flag
+            // must drop off — the invoice is no longer free. Only WHOLE-invoice
+            // frees carry invoice.IsFree=true (a mixed per-service free leaves it
+            // false), so this never disturbs a visit where only some lines are free.
+            if (invoice.IsFree && invoice.PaidAmount > 0)
+            {
+                invoice.IsFree = false;
+                foreach (var it in invoice.Items) it.IsFree = false;
+                if (invoice.AppointmentId.HasValue)
+                {
+                    var freedServices = await _context.AppointmentServices
+                        .Where(s => s.AppointmentId == invoice.AppointmentId.Value && s.HospitalId == invoice.HospitalId)
+                        .ToListAsync(cancellationToken);
+                    foreach (var s in freedServices) { s.IsFree = false; s.UpdatedAt = DateTime.UtcNow; }
+                }
+            }
+
             await _context.SaveChangesAsync(cancellationToken);
             return true;
         }
