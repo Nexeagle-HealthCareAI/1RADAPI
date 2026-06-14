@@ -24,8 +24,10 @@ public record DoctorPortalPatientDto(
     decimal Eligible,
     decimal Paid,
     decimal Unpaid,
-    decimal Total,     // per-service bill amount (this referral's InvoiceItem subtotal)
-    decimal Discount   // referrer concession attributed to this referral (pro-rata per service)
+    decimal Total,         // total eligible incentive (net incentive + concession given)
+    decimal Discount,      // referrer concession attributed to this referral (pro-rata per service)
+    bool Arrived,          // has the patient reached the centre yet?
+    string PaymentStatus   // patient's invoice payment: PAID | PARTIAL | UNPAID (drives eligibility)
 );
 
 public record DoctorPortalDto(
@@ -121,7 +123,7 @@ public class GetDoctorPortalQueryHandler : IRequestHandler<GetDoctorPortalQuery,
                               && inv.DeletedAt == null && inv.Status != "CANCELLED")
                 .SelectMany(inv => inv.Items.Select(it => new InvoiceLine(
                     inv.AppointmentId, inv.GrossAmount, inv.ReferrerDiscount,
-                    it.AppointmentServiceId, it.Amount, it.Quantity)))
+                    it.AppointmentServiceId, it.Amount, it.Quantity, inv.PaidAmount, inv.TotalAmount)))
                 .ToListAsync(ct);
         var linesByAppt = invoiceLines
             .Where(l => l.AppointmentId != null)
@@ -154,6 +156,9 @@ public class GetDoctorPortalQueryHandler : IRequestHandler<GetDoctorPortalQuery,
             // Allocated pro-rata by the referred service's share of the bill (the
             // ReferrerDiscount is invoice-level; one service = one line, migration 57).
             decimal discount = 0m;
+            // Patient's invoice payment — drives portal eligibility. No invoice yet
+            // (e.g. booked-but-not-arrived) reads as UNPAID.
+            var paymentStatus = "UNPAID";
             if (c.AppointmentId != null && linesByAppt.TryGetValue(c.AppointmentId.Value, out var lines) && lines.Count > 0)
             {
                 var gross = lines.Sum(x => x.Amount * x.Quantity);
@@ -168,12 +173,19 @@ public class GetDoctorPortalQueryHandler : IRequestHandler<GetDoctorPortalQuery,
 
                 var share = gross > 0 ? lineSubtotal / gross : 1m;
                 discount = Math.Round(refDiscount * share, 2);
+
+                var net = lines[0].TotalAmount;
+                var invPaid = lines[0].PaidAmount;
+                if (net <= 0 || invPaid >= net - 0.01m) paymentStatus = "PAID";
+                else if (invPaid > 0) paymentStatus = "PARTIAL";
+                else paymentStatus = "UNPAID";
             }
 
             // "Total amount" on the portal = the doctor's TOTAL ELIGIBLE INCENTIVE
             // (gross): what they net (CommissionAmount, which is already after the
             // concession) plus the concession they gave the patient. Net + discount.
             var total = c.CommissionAmount + discount;
+            var arrived = arrivedAt.HasValue;
 
             return new DoctorPortalPatientDto(
                 label,
@@ -185,7 +197,9 @@ public class GetDoctorPortalQueryHandler : IRequestHandler<GetDoctorPortalQuery,
                 paid ? c.CommissionAmount : 0,
                 paid ? 0 : c.CommissionAmount,
                 total,
-                discount
+                discount,
+                arrived,
+                paymentStatus
             );
         }).ToList();
 
@@ -222,5 +236,7 @@ public class GetDoctorPortalQueryHandler : IRequestHandler<GetDoctorPortalQuery,
         decimal ReferrerDiscount,
         Guid? AppointmentServiceId,
         decimal Amount,
-        int Quantity);
+        int Quantity,
+        decimal PaidAmount,
+        decimal TotalAmount);
 }
