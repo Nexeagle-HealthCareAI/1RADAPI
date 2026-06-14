@@ -1,4 +1,5 @@
 using _1Rad.Application.Interfaces;
+using _1Rad.Domain.Constants;
 using _1Rad.Domain.Entities;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
@@ -115,6 +116,16 @@ public class CreateChainCommandHandler : IRequestHandler<CreateChainCommand, Cre
             mapping.Roles.Add(adminRole);
             _context.UserHospitalMappings.Add(mapping);
 
+            // Resolve the chosen product package (SKU) for THIS new centre. Only
+            // RIS/PACS are valid codes; an empty/garbage value defaults to the full
+            // product so a bad client never locks the new centre out of everything.
+            // (Mirrors DeployInfrastructure — modules are per-centre.)
+            var chosen = ModuleConstants.Parse(request.Modules);
+            var valid = new[] { ModuleConstants.Ris, ModuleConstants.Pacs };
+            var modules = (chosen.Count > 0 && chosen.All(m => valid.Contains(m, StringComparer.OrdinalIgnoreCase)))
+                ? string.Join(",", chosen.OrderBy(m => m))
+                : ModuleConstants.DefaultModules;
+
             // 5. Add 14-day Trial Subscription
             var trialSubscription = new HospitalSubscription
             {
@@ -124,6 +135,7 @@ public class CreateChainCommandHandler : IRequestHandler<CreateChainCommand, Cre
                 EndDate = DateTime.UtcNow.AddDays(14),
                 IsTrial = true,
                 BillingCycle = "Trial",
+                Modules = modules,
                 Status = "Active",
                 IsLocked = false,
                 CreatedAt = DateTime.UtcNow

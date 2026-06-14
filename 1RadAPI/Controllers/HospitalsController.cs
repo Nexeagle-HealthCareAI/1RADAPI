@@ -59,7 +59,8 @@ public class HospitalsController : ControllerBase
             request.GSTIN,
             request.RegistrationNumber,
             request.PAN,
-            request.NABHNumber));
+            request.NABHNumber,
+            request.Modules));
 
         if (!result.Success) return BadRequest(new { success = false, message = result.Error, errorCode = result.ErrorCode });
         return Ok(result);
@@ -89,4 +90,6 @@ public record CreateChainRequest(
     string? GSTIN = null,
     string? RegistrationNumber = null,
     string? PAN = null,
-    string? NABHNumber = null);
+    string? NABHNumber = null,
+    // Chosen product package (SKU) for the new centre: "RIS" | "PACS" | "RIS,PACS".
+    string? Modules = null);

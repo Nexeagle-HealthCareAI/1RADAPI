@@ -11,7 +11,11 @@ public record CreateChainCommand(
     string? GSTIN = null,
     string? RegistrationNumber = null,
     string? PAN = null,
-    string? NABHNumber = null) : IRequest<CreateChainResponse>;
+    string? NABHNumber = null,
+    // Chosen product package (SKU) for the NEW centre: "RIS", "PACS", or
+    // "RIS,PACS". Modules are per-centre, so each new centre in a chain can run a
+    // different SKU. Null/invalid falls back to the default (full) product.
+    string? Modules = null) : IRequest<CreateChainResponse>;
 
 public class CreateChainResponse
 {
