@@ -43,6 +43,16 @@ public class AppointmentService : BaseEntity, IHospitalContext
     public decimal ReferralCutValue { get; set; }
 
     /// <summary>
+    /// Per-service free test (multi-service free billing). When true, this one
+    /// service line is a free test: its InvoiceItem is excluded from the visit's
+    /// payable total and its referral cut is forfeited (per the chosen bearer),
+    /// while OTHER lines on the same visit can still be charged normally. Set via
+    /// the approval-gated per-service Mark Free flow. The visit's Invoice.IsFree
+    /// stays an "all lines free" rollup for back-compat with existing reports.
+    /// </summary>
+    public bool IsFree { get; set; } = false;
+
+    /// <summary>
     /// State machine, identical in spirit to Appointment.Status but scoped
     /// to this one service line:
     ///   NOT_STARTED  — booked, not scanned yet

@@ -5,7 +5,9 @@ using _1Rad.Application.Features.Finance.Queries.GetServiceCharges;
 using _1Rad.Application.Features.Finance.Queries.GetInvoices;
 using _1Rad.Application.Features.Finance.Queries.GetFinanceStats;
 using _1Rad.Application.Features.Finance.Commands.UpsertServiceCharge;
+using _1Rad.Application.Features.Finance.Commands.AddBookingService;
 using _1Rad.Application.Features.Finance.Commands.DeleteServiceCharge;
+using _1Rad.Domain.Constants;
 using _1Rad.Application.Features.Finance.Commands.GenerateInvoice;
 using _1Rad.Application.Features.Finance.Commands.CollectPayment;
 using _1Rad.Application.Features.Finance.Commands.SyncLocalStorageInvoices;
@@ -52,6 +54,36 @@ public class FinanceController : ControllerBase
         var updatedCommand = command with { Id = id };
         var result = await _mediator.Send(updatedCommand);
         return Ok(new { id = result });
+    }
+
+    /// <summary>
+    /// Add a service to the catalogue on the fly during appointment booking when
+    /// the chosen modality has no service yet. Smart upsert (create-with-template /
+    /// price an unpriced service / return an already-priced one). Restricted to the
+    /// roles that actually book — front desk + admins. Tenant is taken from the
+    /// auth context inside the handler, never the client.
+    /// </summary>
+    [HttpPost("registry/quick-add")]
+    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Receptionist}")]
+    public async Task<IActionResult> QuickAddRegistry([FromBody] AddBookingServiceCommand command)
+    {
+        try
+        {
+            var dto = await _mediator.Send(command);
+            return Ok(new { success = true, data = dto });
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { success = false, error = ex.Message });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { success = false, error = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { success = false, error = $"Failed to add the service: {ex.Message}" });
+        }
     }
 
 

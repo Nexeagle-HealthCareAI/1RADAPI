@@ -276,7 +276,15 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         // edits flow through to the existing commission rows.
         if (appointment.ArrivedAt != null)
         {
-            await ReconcileReferralCommissionsAsync(appointment, liveServices, request, effectiveReferredBy, invoice?.InvoiceId, cancellationToken);
+            // Auto-billing parity: arrival keeps a ₹0 commission row per service
+            // when auto-billing is on. The edit reconcile must mirror that so a
+            // service edited/added here behaves identically to one present at
+            // arrival (otherwise Revenue gets a line but Referral doesn't).
+            var autoBilling = await _context.Hospitals
+                .Where(h => h.HospitalId == appointment.HospitalId)
+                .Select(h => (bool?)h.IsAutoBillingEnabled)
+                .FirstOrDefaultAsync(cancellationToken) ?? false;
+            await ReconcileReferralCommissionsAsync(appointment, liveServices, request, effectiveReferredBy, invoice?.InvoiceId, autoBilling, cancellationToken);
         }
 
         // Persist. Everything above was read fresh in THIS handler, so any
@@ -524,8 +532,13 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         UpdateAppointmentCommand request,
         string effectiveReferredBy,
         string? invoiceDisplayId,
+        bool isAutoBillingEnabled,
         CancellationToken cancellationToken)
     {
+        // Load EVERY commission for this visit, INCLUDING tombstones — so a row
+        // that was soft-deleted by an earlier edit can be revived (DeletedAt
+        // cleared) when its service is live again, instead of staying invisible
+        // in the Referral Hub (which filters DeletedAt == null).
         var commissions = await _context.ReferralCommissions
             .Where(c => c.AppointmentId == request.AppointmentId)
             .ToListAsync(cancellationToken);
@@ -539,7 +552,15 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         if (string.IsNullOrEmpty(effectiveReferredBy) ||
             string.Equals(effectiveReferredBy.Trim(), "Self", StringComparison.OrdinalIgnoreCase))
         {
-            foreach (var c in commissions) c.CommissionAmount = 0;
+            // Self / walk-in pays no commission — drop the rows from the ledger
+            // (tombstone), don't leave visible ₹0 entries.
+            var nowSelf = DateTime.UtcNow;
+            foreach (var c in commissions)
+            {
+                c.CommissionAmount = 0;
+                c.Status = "Cancelled";
+                if (c.DeletedAt == null) { c.DeletedAt = nowSelf; c.UpdatedAt = nowSelf; }
+            }
             return;
         }
 
@@ -663,44 +684,60 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         }
 
         // v2 path: reconcile one commission per service. Match by
-        // AppointmentServiceId where possible; fall back to adopting an
-        // existing orphan commission row for the primary service.
+        // AppointmentServiceId (preferring a LIVE row over a tombstone), then
+        // fall back to adopting an existing orphan commission row.
         var commissionsByServiceId = commissions
             .Where(c => c.AppointmentServiceId.HasValue)
-            .ToDictionary(c => c.AppointmentServiceId!.Value);
+            .GroupBy(c => c.AppointmentServiceId!.Value)
+            .ToDictionary(g => g.Key, g => g.OrderBy(c => c.DeletedAt.HasValue).First());
 
-        var orphan = commissions.FirstOrDefault(c => c.AppointmentServiceId == null);
+        var orphan = commissions.FirstOrDefault(c => c.AppointmentServiceId == null && c.DeletedAt == null);
         var keep   = new HashSet<Guid>();
+        var touchedReferrers = new HashSet<Guid> { referrer.ReferrerId };
+        var now = DateTime.UtcNow;
 
         foreach (var svc in liveServices)
         {
-            if (commissionsByServiceId.TryGetValue(svc.Id, out var existing))
+            // A row should exist when the line earns a cut, OR auto-billing keeps
+            // a ₹0 row (mirrors arrival in UpdateAppointmentStatus so an edited /
+            // added service behaves identically to one present at arrival).
+            var shouldHaveRow = svc.ReferralCutValue > 0 || isAutoBillingEnabled;
+
+            ReferralCommission? existing = null;
+            if (commissionsByServiceId.TryGetValue(svc.Id, out var byId)) existing = byId;
+            else if (orphan != null) { existing = orphan; orphan = null; }
+
+            if (existing != null)
             {
-                existing.CommissionAmount = svc.ReferralCutValue;
-                existing.Modality         = svc.Modality;
-                existing.ReferrerId       = referrer.ReferrerId;
-                existing.ReferrerName     = referrer.Name ?? effectiveReferredBy;
+                existing.ReferrerId           = referrer.ReferrerId;
+                existing.ReferrerName         = referrer.Name ?? effectiveReferredBy;
+                existing.Modality             = svc.Modality;
+                existing.CommissionAmount     = svc.ReferralCutValue;
+                existing.AppointmentServiceId = svc.Id;
                 if (!string.IsNullOrEmpty(invoiceDisplayId)) existing.ReferenceNumber = invoiceDisplayId;
+                existing.UpdatedAt = now;
+                touchedReferrers.Add(existing.ReferrerId);
+
+                if (shouldHaveRow)
+                {
+                    // Revive the row so the Referral Hub shows the (possibly
+                    // changed) amount again — fixes the "amount not updating".
+                    existing.DeletedAt = null;
+                    if (existing.Status == "Cancelled") existing.Status = "UNPAID";
+                }
+                else
+                {
+                    // No cut + no auto-billing → drop this line from the ledger so
+                    // a swapped/zeroed modality doesn't linger as a stale row.
+                    existing.CommissionAmount = 0;
+                    existing.Status = "Cancelled";
+                    existing.DeletedAt ??= now;
+                }
                 keep.Add(existing.Id);
                 continue;
             }
 
-            // Adopt a legacy single-row commission for the primary service
-            // so we don't double-up.
-            if (orphan != null)
-            {
-                orphan.AppointmentServiceId = svc.Id;
-                orphan.CommissionAmount     = svc.ReferralCutValue;
-                orphan.Modality             = svc.Modality;
-                orphan.ReferrerId           = referrer.ReferrerId;
-                orphan.ReferrerName         = referrer.Name ?? effectiveReferredBy;
-                if (!string.IsNullOrEmpty(invoiceDisplayId)) orphan.ReferenceNumber = invoiceDisplayId;
-                keep.Add(orphan.Id);
-                orphan = null;
-                continue;
-            }
-
-            if (svc.ReferralCutValue <= 0) continue; // nothing to track
+            if (!shouldHaveRow) continue; // nothing to track for this line
 
             var newCommission = new ReferralCommission
             {
@@ -709,34 +746,35 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
                 Modality             = svc.Modality,
                 CommissionAmount     = svc.ReferralCutValue,
                 Status               = "UNPAID",
-                TransactionDate      = DateTime.UtcNow,
+                TransactionDate      = now,
                 HospitalId           = appointment.HospitalId,
                 AppointmentId        = appointment.AppointmentId,
                 AppointmentServiceId = svc.Id,
                 ReferenceNumber      = invoiceDisplayId
             };
             _context.ReferralCommissions.Add(newCommission);
-            // Note: newCommission.Id is generated by Guid.NewGuid() in the
-            // entity ctor, so we can keep-by-Id like the others.
             keep.Add(newCommission.Id);
         }
 
-        // Any commission rows that no longer correspond to a live service are
-        // soft-deleted (zeroed + DeletedAt) so the referrer is credited ONLY for
-        // the services CURRENTLY on the appointment. A modality that was later
-        // changed/removed must drop out of the Referral Hub ledger entirely — not
-        // linger as a ₹0 row (the ledger filters DeletedAt == null). The row is
-        // kept (soft-delete) for audit rather than hard-deleted, and UpdatedAt is
-        // bumped so the offline sync applies the tombstone to the local cache.
+        // Tombstone every commission that no longer maps to a live service
+        // (removed services AND any leftover orphan), so the referrer is credited
+        // ONLY for the services CURRENTLY on the visit. Soft-delete (not hard) for
+        // audit + so the offline sync applies the tombstone to the local cache.
         foreach (var c in commissions)
         {
             if (keep.Contains(c.Id)) continue;
             c.CommissionAmount = 0;
+            c.Status = "Cancelled";
             if (c.DeletedAt == null)
             {
-                c.DeletedAt = DateTime.UtcNow;
-                c.UpdatedAt = DateTime.UtcNow;
+                c.DeletedAt = now;
+                c.UpdatedAt = now;
             }
         }
+
+        // NOTE: the per-row AccumulatedTotal running column isn't recomputed here
+        // (it never was on edit). The Referral Hub aggregates from CommissionAmount
+        // — the source of truth this method now keeps correct. AccumulatedTotal is
+        // re-derived when commissions are next recorded/paid.
     }
 }

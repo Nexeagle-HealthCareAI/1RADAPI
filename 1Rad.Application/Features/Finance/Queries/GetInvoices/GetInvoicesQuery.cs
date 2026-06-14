@@ -58,6 +58,8 @@ public class InvoiceItemDto
     // lines or legacy rows pre-dating the AppointmentServiceId FK.
     public Guid? AppointmentServiceId { get; set; }
     public string? Modality { get; set; }
+    // Per-line free test — this service is free; excluded from the payable total.
+    public bool IsFree { get; set; }
 }
 
 public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<InvoiceDto>>
@@ -171,6 +173,7 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
                         Amount = it.Amount,
                         Quantity = it.Quantity,
                         AppointmentServiceId = it.AppointmentServiceId,
+                        IsFree = it.IsFree,
                         // Pull modality straight from the attached
                         // AppointmentService when present. Falls back
                         // to the visit's scalar Modality for legacy

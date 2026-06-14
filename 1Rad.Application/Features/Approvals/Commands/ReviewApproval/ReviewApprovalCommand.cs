@@ -312,20 +312,31 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
         //  REFERRER → referrer alone bears it; gets NO commission.
         // Self referrals earn nothing regardless of this choice.
         var bearer = "CENTRE";
+        Guid? serviceId = null;
         try
         {
             using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(req.Payload) ? "{}" : req.Payload);
             var b = GetString(doc.RootElement, "bearer");
             if (!string.IsNullOrWhiteSpace(b)) bearer = b.Trim().ToUpperInvariant();
+            // Per-service free: when the request names a specific service line,
+            // free ONLY that line and leave the rest of the visit payable.
+            var sid = GetString(doc.RootElement, "appointmentServiceId");
+            if (Guid.TryParse(sid, out var g) && g != Guid.Empty) serviceId = g;
         }
         catch { }
         if (bearer != "REFERRER" && bearer != "BOTH") bearer = "CENTRE";
 
+        if (serviceId.HasValue)
+        {
+            await ApplyMarkFreePerServiceAsync(req, serviceId.Value, bearer, ct);
+            return;
+        }
+
         var invoice = req.InvoiceId != null
-            ? await _context.Invoices.FirstOrDefaultAsync(i => i.Id == req.InvoiceId && i.HospitalId == req.HospitalId && i.DeletedAt == null, ct)
+            ? await _context.Invoices.Include(i => i.Items).FirstOrDefaultAsync(i => i.Id == req.InvoiceId && i.HospitalId == req.HospitalId && i.DeletedAt == null, ct)
             : null;
         if (invoice == null && req.AppointmentId != null)
-            invoice = await _context.Invoices.FirstOrDefaultAsync(i => i.AppointmentId == req.AppointmentId && i.HospitalId == req.HospitalId && i.DeletedAt == null, ct);
+            invoice = await _context.Invoices.Include(i => i.Items).FirstOrDefaultAsync(i => i.AppointmentId == req.AppointmentId && i.HospitalId == req.HospitalId && i.DeletedAt == null, ct);
 
         var apptId = req.AppointmentId ?? invoice?.AppointmentId;
 
@@ -339,6 +350,9 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
             invoice.DiscountAmount = gross;
             invoice.TotalAmount = 0;
             invoice.IsFree = true; // distinguishes a free test from a 100% discount in reports
+            // Mark every line free too, so the per-service FREE badges stay
+            // consistent whether the user frees all-at-once or one-by-one.
+            foreach (var it in invoice.Items) it.IsFree = true;
 
             // Reverse any collected money so there is no income (Payment has no
             // tombstone column, so the rows are removed outright).
@@ -355,6 +369,13 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
 
         if (apptId != null)
         {
+            // Mark every service line on the visit free too (source-of-truth flag),
+            // so the whole-visit free is consistent with the per-service path.
+            var services = await _context.AppointmentServices
+                .Where(s => s.AppointmentId == apptId.Value && s.HospitalId == req.HospitalId && s.DeletedAt == null)
+                .ToListAsync(ct);
+            foreach (var s in services) { s.IsFree = true; s.UpdatedAt = DateTime.UtcNow; }
+
             var commissions = await _context.ReferralCommissions
                 .Where(c => c.AppointmentId == apptId && c.HospitalId == req.HospitalId && c.DeletedAt == null)
                 .ToListAsync(ct);
@@ -408,6 +429,106 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
                     foreach (var c in rows) { running += c.CommissionAmount; c.AccumulatedTotal = running; }
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// Per-service free test. Frees ONE service line on a multi-service visit and
+    /// leaves the rest payable — the opposite of the whole-invoice path above.
+    /// The line's gross is kept (recorded), but it's excluded from the payable
+    /// total (the centre absorbs it) and its referral cut is settled per the
+    /// chosen bearer. Payload: { bearer, appointmentServiceId }.
+    /// </summary>
+    private async Task ApplyMarkFreePerServiceAsync(ApprovalRequest req, Guid serviceId, string bearer, CancellationToken ct)
+    {
+        var invoice = req.InvoiceId != null
+            ? await _context.Invoices.Include(i => i.Items)
+                .FirstOrDefaultAsync(i => i.Id == req.InvoiceId && i.HospitalId == req.HospitalId && i.DeletedAt == null, ct)
+            : null;
+        if (invoice == null && req.AppointmentId != null)
+            invoice = await _context.Invoices.Include(i => i.Items)
+                .FirstOrDefaultAsync(i => i.AppointmentId == req.AppointmentId && i.HospitalId == req.HospitalId && i.DeletedAt == null, ct);
+        if (invoice == null || invoice.Status == "CANCELLED") return;
+
+        var apptId = req.AppointmentId ?? invoice.AppointmentId;
+
+        // 1) Mark the service line free — the AppointmentService (source of truth)
+        //    and its 1:1 InvoiceItem (the billing line).
+        var svc = await _context.AppointmentServices
+            .FirstOrDefaultAsync(s => s.Id == serviceId && s.HospitalId == req.HospitalId, ct);
+        if (svc != null) { svc.IsFree = true; svc.UpdatedAt = DateTime.UtcNow; }
+
+        var line = invoice.Items.FirstOrDefault(it => it.AppointmentServiceId == serviceId);
+        decimal lineGross;
+        if (line != null)
+        {
+            line.IsFree = true;
+            lineGross = line.Amount * line.Quantity;
+        }
+        else
+        {
+            // No matching invoice line (freeform / legacy) — fall back to the
+            // service amount so the referral deficit math still has a figure.
+            lineGross = svc?.Amount ?? 0m;
+        }
+
+        // 2) Recompute the invoice from its lines. The centre absorbs every freed
+        //    line (folded into CentreDiscount), so payable = gross − discounts.
+        //    Recomputing from scratch (not adding) keeps a re-run idempotent.
+        var gross = invoice.Items.Sum(it => it.Amount * it.Quantity);
+        if (gross <= 0) gross = invoice.GrossAmount; // legacy invoices with no item rows
+        var freeTotal = invoice.Items.Where(it => it.IsFree).Sum(it => it.Amount * it.Quantity);
+
+        invoice.GrossAmount = gross;
+        invoice.CentreDiscount = freeTotal;
+        var discount = invoice.CentreDiscount + invoice.ReferrerDiscount;
+        if (discount > gross) discount = gross;
+        invoice.DiscountAmount = discount;
+        invoice.TotalAmount = gross - discount;
+        if (invoice.TotalAmount < 0) invoice.TotalAmount = 0;
+
+        // Every line free → the whole bill is a free test (back-compat rollup so
+        // existing "free test" reports still recognise it).
+        invoice.IsFree = invoice.Items.Count > 0 && invoice.Items.All(it => it.IsFree);
+
+        // Re-derive status against the new payable. We do NOT reverse payments —
+        // money already taken for the OTHER (paid) lines stays collected.
+        if (invoice.PaidAmount >= invoice.TotalAmount) invoice.Status = "PAID";
+        else if (invoice.PaidAmount > 0) invoice.Status = "PARTIAL";
+        else invoice.Status = "PENDING";
+        invoice.UpdatedAt = DateTime.UtcNow;
+
+        // 3) Settle the referral cut for THIS line only, per the bearer rule
+        //    (CENTRE keeps the cut, BOTH/Self forfeit, REFERRER carries the
+        //    fee − commission deficit). Paid lines' commissions are untouched.
+        var comm = apptId == null ? null : await _context.ReferralCommissions
+            .FirstOrDefaultAsync(c => c.AppointmentServiceId == serviceId
+                && c.HospitalId == req.HospitalId && c.DeletedAt == null, ct);
+        if (comm != null && !string.Equals(comm.ReferrerName, "Self", StringComparison.OrdinalIgnoreCase))
+        {
+            var orig = comm.CommissionAmount;
+            if (bearer == "BOTH")
+            {
+                comm.CommissionAmount = 0;
+            }
+            else if (bearer == "REFERRER")
+            {
+                comm.CommissionAmount = Math.Round(orig - lineGross, 2); // deficit if fee > cut
+            }
+            // CENTRE → referrer keeps the full cut (centre absorbs the fee).
+
+            if (comm.CommissionAmount == 0) comm.Status = "Cancelled";
+            comm.Remarks = (comm.Remarks ?? "") + $" [Free service — {bearer.ToLowerInvariant()}-borne via approval {req.Id}]";
+            comm.UpdatedAt = DateTime.UtcNow;
+
+            // Rebuild the referrer's running accumulated total (the modified row is
+            // the tracked instance, so its new amount is reflected here).
+            var rows = await _context.ReferralCommissions
+                .Where(c => c.ReferrerId == comm.ReferrerId && c.HospitalId == req.HospitalId && c.DeletedAt == null)
+                .OrderBy(c => c.TransactionDate)
+                .ToListAsync(ct);
+            decimal running = 0;
+            foreach (var c in rows) { running += c.CommissionAmount; c.AccumulatedTotal = running; }
         }
     }
 
