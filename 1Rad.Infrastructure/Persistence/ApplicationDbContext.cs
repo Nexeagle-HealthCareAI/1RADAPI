@@ -41,6 +41,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<ServiceCharge> ServiceCharges => Set<ServiceCharge>();
     public DbSet<Invoice> Invoices => Set<Invoice>();
     public DbSet<Payment> Payments => Set<Payment>();
+    public DbSet<CreditTransaction> CreditTransactions => Set<CreditTransaction>();
     public DbSet<Expense> Expenses => Set<Expense>();
     public DbSet<DiagnosticReport> DiagnosticReports => Set<DiagnosticReport>();
     public DbSet<ReportTemplate> ReportTemplates => Set<ReportTemplate>();
@@ -420,6 +421,24 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.HasOne(e => e.Hospital)
                 .WithMany()
                 .HasForeignKey(e => e.HospitalId);
+        });
+
+        // CreditTransaction Configuration — patient credit-wallet ledger. PatientId
+        // / InvoiceId are kept as plain Guid columns (no FK navs) so this ledger is
+        // independent of cascade paths; hospital isolation comes from the global
+        // IHospitalContext query filter applied below.
+        modelBuilder.Entity<CreditTransaction>(entity =>
+        {
+            entity.ToTable("CreditTransactions", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.PatientName).HasMaxLength(255);
+            entity.Property(e => e.Type).IsRequired().HasMaxLength(20);
+            entity.Property(e => e.Amount).HasPrecision(18, 2);
+            entity.Property(e => e.InvoiceDisplayId).HasMaxLength(50);
+            entity.Property(e => e.PaymentMethod).HasMaxLength(50);
+            entity.Property(e => e.Remarks).HasMaxLength(500);
+            entity.HasIndex(e => new { e.HospitalId, e.PatientId });
+            entity.HasIndex(e => new { e.HospitalId, e.UpdatedAt });
         });
 
         // DiagnosticReport Configuration
@@ -1347,6 +1366,13 @@ UPDATE dbo.StudyAssets
             }
         }
         foreach (var entry in ChangeTracker.Entries<ReferralCommission>())
+        {
+            if (entry.State == EntityState.Added || entry.State == EntityState.Modified)
+            {
+                entry.Entity.UpdatedAt = nowUtc;
+            }
+        }
+        foreach (var entry in ChangeTracker.Entries<CreditTransaction>())
         {
             if (entry.State == EntityState.Added || entry.State == EntityState.Modified)
             {

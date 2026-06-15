@@ -98,6 +98,10 @@ public class PaymentChannelBreakdownDto
     public decimal CashAmount { get; set; }
     public decimal UpiAmount { get; set; }
     public decimal CardAmount { get; set; }
+    // Invoice settled from a patient's existing advance/credit. This is NOT fresh
+    // cash (it came in earlier when the advance was taken), so it is deliberately
+    // EXCLUDED from TotalCollected — surfaced only for transparency.
+    public decimal AdvanceAmount { get; set; }
     public decimal TotalCollected => CashAmount + UpiAmount + CardAmount;
 }
 
@@ -260,9 +264,13 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
 
             var collectionChannels = new PaymentChannelBreakdownDto
             {
+                // Only true cash channels count toward collected cash. ADVANCE-tagged
+                // payments (an invoice paid from a held advance) are EXCLUDED here —
+                // no new money moved — and surfaced separately as AdvanceAmount.
                 CashAmount = paymentData.Where(p => p.PaymentMethod != null && p.PaymentMethod.Equals("CASH", StringComparison.OrdinalIgnoreCase)).Sum(p => p.Amount),
                 UpiAmount = paymentData.Where(p => p.PaymentMethod != null && p.PaymentMethod.Equals("UPI", StringComparison.OrdinalIgnoreCase)).Sum(p => p.Amount),
-                CardAmount = paymentData.Where(p => p.PaymentMethod != null && p.PaymentMethod.Equals("CARD", StringComparison.OrdinalIgnoreCase)).Sum(p => p.Amount)
+                CardAmount = paymentData.Where(p => p.PaymentMethod != null && p.PaymentMethod.Equals("CARD", StringComparison.OrdinalIgnoreCase)).Sum(p => p.Amount),
+                AdvanceAmount = paymentData.Where(p => p.PaymentMethod != null && p.PaymentMethod.Equals("ADVANCE", StringComparison.OrdinalIgnoreCase)).Sum(p => p.Amount)
             };
             
             if (!invoiceData.Any() && !expenseData.Any() && !paymentData.Any()) return new FinancialMatrixDto();

@@ -22,6 +22,7 @@ public interface IApplicationDbContext
     DbSet<ServiceCharge> ServiceCharges { get; }
     DbSet<Invoice> Invoices { get; }
     DbSet<Payment> Payments { get; }
+    DbSet<CreditTransaction> CreditTransactions { get; }
     DbSet<Expense> Expenses { get; }
     DbSet<DiagnosticReport> DiagnosticReports { get; }
     DbSet<DiagnosticReportField> DiagnosticReportFields { get; }

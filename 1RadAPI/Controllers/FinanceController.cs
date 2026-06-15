@@ -16,6 +16,10 @@ using _1Rad.Application.Features.Finance.Queries.GetFinancialMatrix;
 using _1Rad.Application.Features.Finance.Queries.GetPendingBillables;
 using _1Rad.Application.Features.Finance.Commands.RecordExpense;
 using _1Rad.Application.Features.Finance.Commands.UpdateExpense;
+using _1Rad.Application.Features.Finance.Commands.RefundCredit;
+using _1Rad.Application.Features.Finance.Commands.ApplyCredit;
+using _1Rad.Application.Features.Finance.Queries.GetPatientCredit;
+using _1Rad.Application.Features.Finance.Queries.GetOutstandingCredits;
 
 using _1Rad.Application.Features.Finance.Queries.GetExpenses;
 
@@ -127,6 +131,39 @@ public class FinanceController : ControllerBase
     {
         var result = await _mediator.Send(command);
         return Ok(new { success = result });
+    }
+
+    // ── Patient credit wallet (advances / overpayments / refunds) ───────────
+    // The patient's current wallet balance + ledger.
+    [HttpGet("credit/{patientId}")]
+    public async Task<IActionResult> GetPatientCredit(Guid patientId)
+    {
+        var result = await _mediator.Send(new GetPatientCreditQuery(patientId));
+        return Ok(result);
+    }
+
+    // Everyone currently holding an advance (for the Advances & refunds list).
+    [HttpGet("credits/outstanding")]
+    public async Task<IActionResult> GetOutstandingCredits()
+    {
+        var result = await _mediator.Send(new GetOutstandingCreditsQuery());
+        return Ok(result);
+    }
+
+    // Carry a patient's advance forward onto a later invoice.
+    [HttpPost("credit/apply")]
+    public async Task<IActionResult> ApplyCredit([FromBody] ApplyCreditCommand command)
+    {
+        var result = await _mediator.Send(command);
+        return result.Success ? Ok(result) : BadRequest(result);
+    }
+
+    // Return a patient's advance as cash (direct — no approval).
+    [HttpPost("credit/refund")]
+    public async Task<IActionResult> RefundCredit([FromBody] RefundCreditCommand command)
+    {
+        var result = await _mediator.Send(command);
+        return result.Success ? Ok(result) : BadRequest(result);
     }
 
     [HttpGet("stats")]

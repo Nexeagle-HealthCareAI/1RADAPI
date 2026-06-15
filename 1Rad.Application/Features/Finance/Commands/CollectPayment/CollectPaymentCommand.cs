@@ -130,26 +130,46 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
                 }
             }
 
-            // Process Optional Payment
+            // Process Optional Payment. Overpayment is NO LONGER rejected — the
+            // part that fits the balance settles the invoice; any EXCESS is parked
+            // as a patient credit/advance (later refundable or carried forward).
+            // The accountant just enters the cash tendered; the split is automatic.
             if (request.Amount > 0)
             {
                 var remainingBalance = invoice.TotalAmount - invoice.PaidAmount;
-                if (request.Amount > remainingBalance + 0.01m)
+                var applied = Math.Min(request.Amount, Math.Max(0m, remainingBalance));
+                var excess = request.Amount - applied;
+
+                if (applied > 0)
                 {
-                    throw new InvalidOperationException($"Payment (₹{request.Amount}) exceeds balance (₹{remainingBalance}).");
+                    _context.Payments.Add(new Payment
+                    {
+                        InvoiceId = request.InvoiceId,
+                        Amount = applied,
+                        PaymentMethod = request.PaymentMethod,
+                        CreatedAt = DateTime.UtcNow,
+                        HospitalId = _context.UserContext.HospitalId
+                    });
+                    invoice.PaidAmount += applied;
                 }
 
-                var payment = new Payment
+                if (excess > 0.009m)
                 {
-                    InvoiceId = request.InvoiceId,
-                    Amount = request.Amount,
-                    PaymentMethod = request.PaymentMethod,
-                    CreatedAt = DateTime.UtcNow,
-                    HospitalId = _context.UserContext.HospitalId
-                };
-
-                _context.Payments.Add(payment);
-                invoice.PaidAmount += request.Amount;
+                    _context.CreditTransactions.Add(new CreditTransaction
+                    {
+                        HospitalId = _context.UserContext.HospitalId,
+                        PatientId = invoice.PatientId,
+                        PatientName = invoice.PatientName ?? string.Empty,
+                        Type = "ADVANCE",
+                        Amount = Math.Round(excess, 2),
+                        InvoiceId = invoice.Id,
+                        InvoiceDisplayId = invoice.InvoiceId,
+                        PaymentMethod = request.PaymentMethod,
+                        CreatedByUserId = _context.UserContext.UserId,
+                        Remarks = "Advance / overpayment held at collection",
+                        CreatedAt = DateTime.UtcNow,
+                    });
+                }
             }
 
             // Status Management
