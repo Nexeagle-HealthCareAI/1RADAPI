@@ -47,7 +47,7 @@ public class GetFinanceStatsQueryHandler : IRequestHandler<GetFinanceStatsQuery,
             var expenseData = await _context.Expenses
                 .AsNoTracking()
                 .Where(e => e.HospitalId == hospitalId)
-                .Select(e => new { e.Amount })
+                .Select(e => new { e.Amount, e.TaxAmount })
                 .ToListAsync(cancellationToken);
 
             // Cash-basis profit subtracts commissions actually PAID out to referrers.
@@ -62,7 +62,7 @@ public class GetFinanceStatsQueryHandler : IRequestHandler<GetFinanceStatsQuery,
             //   Revenue       = NET (TotalAmount = Gross - Discount), excluding CANCELLED.
             //   Collected     = PaidAmount.
             //   Realization % = Collected / NetBilled * 100 (amount-based, capped 100).
-            //   Net profit    = Collected - Expenses - CommissionsPaid (cash basis).
+            //   Net profit    = Collected - Expenses(incl. tax) - CommissionsPaid (cash basis).
             var activeInvoices  = invoiceData.Where(i => i.Status != "CANCELLED").ToList();
             var paidInvoices    = activeInvoices.Where(i => i.Status == "PAID").ToList();
             var pendingInvoices = activeInvoices.Where(i => i.Status != "PAID").ToList();
@@ -70,7 +70,7 @@ public class GetFinanceStatsQueryHandler : IRequestHandler<GetFinanceStatsQuery,
             var netBilled = activeInvoices.Sum(i => i.TotalAmount);
             var collected = activeInvoices.Sum(i => i.PaidAmount);
             var pendingRev = pendingInvoices.Sum(i => i.TotalAmount - i.PaidAmount);
-            var totalExp = expenseData.Sum(e => e.Amount);
+            var totalExp = expenseData.Sum(e => e.Amount + e.TaxAmount);
 
             return new FinanceStatsDto
             {

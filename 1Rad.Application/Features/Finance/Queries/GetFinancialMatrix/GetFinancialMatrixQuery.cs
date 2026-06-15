@@ -251,7 +251,7 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 .ToListAsync(cancellationToken);
             
             var expenseData = await expenseQuery
-                .Select(e => new { e.Amount, e.TransactionDate, e.Category, e.CostCenter, e.Description })
+                .Select(e => new { e.Amount, e.TaxAmount, e.TransactionDate, e.Category, e.CostCenter, e.Description })
                 .ToListAsync(cancellationToken);
 
             var commissionData = await commissionQuery
@@ -306,7 +306,7 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                     Label = g.Key.ToString("dd-MMM-yyyy"),
                     Invoiced = g.Sum(x => x.Invoiced),
                     Collected = g.Sum(x => x.Collected),
-                    Expenses = expenseData.Where(e => e.TransactionDate.Date == g.Key).Sum(e => e.Amount),
+                    Expenses = expenseData.Where(e => e.TransactionDate.Date == g.Key).Sum(e => e.Amount + e.TaxAmount),
                     Pending = g.Sum(x => x.Invoiced - x.Collected),
                     RealizationRate = g.Sum(x => x.Invoiced) > 0
                         ? Math.Min(100, (int)(g.Sum(x => x.Collected) / g.Sum(x => x.Invoiced) * 100))
@@ -322,7 +322,7 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                     Label = $"Week {g.Key}",
                     Invoiced = g.Sum(i => i.TotalAmount),
                     Collected = g.Sum(i => i.PaidAmount),
-                    Expenses = expenseData.Where(e => System.Globalization.ISOWeek.GetWeekOfYear(e.TransactionDate) == g.Key).Sum(e => e.Amount),
+                    Expenses = expenseData.Where(e => System.Globalization.ISOWeek.GetWeekOfYear(e.TransactionDate) == g.Key).Sum(e => e.Amount + e.TaxAmount),
                     Pending = g.Sum(i => i.TotalAmount - i.PaidAmount),
                     RealizationRate = g.Sum(i => i.TotalAmount) > 0
                         ? Math.Min(100, (int)(g.Sum(i => i.PaidAmount) / g.Sum(i => i.TotalAmount) * 100))
@@ -338,7 +338,7 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                     Label = new DateTime(g.Key.Year, g.Key.Month, 1).ToString("MMMM yyyy"),
                     Invoiced = g.Sum(i => i.TotalAmount),
                     Collected = g.Sum(i => i.PaidAmount),
-                    Expenses = expenseData.Where(e => e.TransactionDate.Year == g.Key.Year && e.TransactionDate.Month == g.Key.Month).Sum(e => e.Amount),
+                    Expenses = expenseData.Where(e => e.TransactionDate.Year == g.Key.Year && e.TransactionDate.Month == g.Key.Month).Sum(e => e.Amount + e.TaxAmount),
                     Pending = g.Sum(i => i.TotalAmount - i.PaidAmount),
                     RealizationRate = g.Sum(i => i.TotalAmount) > 0
                         ? Math.Min(100, (int)(g.Sum(i => i.PaidAmount) / g.Sum(i => i.TotalAmount) * 100))
@@ -354,7 +354,7 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                     Label = g.Key.ToString(),
                     Invoiced = g.Sum(i => i.TotalAmount),
                     Collected = g.Sum(i => i.PaidAmount),
-                    Expenses = expenseData.Where(e => e.TransactionDate.Year == g.Key).Sum(e => e.Amount),
+                    Expenses = expenseData.Where(e => e.TransactionDate.Year == g.Key).Sum(e => e.Amount + e.TaxAmount),
                     Pending = g.Sum(i => i.TotalAmount - i.PaidAmount),
                     RealizationRate = g.Sum(i => i.TotalAmount) > 0
                         ? Math.Min(100, (int)(g.Sum(i => i.PaidAmount) / g.Sum(i => i.TotalAmount) * 100))
@@ -440,24 +440,24 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 // 1. Direct allocation by Description/CostCenter keywords
                 if (desc.Contains("MRI", StringComparison.OrdinalIgnoreCase) || cc.Equals("MRI", StringComparison.OrdinalIgnoreCase))
                 {
-                    modalityExpenses["MRI"] = modalityExpenses.GetValueOrDefault("MRI") + exp.Amount;
+                    modalityExpenses["MRI"] = modalityExpenses.GetValueOrDefault("MRI") + (exp.Amount + exp.TaxAmount);
                 }
                 else if (desc.Contains("CT", StringComparison.OrdinalIgnoreCase) || cc.Equals("CT", StringComparison.OrdinalIgnoreCase))
                 {
-                    modalityExpenses["CT"] = modalityExpenses.GetValueOrDefault("CT") + exp.Amount;
+                    modalityExpenses["CT"] = modalityExpenses.GetValueOrDefault("CT") + (exp.Amount + exp.TaxAmount);
                 }
                 else if (desc.Contains("X-RAY", StringComparison.OrdinalIgnoreCase) || desc.Contains("XRAY", StringComparison.OrdinalIgnoreCase) || cc.Equals("X-RAY", StringComparison.OrdinalIgnoreCase) || cc.Equals("XRAY", StringComparison.OrdinalIgnoreCase))
                 {
-                    modalityExpenses["X-RAY"] = modalityExpenses.GetValueOrDefault("X-RAY") + exp.Amount;
+                    modalityExpenses["X-RAY"] = modalityExpenses.GetValueOrDefault("X-RAY") + (exp.Amount + exp.TaxAmount);
                 }
                 else if (desc.Contains("USG", StringComparison.OrdinalIgnoreCase) || desc.Contains("ULTRASOUND", StringComparison.OrdinalIgnoreCase) || cc.Equals("USG", StringComparison.OrdinalIgnoreCase))
                 {
-                    modalityExpenses["USG"] = modalityExpenses.GetValueOrDefault("USG") + exp.Amount;
+                    modalityExpenses["USG"] = modalityExpenses.GetValueOrDefault("USG") + (exp.Amount + exp.TaxAmount);
                 }
                 // 2. Department-level allocation (Radiology general overhead)
                 else if (cc.Equals("Radiology", StringComparison.OrdinalIgnoreCase) || cat.Equals("Maintenance", StringComparison.OrdinalIgnoreCase))
                 {
-                    generalRadiologyExpenses += exp.Amount;
+                    generalRadiologyExpenses += (exp.Amount + exp.TaxAmount);
                 }
             }
 
@@ -572,7 +572,7 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
             var totalNet = activeInvoices.Sum(i => i.TotalAmount);     // net revenue (post-discount)
             var totalPaid = activeInvoices.Sum(i => i.PaidAmount);
             var totalDiscount = activeInvoices.Sum(i => i.DiscountAmount);
-            var totalExpenses = expenseData.Sum(e => e.Amount);
+            var totalExpenses = expenseData.Sum(e => e.Amount + e.TaxAmount);
 
             var performance = new ClinicPerformanceDto
             {

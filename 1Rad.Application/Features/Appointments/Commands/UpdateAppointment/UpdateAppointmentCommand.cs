@@ -203,10 +203,9 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             {
                 var paid = liveInvoice.PaidAmount;
 
-                // Void the bill so the future visit is clean.
+                // Void the bill so the future visit is clean (items go with it).
                 liveInvoice.Status = "CANCELLED";
                 liveInvoice.DeletedAt = DateTime.UtcNow;
-                foreach (var it in liveInvoice.Items) it.DeletedAt = DateTime.UtcNow;
 
                 // Reverse the referral commissions — the service hasn't happened.
                 var comms = await _context.ReferralCommissions
