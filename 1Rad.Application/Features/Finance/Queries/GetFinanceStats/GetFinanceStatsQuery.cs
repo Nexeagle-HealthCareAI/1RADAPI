@@ -49,25 +49,37 @@ public class GetFinanceStatsQueryHandler : IRequestHandler<GetFinanceStatsQuery,
                 .Where(e => e.HospitalId == hospitalId)
                 .Select(e => new { e.Amount })
                 .ToListAsync(cancellationToken);
-            
+
+            // Cash-basis profit subtracts commissions actually PAID out to referrers.
+            var commissionsPaid = await _context.ReferralCommissions
+                .AsNoTracking()
+                .Where(c => c.HospitalId == hospitalId && c.Status == "PAID")
+                .SumAsync(c => c.CommissionAmount, cancellationToken);
+
             if (!invoiceData.Any() && !expenseData.Any()) return new FinanceStatsDto();
 
-            var paidInvoices = invoiceData.Where(i => i.Status == "PAID").ToList();
-            var pendingInvoices = invoiceData.Where(i => i.Status != "PAID" && i.Status != "CANCELLED").ToList();
+            // Canonical definitions (agreed 2026-06-14):
+            //   Revenue       = NET (TotalAmount = Gross - Discount), excluding CANCELLED.
+            //   Collected     = PaidAmount.
+            //   Realization % = Collected / NetBilled * 100 (amount-based, capped 100).
+            //   Net profit    = Collected - Expenses - CommissionsPaid (cash basis).
+            var activeInvoices  = invoiceData.Where(i => i.Status != "CANCELLED").ToList();
+            var paidInvoices    = activeInvoices.Where(i => i.Status == "PAID").ToList();
+            var pendingInvoices = activeInvoices.Where(i => i.Status != "PAID").ToList();
 
-            var totalRev = invoiceData.Sum(i => i.GrossAmount);
-            var totalPaid = invoiceData.Sum(i => i.PaidAmount);
+            var netBilled = activeInvoices.Sum(i => i.TotalAmount);
+            var collected = activeInvoices.Sum(i => i.PaidAmount);
             var pendingRev = pendingInvoices.Sum(i => i.TotalAmount - i.PaidAmount);
             var totalExp = expenseData.Sum(e => e.Amount);
-            
+
             return new FinanceStatsDto
             {
-                TotalRevenue = totalRev,
+                TotalRevenue = netBilled,
                 PendingRevenue = pendingRev,
                 TotalExpenses = totalExp,
-                NetProfit = totalPaid - totalExp,
+                NetProfit = collected - totalExp - commissionsPaid,
                 PendingCount = pendingInvoices.Count,
-                RealizationRate = invoiceData.Any() ? (int)((decimal)paidInvoices.Count / invoiceData.Count * 100) : 0,
+                RealizationRate = netBilled > 0 ? Math.Min(100, (int)(collected / netBilled * 100)) : 0,
                 AverageTicket = paidInvoices.Any() ? paidInvoices.Average(i => i.TotalAmount) : 0
             };
         }

@@ -60,7 +60,12 @@ public record UpdateAppointmentCommand(
     string? ReferrerSupportedDegree = null,
     string? ReferrerEmail = null,
     string? ReferrerSpecialty = null,
-    string? ReferrerDegree = null
+    string? ReferrerDegree = null,
+    // Reschedule-to-future refund choice. When a PAID visit is moved to a future
+    // date its bill is voided and any money collected is returned: "WALLET" parks
+    // it as a patient credit (carry-forward / refundable), "CASH" books an
+    // immediate cash refund. Null defaults to WALLET. Ignored when nothing's paid.
+    string? RefundMode = null
 ) : IRequest<bool>;
 
 
@@ -177,6 +182,69 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         {
             appointment.Service = primary.ServiceName;
             appointment.Modality = primary.Modality;
+        }
+
+        // ── Reschedule to a FUTURE date: the visit "un-happens" ───────────────
+        // A future appointment must carry NO bill (it bills fresh on the new
+        // arrival). So when the date moves into the future and a live invoice
+        // exists, void it + its lines, reverse the referral commissions, reset
+        // arrival, and return any money already collected to the patient's credit
+        // ledger — as a WALLET credit (carry-forward / refundable) or a CASH
+        // refund, per the operator's choice. Done before (and instead of) the
+        // normal reconciliation below.
+        var movedToFuture = dateChanged && request.DateTime.Date > DateTime.UtcNow.Date;
+        if (movedToFuture)
+        {
+            var liveInvoice = await _context.Invoices
+                .Include(i => i.Items)
+                .FirstOrDefaultAsync(i => i.AppointmentId == request.AppointmentId && i.DeletedAt == null, cancellationToken);
+
+            if (liveInvoice != null)
+            {
+                var paid = liveInvoice.PaidAmount;
+
+                // Void the bill so the future visit is clean.
+                liveInvoice.Status = "CANCELLED";
+                liveInvoice.DeletedAt = DateTime.UtcNow;
+                foreach (var it in liveInvoice.Items) it.DeletedAt = DateTime.UtcNow;
+
+                // Reverse the referral commissions — the service hasn't happened.
+                var comms = await _context.ReferralCommissions
+                    .Where(c => c.AppointmentId == request.AppointmentId && c.DeletedAt == null)
+                    .ToListAsync(cancellationToken);
+                foreach (var c in comms) { c.Status = "Cancelled"; c.DeletedAt = DateTime.UtcNow; }
+
+                // Return money already collected into the credit ledger.
+                if (paid > 0.009m)
+                {
+                    var cash = string.Equals(request.RefundMode, "CASH", StringComparison.OrdinalIgnoreCase);
+                    _context.CreditTransactions.Add(new CreditTransaction
+                    {
+                        HospitalId = appointment.HospitalId,
+                        PatientId = appointment.PatientId,
+                        PatientName = appointment.PatientName ?? string.Empty,
+                        Type = cash ? "REFUND" : "ADVANCE",
+                        Amount = Math.Round(paid, 2),
+                        InvoiceId = cash ? (Guid?)null : liveInvoice.Id,
+                        InvoiceDisplayId = liveInvoice.InvoiceId,
+                        PaymentMethod = cash ? "CASH" : null,
+                        CreatedByUserId = _context.UserContext.UserId,
+                        Remarks = cash
+                            ? "Cash refund — paid visit moved to a future date"
+                            : "Advance held — paid visit moved to a future date",
+                        CreatedAt = DateTime.UtcNow,
+                        UpdatedAt = DateTime.UtcNow,
+                    });
+                }
+            }
+
+            // No longer served — reset arrival so it bills fresh on the new date.
+            appointment.ArrivedAt = null;
+            appointment.ScanStartedAt = null;
+            appointment.Status = "BOOKED";
+
+            await _context.SaveChangesAsync(cancellationToken);
+            return true;
         }
 
         // ── Invoice reconciliation (arrival-gated) ────────────────────────
