@@ -146,7 +146,11 @@ public class AppointmentsController : ControllerBase
     {
         if (id != command.AppointmentId) return BadRequest("Appointment ID mismatch.");
         var result = await _mediator.Send(command);
-        return result ? Ok() : NotFound();
+        if (result.NotFound) return NotFound();
+        // Ok in every other case — the body carries RequiresApproval /
+        // RequiresRefundChoice (+ OverpayAmount) so the client can prompt the
+        // operator (wallet vs cash) or surface the approval route before re-submitting.
+        return Ok(result);
     }
 
     [HttpPut("{id}/operations-status")]

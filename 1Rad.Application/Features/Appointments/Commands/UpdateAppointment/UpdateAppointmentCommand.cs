@@ -66,10 +66,33 @@ public record UpdateAppointmentCommand(
     // it as a patient credit (carry-forward / refundable), "CASH" books an
     // immediate cash refund. Null defaults to WALLET. Ignored when nothing's paid.
     string? RefundMode = null
-) : IRequest<bool>;
+) : IRequest<UpdateAppointmentResult>;
+
+/// <summary>
+/// Outcome of an appointment edit. Most edits just apply (Success). Two cases
+/// pause the edit so the operator/admin can decide first, mirroring the rest of
+/// the post-payment policy:
+///   • RequiresApproval — a service being REMOVED still has a referral commission
+///     that was already PAID OUT to the referrer. Money has left the building to a
+///     third party, so (like ChangeReferrer) this is routed through admin approval
+///     instead of silently dropping the payout. Nothing is applied.
+///   • RequiresRefundChoice — removing/shrinking a service left the bill overpaid
+///     (PaidAmount > TotalAmount). The excess belongs to the patient; the operator
+///     picks wallet (carry-forward credit) vs cash refund. Returned WITHOUT applying
+///     so the UI can prompt, then re-submits with RefundMode set.
+/// </summary>
+public class UpdateAppointmentResult
+{
+    public bool Success { get; set; }
+    public bool NotFound { get; set; }
+    public bool RequiresApproval { get; set; }
+    public bool RequiresRefundChoice { get; set; }
+    public decimal OverpayAmount { get; set; }
+    public string Message { get; set; } = string.Empty;
+}
 
 
-public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointmentCommand, bool>
+public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointmentCommand, UpdateAppointmentResult>
 {
     private readonly IApplicationDbContext _context;
 
@@ -78,13 +101,13 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         _context = context;
     }
 
-    public async Task<bool> Handle(UpdateAppointmentCommand request, CancellationToken cancellationToken)
+    public async Task<UpdateAppointmentResult> Handle(UpdateAppointmentCommand request, CancellationToken cancellationToken)
     {
         var appointment = await _context.Appointments
             .Include(a => a.Patient)
             .FirstOrDefaultAsync(a => a.AppointmentId == request.AppointmentId, cancellationToken);
 
-        if (appointment == null) return false;
+        if (appointment == null) return new UpdateAppointmentResult { NotFound = true };
 
         bool dateChanged = appointment.DateTime.Date != request.DateTime.Date;
 
@@ -172,6 +195,44 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             .OrderBy(s => s.UpdatedAt)
             .ToListAsync(cancellationToken);
 
+        // ── Paid-commission gate (decision: route to admin approval) ──────────
+        // If this edit REMOVES a service whose referral commission has already been
+        // PAID OUT to the referrer, money has left the building to a third party.
+        // Dropping that service would silently delete the payout record and leave
+        // the referrer overpaid with no deficit. So — like ChangeReferrer once
+        // anything is paid — block the edit here and let the UI route it through
+        // the Approvals queue. Detected BEFORE any mutation so nothing is touched.
+        // Only the multi-service (v2) shape can remove a line; v1 keeps every row.
+        if (request.Services is { Count: > 0 })
+        {
+            var incomingIds = request.Services
+                .Where(l => l.Id.HasValue)
+                .Select(l => l.Id!.Value)
+                .ToHashSet();
+            var removedIds = existingServices
+                .Where(s => !incomingIds.Contains(s.Id))
+                .Select(s => s.Id)
+                .ToList();
+            if (removedIds.Count > 0)
+            {
+                var hasPaidCut = await _context.ReferralCommissions.AnyAsync(
+                    c => c.AppointmentServiceId != null
+                         && removedIds.Contains(c.AppointmentServiceId.Value)
+                         && c.Status == "PAID"
+                         && c.DeletedAt == null,
+                    cancellationToken);
+                if (hasPaidCut)
+                {
+                    return new UpdateAppointmentResult
+                    {
+                        RequiresApproval = true,
+                        Message = "A service you removed already has a referral commission paid out to the referrer. " +
+                                  "Removing it needs admin approval."
+                    };
+                }
+            }
+        }
+
         var liveServices = await ReconcileServicesAsync(appointment, request, existingServices, cancellationToken);
 
         // Re-stamp the parent Appointment's denormalised scalars from the
@@ -243,7 +304,7 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             appointment.Status = "BOOKED";
 
             await _context.SaveChangesAsync(cancellationToken);
-            return true;
+            return new UpdateAppointmentResult { Success = true };
         }
 
         // ── Invoice reconciliation (arrival-gated) ────────────────────────
@@ -262,13 +323,30 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
                 invoice.CreatedAt = request.DateTime;
             }
 
-            await ReconcileInvoiceItemsAsync(invoice, liveServices, request, cancellationToken);
+            // Reconcile the lines and learn how much "free" concession left with
+            // any REMOVED free service — so its discount doesn't linger (Gap 3).
+            var removedFreeTotal = await ReconcileInvoiceItemsAsync(invoice, liveServices, request, cancellationToken);
+
+            // A removed free line must stop discounting the bill: peel its value
+            // out of the centre concession + the headline discount. Without this
+            // the stale discount would understate the total and manufacture a
+            // phantom overpayment / under-charge the surviving payable services.
+            if (removedFreeTotal > 0.009m)
+            {
+                invoice.CentreDiscount = Math.Max(0, invoice.CentreDiscount - removedFreeTotal);
+                invoice.DiscountAmount = Math.Max(0, invoice.DiscountAmount - removedFreeTotal);
+            }
 
             // Total gets recomputed from the line items so the invoice stays
             // consistent with the per-service amounts.
             invoice.GrossAmount = invoice.Items.Sum(i => i.Amount * i.Quantity);
+            // Discount can't exceed the (possibly reduced) gross.
+            if (invoice.DiscountAmount > invoice.GrossAmount) invoice.DiscountAmount = invoice.GrossAmount;
             invoice.TotalAmount = invoice.GrossAmount - invoice.DiscountAmount;
             invoice.ReferralCutValue = liveServices.Sum(s => s.ReferralCutValue);
+            // Keep the free rollup honest: only a bill whose every surviving line
+            // is free is still a "free test".
+            invoice.IsFree = invoice.Items.Count > 0 && invoice.Items.All(i => i.IsFree);
 
             // Re-derive the payment status from the new total so an edit that
             // adds a service to a settled invoice doesn't keep showing "PAID"
@@ -277,6 +355,49 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             // canonical rule in CollectPaymentCommand.
             if (invoice.Status != "CANCELLED")
             {
+                // Gap 1 — removing/shrinking a paid service can leave the bill
+                // OVERPAID (PaidAmount > TotalAmount). That excess is the patient's
+                // money and must be returned, not silently absorbed. The operator
+                // chooses how (wallet credit vs cash refund); if they haven't yet,
+                // bail WITHOUT persisting so the UI can prompt and re-submit with
+                // RefundMode set. (Reuses the same credit ledger as the
+                // overpayment + move-to-future flows.)
+                var overpay = invoice.PaidAmount - invoice.TotalAmount;
+                if (overpay > 0.01m)
+                {
+                    if (string.IsNullOrWhiteSpace(request.RefundMode))
+                    {
+                        return new UpdateAppointmentResult
+                        {
+                            RequiresRefundChoice = true,
+                            OverpayAmount = Math.Round(overpay, 2),
+                            Message = "Removing these services leaves the bill overpaid — choose how to return the excess."
+                        };
+                    }
+
+                    var cash = string.Equals(request.RefundMode, "CASH", StringComparison.OrdinalIgnoreCase);
+                    _context.CreditTransactions.Add(new CreditTransaction
+                    {
+                        HospitalId = appointment.HospitalId,
+                        PatientId = appointment.PatientId,
+                        PatientName = appointment.PatientName ?? string.Empty,
+                        Type = cash ? "REFUND" : "ADVANCE",
+                        Amount = Math.Round(overpay, 2),
+                        InvoiceId = cash ? (Guid?)null : invoice.Id,
+                        InvoiceDisplayId = invoice.InvoiceId,
+                        PaymentMethod = cash ? "CASH" : null,
+                        CreatedByUserId = _context.UserContext.UserId,
+                        Remarks = cash
+                            ? "Cash refund — service removed after payment"
+                            : "Advance held — service removed after payment",
+                        CreatedAt = DateTime.UtcNow,
+                        UpdatedAt = DateTime.UtcNow,
+                    });
+                    // The excess now lives in the credit ledger — the invoice is
+                    // settled exactly to its new total.
+                    invoice.PaidAmount = invoice.TotalAmount;
+                }
+
                 if (invoice.PaidAmount >= invoice.TotalAmount - 0.01m)
                     invoice.Status = invoice.PaidAmount > 0 ? "PAID" : "PENDING";
                 else if (invoice.PaidAmount > 0)
@@ -382,7 +503,7 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
                 }
             }
         }
-        return true;
+        return new UpdateAppointmentResult { Success = true };
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -526,7 +647,9 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
     // and add/remove the rest. The Invoice headline totals are recomputed
     // by the caller from the resulting Items collection.
     // ─────────────────────────────────────────────────────────────────────
-    private async Task ReconcileInvoiceItemsAsync(
+    // Returns the gross value of any REMOVED line items that were marked FREE,
+    // so the caller can peel that concession back out of the invoice discount.
+    private async Task<decimal> ReconcileInvoiceItemsAsync(
         Invoice invoice,
         List<AppointmentService> liveServices,
         UpdateAppointmentCommand request,
@@ -579,12 +702,16 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         }
 
         // Drop anything we didn't keep. These are items for services the
-        // client removed from the visit during this edit.
+        // client removed from the visit during this edit. Tally the FREE ones so
+        // the caller can remove their concession from the discount (Gap 3).
         var stale = invoice.Items.Where(i => !keep.Contains(i.Id)).ToList();
+        decimal removedFreeTotal = 0;
         foreach (var s in stale)
         {
+            if (s.IsFree) removedFreeTotal += s.Amount * s.Quantity;
             invoice.Items.Remove(s);
         }
+        return removedFreeTotal;
     }
 
     // ─────────────────────────────────────────────────────────────────────

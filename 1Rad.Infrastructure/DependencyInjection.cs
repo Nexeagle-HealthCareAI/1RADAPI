@@ -34,6 +34,18 @@ public static class DependencyInjection
         // provider can never hang report delivery (the handler falls back to the
         // raw text and the radiologist formats manually).
         services.AddHttpClient<IReportAiService, GeminiService>(c => c.Timeout = TimeSpan.FromSeconds(20));
+        // Grammar engine — keeps PHI on-network. Two on-prem modes (no third party):
+        //   LanguageTool:Mode = "embedded" → in-process IKVM engine (no server)
+        //   otherwise                      → HTTP proxy to a self-hosted LanguageTool
+        // If neither is reachable the controller falls back per LanguageTool:GrammarLlmFallback.
+        if (string.Equals(configuration["LanguageTool:Mode"], "embedded", StringComparison.OrdinalIgnoreCase))
+        {
+            services.AddSingleton<ILanguageToolService, EmbeddedLanguageToolService>();
+        }
+        else
+        {
+            services.AddHttpClient<ILanguageToolService, LanguageToolService>(c => c.Timeout = TimeSpan.FromSeconds(15));
+        }
         // RadAI report formatter knowledge pack (templates + lexicon + examples),
         // loaded once from Resources/Radiology. Singleton — pure in-memory data.
         services.AddSingleton<IRadiologyPack, RadiologyPack>();

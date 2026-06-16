@@ -89,7 +89,7 @@ public class UpdateAppointmentCommandHandlerTests : BaseHandlerTest
         var result = await _handler.Handle(command, CancellationToken.None);
 
         // Assert
-        Assert.True(result);
+        Assert.True(result.Success);
 
         var updatedCommission = await Context.ReferralCommissions
             .FirstOrDefaultAsync(c => c.AppointmentId == appointment.AppointmentId);
@@ -147,7 +147,7 @@ public class UpdateAppointmentCommandHandlerTests : BaseHandlerTest
         var result = await _handler.Handle(command, CancellationToken.None);
 
         // Assert
-        Assert.True(result);
+        Assert.True(result.Success);
 
         // Check referrer auto-creation
         var newReferrer = await Context.Referrers

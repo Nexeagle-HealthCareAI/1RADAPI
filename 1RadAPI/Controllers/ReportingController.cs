@@ -18,10 +18,14 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
 using _1Rad.Application.Interfaces;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Configuration;
 
 namespace _1RadAPI.Controllers
 {
@@ -32,11 +36,143 @@ namespace _1RadAPI.Controllers
     {
         private readonly IMediator _mediator;
         private readonly IRadiologyCorpus _corpus;
+        private readonly ILanguageToolService _languageTool;
+        private readonly IAnthropicService _anthropic;
+        private readonly IConfiguration _config;
 
-        public ReportingController(IMediator mediator, IRadiologyCorpus corpus)
+        public ReportingController(IMediator mediator, IRadiologyCorpus corpus, ILanguageToolService languageTool, IAnthropicService anthropic, IConfiguration config)
         {
             _mediator = mediator;
             _corpus = corpus;
+            _languageTool = languageTool;
+            _anthropic = anthropic;
+            _config = config;
+        }
+
+        public record GrammarCheckRequest(string Text, string? Language);
+
+        /// <summary>
+        /// Grammar/style check. Report text (potentially PHI) stays on-network —
+        /// this replaces the editor's old direct call to public api.languagetool.org.
+        /// Tiered, no extra infrastructure required:
+        ///   1. a self-hosted LanguageTool server, if LanguageTool:BaseUrl is set
+        ///      (deterministic, best quality); otherwise
+        ///   2. the LLM proofreader (existing Anthropic service) — medical-aware and
+        ///      needs no Docker/Java/extra server.
+        /// Always returns the LanguageTool JSON shape ({ matches: [...] }) so the
+        /// editor's existing parser is unchanged.
+        /// </summary>
+        [HttpPost("grammar-check")]
+        public async Task<IActionResult> GrammarCheck([FromBody] GrammarCheckRequest body, CancellationToken cancellationToken)
+        {
+            var text = body?.Text ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(text))
+                return Content("{\"matches\":[]}", "application/json");
+
+            // Safety cap — a single report is far smaller; protects upstream.
+            if (text.Length > 60000) text = text.Substring(0, 60000);
+            var language = string.IsNullOrWhiteSpace(body?.Language) ? "en-US" : body!.Language!.Trim();
+
+            try
+            {
+                if (_languageTool.IsConfigured)
+                {
+                    var json = await _languageTool.CheckAsync(text, language, cancellationToken);
+                    return Content(json, "application/json");
+                }
+                // LLM fallback is opt-out: set LanguageTool:GrammarLlmFallback=false to
+                // guarantee grammar never uses the LLM (e.g. when relying solely on the
+                // embedded LanguageTool engine).
+                var allowLlm = _config.GetValue<bool?>("LanguageTool:GrammarLlmFallback") ?? true;
+                if (allowLlm && _anthropic.IsConfigured)
+                {
+                    var json = await BuildLlmGrammarMatchesAsync(text, cancellationToken);
+                    return Content(json, "application/json");
+                }
+                return StatusCode(503, new { success = false, code = "GRAMMAR_DISABLED", error = "Grammar service is not configured on this server." });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(502, new { success = false, code = "GRAMMAR_UPSTREAM", error = ex.Message });
+            }
+        }
+
+        // LLM proofreader fallback: ask Claude for genuine spelling/grammar errors
+        // (NOT radiology style), then map each flagged substring back to a character
+        // offset in the report text and emit LanguageTool-shaped matches. Offsets are
+        // computed against the SAME plain text the editor sent, so the editor's
+        // offset map lines up.
+        private async Task<string> BuildLlmGrammarMatchesAsync(string text, CancellationToken cancellationToken)
+        {
+            const string sys =
+                "You are a meticulous proofreader for radiology reports. Identify ONLY genuine spelling " +
+                "and grammar errors. DO NOT flag: medical/radiology terminology, drug names, eponyms, " +
+                "abbreviations (e.g. MRI, FLAIR, T2), measurements (e.g. 2.3 cm), or the telegraphic/" +
+                "elliptical style typical of radiology reports (sentence fragments like 'No acute " +
+                "abnormality.' are correct). Be conservative — when in doubt, do not flag.";
+            var user =
+                "Report text:\n\"\"\"\n" + text + "\n\"\"\"\n\n" +
+                "Return a SINGLE JSON object: {\"issues\":[{\"text\":\"<exact minimal substring copied " +
+                "verbatim from the report that contains the error>\",\"suggestion\":\"<the corrected " +
+                "substring>\",\"message\":\"<short reason>\",\"type\":\"spelling\"|\"grammar\"}]}. " +
+                "If there are no errors return {\"issues\":[]}.";
+
+            var raw = await _anthropic.GenerateJsonAsync(sys, user, null, cancellationToken);
+            var matches = new List<object>();
+            try
+            {
+                var json = StripJsonFences(raw);
+                using var docJson = JsonDocument.Parse(json);
+                var root = docJson.RootElement;
+                JsonElement issues;
+                if (root.ValueKind == JsonValueKind.Array) issues = root;
+                else if (!root.TryGetProperty("issues", out issues) || issues.ValueKind != JsonValueKind.Array)
+                    return "{\"matches\":[]}";
+
+                int searchFrom = 0;
+                foreach (var issue in issues.EnumerateArray())
+                {
+                    var bad = issue.TryGetProperty("text", out var tEl) ? tEl.GetString() : null;
+                    if (string.IsNullOrEmpty(bad)) continue;
+                    var suggestion = issue.TryGetProperty("suggestion", out var sEl) ? (sEl.GetString() ?? "") : "";
+                    var message = issue.TryGetProperty("message", out var mEl) ? (mEl.GetString() ?? "") : "";
+                    var type = issue.TryGetProperty("type", out var tyEl) ? (tyEl.GetString() ?? "grammar") : "grammar";
+
+                    int idx = text.IndexOf(bad, Math.Min(searchFrom, text.Length), StringComparison.OrdinalIgnoreCase);
+                    if (idx < 0) idx = text.IndexOf(bad, 0, StringComparison.OrdinalIgnoreCase);
+                    if (idx < 0) continue;             // model echoed text we can't locate — skip
+                    searchFrom = idx + bad.Length;
+
+                    matches.Add(new
+                    {
+                        offset = idx,
+                        length = bad.Length,
+                        message,
+                        replacements = string.IsNullOrEmpty(suggestion) ? new object[0] : new object[] { new { value = suggestion } },
+                        rule = new { issueType = type == "spelling" ? "misspelling" : "grammar", id = "AI_GRAMMAR" }
+                    });
+                }
+            }
+            catch
+            {
+                return "{\"matches\":[]}";          // unpar.seable model output → no issues, not an error
+            }
+            return JsonSerializer.Serialize(new { matches });
+        }
+
+        // Strip ```json … ``` fences the model sometimes wraps JSON in.
+        private static string StripJsonFences(string s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return "{}";
+            var t = s.Trim();
+            if (t.StartsWith("```"))
+            {
+                int nl = t.IndexOf('\n');
+                if (nl >= 0) t = t.Substring(nl + 1);
+                if (t.EndsWith("```")) t = t.Substring(0, t.Length - 3);
+                t = t.Trim();
+            }
+            return t;
         }
 
         // --- TEMPLATE QUERIES & COMMANDS ---

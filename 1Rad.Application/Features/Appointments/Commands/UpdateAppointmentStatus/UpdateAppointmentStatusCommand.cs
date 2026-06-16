@@ -14,6 +14,10 @@ public class UpdateAppointmentStatusResult
     // (a PAID appointment cancellation) — the UI offers to submit an approval
     // request rather than showing a dead-end lock.
     public bool RequiresApproval { get; set; }
+    // The appointment's daily token (assigned on arrival). Returned so the board
+    // can show the number the instant the patient is marked arrived, without
+    // waiting for the next delta sync to land. Null until the patient arrives.
+    public int? DailyTokenNumber { get; set; }
 }
 
 public record UpdateAppointmentStatusCommand(Guid AppointmentId, string Status) : IRequest<UpdateAppointmentStatusResult>;
@@ -196,7 +200,7 @@ public class UpdateAppointmentStatusCommandHandler : IRequestHandler<UpdateAppoi
         appointment.Status = newStatus;
         await _context.SaveChangesAsync(cancellationToken);
 
-        return new UpdateAppointmentStatusResult { Success = true };
+        return new UpdateAppointmentStatusResult { Success = true, DailyTokenNumber = appointment.DailyTokenNumber };
     }
 
     // Generate the visit's Invoice (when auto-billing is on) and the per-service
