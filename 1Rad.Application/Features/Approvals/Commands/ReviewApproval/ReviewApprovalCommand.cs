@@ -2,6 +2,7 @@ using System.Text.Json;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
 using _1Rad.Application.Interfaces;
+using _1Rad.Application.Features.Appointments.Commands.UpdateAppointment;
 using _1Rad.Domain.Entities;
 
 namespace _1Rad.Application.Features.Approvals.Commands.ReviewApproval;
@@ -22,8 +23,13 @@ public record ReviewApprovalCommand : IRequest<bool>
 public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalCommand, bool>
 {
     private readonly IApplicationDbContext _context;
+    private readonly IMediator _mediator;
 
-    public ReviewApprovalCommandHandler(IApplicationDbContext context) => _context = context;
+    public ReviewApprovalCommandHandler(IApplicationDbContext context, IMediator mediator)
+    {
+        _context = context;
+        _mediator = mediator;
+    }
 
     public async Task<bool> Handle(ReviewApprovalCommand request, CancellationToken ct)
     {
@@ -84,7 +90,49 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
             case "EDIT_COMMISSION":
                 await ApplyEditCommissionAsync(req, ct);
                 break;
+            case "EDIT_SERVICES":
+                await ApplyEditServicesAsync(req, ct);
+                break;
         }
+    }
+
+    /// <summary>
+    /// Re-applies an appointment edit that was blocked inline because it removes a
+    /// service whose referral commission was already PAID. The full original edit
+    /// payload (the UpdateAppointmentCommand body) is replayed with the internal
+    /// ApprovedServiceRemoval flag set — so the paid-commission gate is skipped and
+    /// the paid cut is clawed back (negative adjustment) instead of blocking. Any
+    /// resulting patient overpayment is returned via the payload's RefundMode
+    /// (wallet credit / cash), handled by the same command.
+    /// </summary>
+    private async Task ApplyEditServicesAsync(ApprovalRequest req, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(req.Payload) || req.AppointmentId == null) return;
+
+        UpdateAppointmentCommand? cmd;
+        try
+        {
+            cmd = JsonSerializer.Deserialize<UpdateAppointmentCommand>(
+                req.Payload,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        }
+        catch
+        {
+            return; // malformed payload — nothing safe to apply
+        }
+        if (cmd == null) return;
+
+        // Pin to this request's appointment and authorise the privileged path. A
+        // missing RefundMode defaults to WALLET so a resulting overpayment is held
+        // as patient credit (refundable later) rather than bailing for a prompt.
+        cmd = cmd with
+        {
+            AppointmentId = req.AppointmentId.Value,
+            ApprovedServiceRemoval = true,
+            RefundMode = string.IsNullOrWhiteSpace(cmd.RefundMode) ? "WALLET" : cmd.RefundMode,
+        };
+
+        await _mediator.Send(cmd, ct);
     }
 
     /// <summary>

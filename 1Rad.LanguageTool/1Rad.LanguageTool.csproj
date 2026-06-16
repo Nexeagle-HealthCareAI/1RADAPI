@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Embeds the LanguageTool grammar engine (Option A) into the .NET build.
+    IKVM.Maven.Sdk pulls languagetool-core + the English module + all transitive
+    dependencies from Maven Central and IKVM-compiles them to managed assemblies
+    (rules/dictionaries embedded automatically). The API references this project
+    so the engine runs in-process — no LLM, no server, no Docker.
+
+    Build standalone first to confirm the Maven+IKVM restore works:
+      dotnet build 1Rad.LanguageTool/1Rad.LanguageTool.csproj -c Release
+    Then add a <ProjectReference> from 1RadAPI to this project (see the runbook).
+    Pin the LanguageTool version; if a release won't IKVM-compile, step to a nearby one.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- IKVM + the reflection adapter need the full runtime; never trim / AOT. -->
+    <PublishTrimmed>false</PublishTrimmed>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="IKVM" Version="8.*" />
+    <PackageReference Include="IKVM.Maven.Sdk" Version="1.*" />
+    <!-- languagetool-core + en module + transitive deps, IKVM-compiled on build. -->
+    <MavenReference Include="org.languagetool:language-en" Version="6.4" />
+  </ItemGroup>
+
+</Project>

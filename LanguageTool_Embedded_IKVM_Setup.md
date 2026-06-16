@@ -19,42 +19,60 @@ So once the DLL exists and config is set, grammar runs embedded with zero furthe
 
 ## 2. Prerequisites
 
-- **IKVM** toolchain. Use the maintained IKVM (IKVM 8 / the `ikvm` .NET tool) that targets modern .NET and bundles OpenJDK:
+- **.NET 8 SDK** (you already have it).
+- Build-time access to **NuGet** and **Maven Central** (the build downloads LanguageTool from Maven).
+- **Do NOT** run `dotnet tool install --global IKVM` — the `IKVM` package is **not** a global .NET tool, so the install fails with a `tools` `DirectoryNotFoundException` and leaves a broken store entry. If you tried it, clean up first:
+  ```powershell
+  dotnet tool uninstall --global ikvm   # may error; if so:
+  Remove-Item -Recurse -Force "$env:USERPROFILE\.dotnet\tools\.store\ikvm"
   ```
-  dotnet tool install --global IKVM            # provides ikvmc (Java JAR → .NET DLL)
-  ```
-  (If you use the classic IKVM.NET distribution, you get `ikvmc.exe` directly. Either works; commands below use `ikvmc`.)
-- **LanguageTool standalone build** matching a version you pin. Download `LanguageTool-<version>.zip` from languagetool.org and unzip. You need `languagetool-core.jar`, the English module (`org/languagetool/language-module/...` → in standalone it's bundled), and all dependency JARs in the unzipped `libs/` folder.
-- A **JDK** is only needed if your IKVM build requires it; the maintained IKVM bundles its own OpenJDK.
-
-> **Pin the version.** IKVM compiles cleanly against some LanguageTool versions and not others. Start with a known-good line (LanguageTool 5.x has the most community IKVM mileage; the current 6.x works with the maintained IKVM but test it). Record the exact version you used.
+  The supported modern path is **MSBuild integration** (`IKVM` + `IKVM.Maven.Sdk` packages with a `MavenReference`). You do **not** run `ikvmc` by hand (in 8.5+ it requires fiddly `-runtime`/`-reference` args).
 
 ---
 
-## 3. Generate the .NET assembly
+## 3. Generate the assemblies via MSBuild (recommended)
 
-From the unzipped LanguageTool folder (where the JARs live):
+Create a tiny class library that pulls LanguageTool from Maven and IKVM-compiles it on build. `1Rad.LanguageTool/1Rad.LanguageTool.csproj`:
 
-```bash
-# Compile the whole JAR set into one library DLL. Including ALL jars ensures the
-# rule/dictionary RESOURCES inside the jars are embedded into the assembly.
-ikvmc -target:library -out:LanguageTool.dll languagetool-core.jar libs/*.jar
+```xml
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <!-- IKVM + the reflection adapter need the full runtime; never trim / AOT. -->
+    <PublishTrimmed>false</PublishTrimmed>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="IKVM" Version="8.*" />
+    <PackageReference Include="IKVM.Maven.Sdk" Version="1.*" />
+    <!-- Pulls languagetool-core + the English module + ALL transitive deps from
+         Maven and IKVM-compiles them (rules/dictionaries embedded automatically). -->
+    <MavenReference Include="org.languagetool:language-en" Version="6.4" />
+  </ItemGroup>
+</Project>
 ```
 
-Notes / gotchas:
-- **Resource embedding is the classic failure mode.** If rules fail to load at runtime ("no rules found"), the resources weren't embedded — make sure you pass the JARs themselves (not an extracted classpath) so `ikvmc` packs `org/languagetool/rules/...` and the dictionaries. With the maintained IKVM this is automatic when you pass the jars.
-- The command also produces/needs the **IKVM runtime assemblies** (e.g. `IKVM.Runtime.dll`, `IKVM.Java.dll` and native runtime bits). Keep them next to `LanguageTool.dll`.
-- You can trim to just English to cut size: include `languagetool-core.jar` + the english language jar + its dependency jars instead of `libs/*.jar`.
+Build it:
+```
+dotnet build 1Rad.LanguageTool/1Rad.LanguageTool.csproj -c Release
+```
 
-Output: `LanguageTool.dll` (+ IKVM runtime DLLs).
+Output (in the project's `bin/Release/net8.0/`): the IKVM-compiled managed assemblies — e.g. `org.languagetool.languagetool-core.dll`, `org.languagetool.language-en.dll`, transitive-dependency DLLs — plus the **IKVM runtime DLLs**. No jar/resource juggling: `MavenReference` handles resolution and IKVM embeds the resources.
+
+> **Pin the version** (6.4 shown). If a release fails to IKVM-compile, step to a nearby one and record what worked.
 
 ---
 
-## 4. Deploy the DLL with the API
+## 4. Wire it into the API — two ways
 
-Put `LanguageTool.dll` **and the IKVM runtime DLLs** somewhere the API process can load them — simplest is the API's output folder (`bin/`), so `Assembly.Load("LanguageTool")` resolves and its IKVM dependencies sit alongside it. Otherwise use an absolute path via `AssemblyPath` (then ensure the IKVM runtime DLLs are in that same folder so dependency probing finds them).
+**Option 1 — project-reference it (simplest).** Add to the API project (`1RadAPI.csproj`):
+```xml
+<ProjectReference Include="..\1Rad.LanguageTool\1Rad.LanguageTool.csproj" />
+```
+On build, all the IKVM + LanguageTool DLLs are copied into the API's output. The adapter finds the types by **scanning loaded assemblies**, so you can leave `AssemblyPath` empty.
 
-> **Build settings:** do **not** enable trimming or Native AOT for the API — IKVM + the reflection adapter need the full runtime and dynamic loading.
+**Option 2 — copy the DLLs.** Copy the whole build output (every produced DLL + the IKVM runtime DLLs, kept together) into the API's `bin/` or a folder. If not in `bin/`, set `AssemblyPath` to the full path of `org.languagetool.languagetool-core.dll` (keep the sibling DLLs next to it so dependencies resolve).
+
+> **Build settings:** do **not** enable trimming or Native AOT on the API — IKVM + the reflection adapter need the full runtime and dynamic loading.
 
 ---
 
@@ -82,7 +100,7 @@ In `appsettings.json` / App Service configuration / env vars:
 2. In the editor, run Grammar Check → underlines appear, sourced entirely in-process.
 3. Confirm no outbound network/LLM call happens (the request stays inside the API).
 
-If you see `Embedded LanguageTool failed to load`, the most likely causes are: DLL not on the probing path, missing IKVM runtime DLLs, or unembedded resources (re-run step 3 passing the jars).
+If you see `Embedded LanguageTool failed to load`, the most likely causes are: the IKVM/LanguageTool DLLs aren't in the API output (use the project-reference in step 4 Option 1), the IKVM runtime DLLs aren't beside the LanguageTool DLLs, or the build didn't run (rebuild `1Rad.LanguageTool`). The adapter scans loaded assemblies first, so a project reference is the most reliable wiring.
 
 ---
 

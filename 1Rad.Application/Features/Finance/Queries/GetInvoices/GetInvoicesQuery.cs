@@ -16,6 +16,9 @@ public record GetInvoicesQuery : IRequest<List<InvoiceDto>>
     // can apply DELETE semantics to its cache.
     public DateTime? UpdatedAfter { get; init; }
     public bool IncludeDeleted { get; init; }
+    // Restrict to a single visit's invoice — used by the appointment-edit flow to
+    // pull just that bill straight after a service add/remove.
+    public Guid? AppointmentId { get; init; }
 }
 
 public class InvoiceDto
@@ -128,6 +131,15 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
             if (request.EndDate.HasValue)
             {
                 query = query.Where(i => i.CreatedAt <= request.EndDate.Value);
+            }
+
+            // Single-visit refresh: the appointment-edit flow pulls just this
+            // visit's invoice straight after a service add/remove so the Revenue
+            // Hub reflects the new line items immediately (instead of waiting for
+            // the next watermark sync).
+            if (request.AppointmentId.HasValue)
+            {
+                query = query.Where(i => i.AppointmentId == request.AppointmentId.Value);
             }
 
             // Execute Projection: Using standard property initialization to ensure safe SQL translation in EF Core.

@@ -145,6 +145,10 @@ public class AppointmentsController : ControllerBase
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateAppointmentCommand command)
     {
         if (id != command.AppointmentId) return BadRequest("Appointment ID mismatch.");
+        // ApprovedServiceRemoval is an INTERNAL flag set only by the approvals
+        // review flow — never trust it off the wire, or a client could bypass the
+        // paid-commission gate. Force it false for any public PUT.
+        command = command with { ApprovedServiceRemoval = false };
         var result = await _mediator.Send(command);
         if (result.NotFound) return NotFound();
         // Ok in every other case — the body carries RequiresApproval /

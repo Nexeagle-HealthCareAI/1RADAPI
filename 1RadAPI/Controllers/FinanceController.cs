@@ -105,6 +105,7 @@ public class FinanceController : ControllerBase
         [FromQuery] DateTime? startDate,
         [FromQuery] DateTime? endDate,
         [FromQuery] DateTime? updatedAfter,
+        [FromQuery] Guid? appointmentId,
         [FromQuery] bool includeDeleted = false)
     {
         var result = await _mediator.Send(new GetInvoicesQuery
@@ -114,6 +115,7 @@ public class FinanceController : ControllerBase
             StartDate = startDate,
             EndDate = endDate,
             UpdatedAfter = updatedAfter,
+            AppointmentId = appointmentId,
             IncludeDeleted = includeDeleted,
         });
         return Ok(result);

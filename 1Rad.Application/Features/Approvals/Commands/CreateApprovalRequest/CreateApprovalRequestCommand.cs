@@ -12,7 +12,7 @@ public record CreateApprovalRequestCommand : IRequest<Guid>
 {
     // Keep in sync with the `allowed` list in the handler below AND the cases
     // in ReviewApprovalCommand — a type missing from `allowed` 500s on create.
-    public string Type { get; init; } = string.Empty;   // EDIT_PAYMENT | CANCEL_APPOINTMENT | CHANGE_REFERRER | MARK_FREE | UNPAY_COMMISSION | EDIT_COMMISSION
+    public string Type { get; init; } = string.Empty;   // EDIT_PAYMENT | CANCEL_APPOINTMENT | CHANGE_REFERRER | MARK_FREE | UNPAY_COMMISSION | EDIT_COMMISSION | EDIT_SERVICES
     public string Title { get; init; } = string.Empty;
     public Guid? InvoiceId { get; init; }
     public Guid? AppointmentId { get; init; }
@@ -31,7 +31,7 @@ public class CreateApprovalRequestCommandHandler : IRequestHandler<CreateApprova
         if (_context.UserContext.HospitalId == Guid.Empty)
             throw new UnauthorizedAccessException("Hospital context is required.");
 
-        var allowed = new[] { "EDIT_PAYMENT", "CANCEL_APPOINTMENT", "CHANGE_REFERRER", "MARK_FREE", "UNPAY_COMMISSION", "EDIT_COMMISSION" };
+        var allowed = new[] { "EDIT_PAYMENT", "CANCEL_APPOINTMENT", "CHANGE_REFERRER", "MARK_FREE", "UNPAY_COMMISSION", "EDIT_COMMISSION", "EDIT_SERVICES" };
         var type = (request.Type ?? string.Empty).Trim().ToUpperInvariant();
         if (!allowed.Contains(type))
             throw new InvalidOperationException($"Unknown approval type '{request.Type}'.");

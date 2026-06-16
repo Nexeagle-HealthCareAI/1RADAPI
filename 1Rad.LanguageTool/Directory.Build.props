@@ -1,0 +1,23 @@
+<Project>
+
+  <!--
+    IKVM stages hundreds of DLLs under obj\...\ikvm\stage while compiling the
+    LanguageTool Maven graph. When obj lives in a OneDrive-synced folder, OneDrive
+    (and Defender) grab those files the instant they're written, locking them
+    mid-build:  "The process cannot access the file '...\ikvm\stage\...dll.log'
+    because it is being used by another process" (MSB4018).
+
+    Fix: redirect THIS project's obj/bin to a non-synced local path so nothing
+    races the IKVM staging. Scoped to 1Rad.LanguageTool only. The API's
+    ProjectReference still resolves the output normally (MSBuild uses the real
+    output path, wherever it is).
+
+    NOTE: this is a build-machine workaround. The robust long-term fix is to keep
+    the whole repo out of OneDrive (e.g. C:\dev\1RadAPI).
+  -->
+  <PropertyGroup>
+    <BaseIntermediateOutputPath>$(LocalAppData)\1RadBuild\$(MSBuildProjectName)\obj\</BaseIntermediateOutputPath>
+    <BaseOutputPath>$(LocalAppData)\1RadBuild\$(MSBuildProjectName)\bin\</BaseOutputPath>
+  </PropertyGroup>
+
+</Project>

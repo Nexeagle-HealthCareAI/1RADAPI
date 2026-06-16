@@ -65,7 +65,13 @@ public record UpdateAppointmentCommand(
     // date its bill is voided and any money collected is returned: "WALLET" parks
     // it as a patient credit (carry-forward / refundable), "CASH" books an
     // immediate cash refund. Null defaults to WALLET. Ignored when nothing's paid.
-    string? RefundMode = null
+    string? RefundMode = null,
+    // INTERNAL — set ONLY by the approvals review flow (ReviewApproval) once an
+    // admin has approved removing a service whose referral commission was already
+    // PAID. The public PUT endpoint forces this to false, so a client can't use it
+    // to bypass the paid-commission gate. When true: skip that gate, and the paid
+    // cut is clawed back (a negative adjustment row) instead of blocking.
+    bool ApprovedServiceRemoval = false
 ) : IRequest<UpdateAppointmentResult>;
 
 /// <summary>
@@ -203,7 +209,9 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         // anything is paid — block the edit here and let the UI route it through
         // the Approvals queue. Detected BEFORE any mutation so nothing is touched.
         // Only the multi-service (v2) shape can remove a line; v1 keeps every row.
-        if (request.Services is { Count: > 0 })
+        // Skipped once an admin has approved the removal (ApprovedServiceRemoval) —
+        // the paid cut is then clawed back in ReconcileServicesAsync rather than blocked.
+        if (!request.ApprovedServiceRemoval && request.Services is { Count: > 0 })
         {
             var incomingIds = request.Services
                 .Where(l => l.Id.HasValue)
@@ -626,14 +634,45 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
                     "Cannot remove a service that already has a report or scan attached. " +
                     "Cancel or reassign its report/scan first, then remove the service.");
 
-            // Drop the referral commissions for the removed services (NoAction FK
-            // would otherwise block the delete). Their invoice items are deleted by
-            // the invoice reconciliation below, which also re-totals the bill.
+            // Settle the referral commissions for the removed services (NoAction FK
+            // would otherwise block the delete):
+            //   • UNPAID → delete with the service (nothing was disbursed).
+            //   • PAID   → the referrer already received this cut for a service we're
+            //     now removing. Preserve that PAID row for audit (detach it from the
+            //     service so the delete can proceed) and book a CLAWBACK — a negative
+            //     UNPAID adjustment — so the referrer's ledger nets the cut back out,
+            //     recovered from future referrals. The PAID branch is only reachable
+            //     once an admin has approved the removal (the inline gate blocks it).
             var staleCommissions = await _context.ReferralCommissions
                 .Where(c => c.AppointmentServiceId != null && staleIds.Contains(c.AppointmentServiceId.Value))
                 .ToListAsync(cancellationToken);
-            if (staleCommissions.Count > 0)
-                _context.ReferralCommissions.RemoveRange(staleCommissions);
+            var clawbackNow = DateTime.UtcNow;
+            foreach (var c in staleCommissions)
+            {
+                if (string.Equals(c.Status, "PAID", StringComparison.OrdinalIgnoreCase) && c.CommissionAmount != 0)
+                {
+                    _context.ReferralCommissions.Add(new ReferralCommission
+                    {
+                        ReferrerId           = c.ReferrerId,
+                        ReferrerName         = c.ReferrerName,
+                        Modality             = c.Modality,
+                        CommissionAmount     = -c.CommissionAmount, // clawback (deficit)
+                        Status               = "UNPAID",
+                        TransactionDate      = clawbackNow,
+                        HospitalId           = appointment.HospitalId,
+                        AppointmentId        = appointment.AppointmentId,
+                        AppointmentServiceId = null,
+                        Remarks              = "Clawback — service removed after commission was paid (admin-approved)",
+                    });
+                    c.AppointmentServiceId = null; // detach so the service row can delete; keep the PAID row for audit
+                    c.Remarks = (c.Remarks ?? string.Empty) + " [service removed after payment — clawback booked]";
+                    c.UpdatedAt = clawbackNow;
+                }
+                else
+                {
+                    _context.ReferralCommissions.Remove(c);
+                }
+            }
 
             _context.AppointmentServices.RemoveRange(staleServices);
         }
@@ -733,9 +772,20 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         // that was soft-deleted by an earlier edit can be revived (DeletedAt
         // cleared) when its service is live again, instead of staying invisible
         // in the Referral Hub (which filters DeletedAt == null).
-        var commissions = await _context.ReferralCommissions
+        var allCommissions = await _context.ReferralCommissions
             .Where(c => c.AppointmentId == request.AppointmentId)
             .ToListAsync(cancellationToken);
+
+        // SETTLED HISTORY the reconciler must never touch: a PAID payout (real
+        // money disbursed) and the clawback/detached rows booked when a paid
+        // service was removed under admin approval (see ReconcileServicesAsync).
+        // Leaving them in the reconcile set would let the orphan-adoption + the
+        // end-of-method tombstone loop zero or re-point them, erasing the deficit.
+        bool IsSettledHistory(ReferralCommission c) =>
+            string.Equals(c.Status, "PAID", StringComparison.OrdinalIgnoreCase)
+            || (c.Remarks != null && c.Remarks.Contains("Clawback", StringComparison.OrdinalIgnoreCase))
+            || (c.Remarks != null && c.Remarks.Contains("service removed after payment", StringComparison.OrdinalIgnoreCase));
+        var commissions = allCommissions.Where(c => !IsSettledHistory(c)).ToList();
 
         // No referrer (or a "Self" / walk-in referral) ⇒ wipe any existing
         // commissions to zero (preserves audit trail) and we're done — Self pays

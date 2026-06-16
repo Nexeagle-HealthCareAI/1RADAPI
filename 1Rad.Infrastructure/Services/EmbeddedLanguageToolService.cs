@@ -65,9 +65,10 @@ public class EmbeddedLanguageToolService : ILanguageToolService
             _initTried = true;
             try
             {
-                var asm = LoadAssembly();
-                var jltType = asm.GetType("org.languagetool.JLanguageTool", throwOnError: true)!;
-                var langType = asm.GetType(_languageClass, throwOnError: true)!;
+                var jltType = ResolveType("org.languagetool.JLanguageTool")
+                              ?? throw new TypeLoadException("org.languagetool.JLanguageTool not found — is the IKVM LanguageTool assembly referenced/deployed?");
+                var langType = ResolveType(_languageClass)
+                              ?? throw new TypeLoadException($"{_languageClass} not found in the IKVM LanguageTool assembly.");
                 var langObj = Activator.CreateInstance(langType);
                 _jlt = Activator.CreateInstance(jltType, new[] { langObj! });
 
@@ -89,14 +90,40 @@ public class EmbeddedLanguageToolService : ILanguageToolService
         }
     }
 
-    private Assembly LoadAssembly()
+    // Resolve a Java-mapped type across however the IKVM output is deployed:
+    //   • MSBuild IkvmReference/MavenReference → assemblies already loaded in the
+    //     app (e.g. org.languagetool.languagetool-core.dll) — found by scanning.
+    //   • explicit AssemblyPath → LoadFrom that DLL (deps resolve from its folder).
+    //   • known artifact/file names → Assembly.Load from the probing path.
+    private Type? ResolveType(string fullName)
     {
+        // 1. Already-loaded assemblies (the project-reference / MavenReference case).
+        var t = ScanLoaded(fullName);
+        if (t != null) return t;
+
+        // 2. Explicit DLL path hint (its dependencies resolve from the same folder).
         if (!string.IsNullOrWhiteSpace(_assemblyPath) && File.Exists(_assemblyPath))
-            return Assembly.LoadFrom(_assemblyPath);
-        var name = string.IsNullOrWhiteSpace(_assemblyPath)
-            ? "LanguageTool"
-            : Path.GetFileNameWithoutExtension(_assemblyPath);
-        return Assembly.Load(name);   // must resolve from the app's probing path
+        {
+            try { t = Assembly.LoadFrom(_assemblyPath).GetType(fullName); if (t != null) return t; } catch { /* try next */ }
+        }
+
+        // 3. Known assembly names for the LanguageTool core (file or simple name).
+        foreach (var name in new[] { "languagetool-core", "org.languagetool.languagetool-core", "LanguageTool" })
+        {
+            try { t = Assembly.Load(name).GetType(fullName); if (t != null) return t; } catch { /* try next */ }
+        }
+
+        // 4. Re-scan in case step 2/3 loaded the assembly that defines the type.
+        return ScanLoaded(fullName);
+    }
+
+    private static Type? ScanLoaded(string fullName)
+    {
+        foreach (var a in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            try { var t = a.GetType(fullName); if (t != null) return t; } catch { /* skip */ }
+        }
+        return null;
     }
 
     public Task<string> CheckAsync(string text, string language, CancellationToken cancellationToken = default)
