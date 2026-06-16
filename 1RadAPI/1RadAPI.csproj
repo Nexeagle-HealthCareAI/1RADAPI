@@ -34,10 +34,6 @@
     <ProjectReference Include="..\1Rad.Domain\1Rad.Domain.csproj" />
     <ProjectReference Include="..\1Rad.Application\1Rad.Application.csproj" />
     <ProjectReference Include="..\1Rad.Infrastructure\1Rad.Infrastructure.csproj" />
-    <!-- Embedded LanguageTool grammar engine (IKVM-compiled). Brings the
-         org.languagetool.* + IKVM runtime DLLs into the API output so
-         EmbeddedLanguageToolService can load them in-process. -->
-    <ProjectReference Include="..\1Rad.LanguageTool\1Rad.LanguageTool.csproj" />
   </ItemGroup>
 
 </Project>

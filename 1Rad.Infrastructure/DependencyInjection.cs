@@ -34,13 +34,19 @@ public static class DependencyInjection
         // provider can never hang report delivery (the handler falls back to the
         // raw text and the radiologist formats manually).
         services.AddHttpClient<IReportAiService, GeminiService>(c => c.Timeout = TimeSpan.FromSeconds(20));
-        // Grammar engine — keeps PHI on-network. Two on-prem modes (no third party):
-        //   LanguageTool:Mode = "embedded" → in-process IKVM engine (no server)
+        // Grammar engine — keeps PHI on-network. Modes (no third party, no LLM):
+        //   LanguageTool:Mode = "dotnet"   → pure-.NET in-process checker (no deps) [default]
+        //   LanguageTool:Mode = "embedded" → in-process IKVM LanguageTool engine
         //   otherwise                      → HTTP proxy to a self-hosted LanguageTool
-        // If neither is reachable the controller falls back per LanguageTool:GrammarLlmFallback.
-        if (string.Equals(configuration["LanguageTool:Mode"], "embedded", StringComparison.OrdinalIgnoreCase))
+        // If none is reachable the controller falls back per LanguageTool:GrammarLlmFallback.
+        var ltMode = configuration["LanguageTool:Mode"];
+        if (string.Equals(ltMode, "embedded", StringComparison.OrdinalIgnoreCase))
         {
             services.AddSingleton<ILanguageToolService, EmbeddedLanguageToolService>();
+        }
+        else if (string.Equals(ltMode, "dotnet", StringComparison.OrdinalIgnoreCase))
+        {
+            services.AddSingleton<ILanguageToolService, RadiologyGrammarService>();
         }
         else
         {

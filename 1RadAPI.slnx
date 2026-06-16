@@ -3,6 +3,5 @@
   <Project Path="1Rad.Domain/1Rad.Domain.csproj" />
   <Project Path="1Rad.Application/1Rad.Application.csproj" />
   <Project Path="1Rad.Infrastructure/1Rad.Infrastructure.csproj" />
-  <Project Path="1Rad.LanguageTool/1Rad.LanguageTool.csproj" />
   <Project Path="1Rad.UnitTests/1Rad.UnitTests.csproj" />
 </Solution>
