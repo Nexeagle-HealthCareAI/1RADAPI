@@ -42,7 +42,11 @@ public class UpdateAppointmentCommandHandlerTests : BaseHandlerTest
             Modality = "XRAY",
             DateTime = DateTime.UtcNow,
             Doctor = "Dr. Radiologist",
-            ReferredBy = "Self"
+            ReferredBy = "Self",
+            // Commissions are arrival-gated — the patient must have arrived for the
+            // edit to reconcile referral commissions at all.
+            ArrivedAt = DateTime.UtcNow,
+            Status = "CONFIRMED"
         };
         Context.Appointments.Add(appointment);
 
@@ -123,7 +127,11 @@ public class UpdateAppointmentCommandHandlerTests : BaseHandlerTest
             Modality = "XRAY",
             DateTime = DateTime.UtcNow,
             Doctor = "Dr. Radiologist",
-            ReferredBy = "Self"
+            ReferredBy = "Self",
+            // Commissions are arrival-gated — arrive the patient so the edit
+            // reconciles (creates) the referral commission.
+            ArrivedAt = DateTime.UtcNow,
+            Status = "CONFIRMED"
         };
         Context.Appointments.Add(appointment);
         await Context.SaveChangesAsync();
