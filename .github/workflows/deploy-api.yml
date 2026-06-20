@@ -168,14 +168,18 @@ jobs:
     environment: development
 
     steps:
+      - name: Prepare SSH key
+        run: |
+          echo "${{ secrets.DEV_SSH_KEY_B64 }}" | base64 -d > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
+
       - name: Deploy to Dev VM
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DEV_SSH_HOST }}
           username: ${{ secrets.DEV_SSH_USER }}
-          password: ${{ secrets.DEV_SSH_PASSWORD }}
+          key_path: /tmp/deploy_key
           port: 22
-          request_pty: true
           command_timeout: 10m
           script: |
             set -e
@@ -212,9 +216,8 @@ jobs:
         with:
           host: ${{ secrets.DEV_SSH_HOST }}
           username: ${{ secrets.DEV_SSH_USER }}
-          password: ${{ secrets.DEV_SSH_PASSWORD }}
+          key_path: /tmp/deploy_key
           port: 22
-          request_pty: true
           script: |
             echo "Waiting 10s for API to start..."
             sleep 10
