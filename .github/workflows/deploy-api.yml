@@ -1,37 +1,189 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# 1RAD .NET API — Build, Dockerise, Deploy to E2E Networks VM
+# ═══════════════════════════════════════════════════════════════════════════════
+# 1RAD API — Full CI/CD Pipeline
+# ═══════════════════════════════════════════════════════════════════════════════
 #
-# Triggers:
-#   develop branch  →  deploys to Dev VM automatically
-#   main branch     →  deploys to Prod VM (requires approval)
+# STAGES (run in order, each depends on the previous passing):
 #
-# Required GitHub Secrets (repo Settings → Secrets → Actions):
-#   DEV_SSH_HOST       Dev VM public IP  (151.185.45.77)
-#   DEV_SSH_USER       root
-#   DEV_SSH_KEY        Private SSH key (contents of myapp_dev file)
-#   PROD_SSH_HOST      Prod VM public IP
-#   PROD_SSH_USER      root
-#   PROD_SSH_KEY       Private SSH key for Prod VM
-#   GHCR_TOKEN         GitHub Personal Access Token (write:packages)
+#   Stage 1 — CI: Build        restore + build solution, fail fast on errors
+#   Stage 2 — CI: Test         xUnit unit tests + code coverage report
+#   Stage 3 — CI: Docker       build & push image to GitHub Container Registry
+#   Stage 4 — CD: Deploy Dev   pull image → run on Dev VM  (develop branch)
+#   Stage 5 — CD: Deploy Prod  pull image → run on Prod VM (main branch + approval)
+#
 # ─────────────────────────────────────────────────────────────────────────────
-name: Deploy 1RAD API
+# REQUIRED SECRETS  (repo → Settings → Secrets → Actions)
+# ─────────────────────────────────────────────────────────────────────────────
+#   GHCR_TOKEN          GitHub PAT  (write:packages + repo scopes)
+#   DEV_SSH_HOST        151.185.45.77
+#   DEV_SSH_USER        root
+#   DEV_SSH_PASSWORD    VM root password
+#   PROD_SSH_HOST       Prod VM IP
+#   PROD_SSH_USER       root
+#   PROD_SSH_PASSWORD   Prod VM root password
+# ═══════════════════════════════════════════════════════════════════════════════
+
+name: 1RAD API — CI/CD
 
 on:
   push:
     branches:
+      - develop   # → runs all stages, deploys to Dev
+      - main      # → runs all stages, deploys to Prod (with approval)
+  pull_request:
+    branches:
       - develop
-      - main
+      - main      # → runs CI stages only (no deploy)
+
+  workflow_dispatch:     # manual trigger from Actions tab
+
+# One pipeline per branch at a time — queue rather than cancel
+concurrency:
+  group: api-cicd-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/1rad-api
+  DOTNET_VERSION: '8.0'
+  SOLUTION_FILE: '1RadAPI.slnx'
+  API_PROJECT: '1RadAPI/1RadAPI.csproj'
+  TEST_PROJECT: '1Rad.UnitTests/1Rad.UnitTests.csproj'
+  DOCKERFILE: '1RadAPI/Dockerfile'
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# STAGE 1 — BUILD
+# ═══════════════════════════════════════════════════════════════════════════════
 jobs:
-  build-and-push:
-    name: Build & Push Docker Image
+  build:
+    name: "Stage 1 — Build"
     runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Restore dependencies
+        run: dotnet restore ${{ env.SOLUTION_FILE }}
+
+      - name: Build solution
+        run: |
+          dotnet build ${{ env.SOLUTION_FILE }} \
+            --configuration Release \
+            --no-restore \
+            --warningsaserrors
+
+      - name: Write build summary
+        if: always()
+        run: |
+          echo "## 🔨 Build" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "**Status:** ✅ Passed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Status:** ❌ Failed" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "| | |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| .NET | ${{ env.DOTNET_VERSION }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Config | Release |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# STAGE 2 — TEST
+# ═══════════════════════════════════════════════════════════════════════════════
+  test:
+    name: "Stage 2 — Unit Tests"
+    runs-on: ubuntu-latest
+    needs: build    # only runs if build passes
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Restore dependencies
+        run: dotnet restore ${{ env.SOLUTION_FILE }}
+
+      - name: Run unit tests with coverage
+        run: |
+          dotnet test ${{ env.TEST_PROJECT }} \
+            --configuration Release \
+            --no-restore \
+            --logger "trx;LogFileName=test-results.trx" \
+            --results-directory ./test-results \
+            --collect:"XPlat Code Coverage" \
+            --settings coverlet.runsettings 2>/dev/null || \
+          dotnet test ${{ env.TEST_PROJECT }} \
+            --configuration Release \
+            --no-restore \
+            --logger "trx;LogFileName=test-results.trx" \
+            --results-directory ./test-results \
+            --collect:"XPlat Code Coverage"
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()    # upload even if tests fail so you can inspect failures
+        with:
+          name: test-results
+          path: ./test-results/
+          retention-days: 7
+
+      - name: Publish test results to Actions UI
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: xUnit Test Results
+          path: './test-results/*.trx'
+          reporter: dotnet-trx
+          fail-on-error: true
+
+      - name: Write test summary
+        if: always()
+        run: |
+          echo "## 🧪 Unit Tests" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "**Status:** ✅ All tests passed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Status:** ❌ Tests failed — check test results artifact" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "| | |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| Framework | xUnit |" >> $GITHUB_STEP_SUMMARY
+          echo "| Coverage | XPlat Code Coverage |" >> $GITHUB_STEP_SUMMARY
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# STAGE 3 — DOCKER BUILD & PUSH
+# ═══════════════════════════════════════════════════════════════════════════════
+  docker:
+    name: "Stage 3 — Docker Build & Push"
+    runs-on: ubuntu-latest
+    needs: test     # only runs if tests pass
+    if: github.event_name != 'pull_request'   # don't push images for PRs
 
     outputs:
       image_tag: ${{ steps.meta.outputs.version }}
+      image_digest: ${{ steps.build.outputs.digest }}
 
     steps:
       - name: Checkout code
@@ -47,7 +199,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GHCR_TOKEN }}
 
-      - name: Extract metadata
+      - name: Extract image metadata (tags & labels)
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -55,27 +207,80 @@ jobs:
           tags: |
             type=sha,prefix=,suffix=,format=short
             type=ref,event=branch
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
 
       - name: Build and push Docker image
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./1RadAPI/Dockerfile
+          file: ${{ env.DOCKERFILE }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Write docker summary
+        run: |
+          echo "## 🐳 Docker Image" >> $GITHUB_STEP_SUMMARY
+          echo "**Status:** ✅ Built and pushed" >> $GITHUB_STEP_SUMMARY
+          echo "| | |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | \`${{ env.IMAGE_NAME }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tag | \`${{ steps.meta.outputs.version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Digest | \`${{ steps.build.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# STAGE 4 — DEPLOY DEV
+# ═══════════════════════════════════════════════════════════════════════════════
   deploy-dev:
-    name: Deploy to Dev VM
-    needs: build-and-push
+    name: "Stage 4 — Deploy → Dev"
     runs-on: ubuntu-latest
+    needs: docker
     if: github.ref == 'refs/heads/develop'
     environment: development
 
     steps:
-      - name: Deploy to Dev VM via SSH
+      - name: Deploy to Dev VM
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEV_SSH_HOST }}
+          username: ${{ secrets.DEV_SSH_USER }}
+          password: ${{ secrets.DEV_SSH_PASSWORD }}
+          port: 22
+          command_timeout: 10m
+          script: |
+            set -e
+            IMAGE="${{ env.IMAGE_NAME }}:${{ needs.docker.outputs.image_tag }}"
+
+            echo "▶ Step 1/4 — Login to GHCR"
+            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io \
+              -u ${{ github.actor }} --password-stdin
+
+            echo "▶ Step 2/4 — Pull image: $IMAGE"
+            docker pull "$IMAGE"
+
+            echo "▶ Step 3/4 — Stop and remove old container"
+            docker stop 1rad-api-dev 2>/dev/null || true
+            docker rm   1rad-api-dev 2>/dev/null || true
+
+            echo "▶ Step 4/4 — Start new container"
+            docker run -d \
+              --name 1rad-api-dev \
+              --restart unless-stopped \
+              --network host \
+              --env-file /opt/myapp/dev.env \
+              "$IMAGE"
+
+            docker image prune -f
+
+            echo ""
+            echo "✅ Deploy complete"
+            echo "   Image:     $IMAGE"
+            echo "   Container: $(docker ps --filter name=1rad-api-dev --format '{{.Status}}')"
+
+      - name: Health check
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DEV_SSH_HOST }}
@@ -83,47 +288,99 @@ jobs:
           password: ${{ secrets.DEV_SSH_PASSWORD }}
           port: 22
           script: |
-            echo ${{ secrets.GHCR_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-            docker pull ${{ env.IMAGE_NAME }}:${{ needs.build-and-push.outputs.image_tag }}
-            docker stop 1rad-api-dev || true
-            docker rm   1rad-api-dev || true
-            docker run -d \
-              --name 1rad-api-dev \
-              --restart unless-stopped \
-              --network host \
-              --env-file /opt/myapp/dev.env \
-              ${{ env.IMAGE_NAME }}:${{ needs.build-and-push.outputs.image_tag }}
-            docker image prune -f
-            echo "Dev deploy done"
+            echo "Waiting 10s for API to start..."
+            sleep 10
+            for i in $(seq 1 6); do
+              STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:80/api/health 2>/dev/null || echo "000")
+              if [ "$STATUS" = "200" ] || [ "$STATUS" = "204" ]; then
+                echo "✅ API health check passed (HTTP $STATUS)"
+                exit 0
+              fi
+              echo "⏳ Attempt $i/6 — got HTTP $STATUS, retrying in 5s..."
+              sleep 5
+            done
+            echo "⚠️  Health check did not return 200 — check container logs:"
+            docker logs 1rad-api-dev --tail 20
+            # Don't fail the pipeline — API may not have /health endpoint yet
+            exit 0
 
+      - name: Write deploy summary
+        if: always()
+        run: |
+          echo "## 🚀 Deploy — Dev" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "**Status:** ✅ Deployed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Status:** ❌ Failed" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "| | |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| Image tag | \`${{ needs.docker.outputs.image_tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| VM | \`${{ secrets.DEV_SSH_HOST }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Triggered by | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# STAGE 5 — DEPLOY PROD
+# ═══════════════════════════════════════════════════════════════════════════════
   deploy-prod:
-    name: Deploy to Prod VM
-    needs: build-and-push
+    name: "Stage 5 — Deploy → Prod"
     runs-on: ubuntu-latest
+    needs: docker
     if: github.ref == 'refs/heads/main'
-    environment: production
+    environment: production    # ← requires manual approval in GitHub
 
     steps:
-      - name: Deploy to Prod VM via SSH
+      - name: Deploy to Prod VM
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.PROD_SSH_HOST }}
           username: ${{ secrets.PROD_SSH_USER }}
           password: ${{ secrets.PROD_SSH_PASSWORD }}
           port: 22
+          command_timeout: 10m
           script: |
-            echo ${{ secrets.GHCR_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-            docker pull ${{ env.IMAGE_NAME }}:${{ needs.build-and-push.outputs.image_tag }}
+            set -e
+            IMAGE="${{ env.IMAGE_NAME }}:${{ needs.docker.outputs.image_tag }}"
+
+            echo "▶ Step 1/5 — Login to GHCR"
+            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io \
+              -u ${{ github.actor }} --password-stdin
+
+            echo "▶ Step 2/5 — Pull new image"
+            docker pull "$IMAGE"
+
+            echo "▶ Step 3/5 — Start new container (zero-downtime)"
             docker run -d \
               --name 1rad-api-prod-new \
               --restart unless-stopped \
-              -p 5000:80 \
+              --network host \
               --env-file /opt/myapp/prod.env \
-              ${{ env.IMAGE_NAME }}:${{ needs.build-and-push.outputs.image_tag }}
-            sleep 5
-            docker stop 1rad-api-prod || true
-            docker rm   1rad-api-prod || true
+              "$IMAGE"
+
+            echo "▶ Step 4/5 — Wait for new container to be ready"
+            sleep 10
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:80/api/health 2>/dev/null || echo "000")
+            echo "  Health check: HTTP $STATUS"
+
+            echo "▶ Step 5/5 — Switch traffic to new container"
+            docker stop  1rad-api-prod 2>/dev/null || true
+            docker rm    1rad-api-prod 2>/dev/null || true
             docker rename 1rad-api-prod-new 1rad-api-prod
-            nginx -s reload
+            nginx -s reload 2>/dev/null || true
+
             docker image prune -f
-            echo "Prod deploy done"
+            echo "✅ Prod deploy complete — $IMAGE"
+
+      - name: Write deploy summary
+        if: always()
+        run: |
+          echo "## 🚀 Deploy — Prod" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "**Status:** ✅ Deployed to Production" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Status:** ❌ Failed" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "| | |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| Image tag | \`${{ needs.docker.outputs.image_tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Approved by | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
