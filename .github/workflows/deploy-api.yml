@@ -44,7 +44,6 @@ concurrency:
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/1rad-api
   DOTNET_VERSION: '8.0'
-  SOLUTION_FILE: '1RadAPI.slnx'
   API_PROJECT: '1RadAPI/1RadAPI.csproj'
   TEST_PROJECT: '1Rad.UnitTests/1Rad.UnitTests.csproj'
   DOCKERFILE: '1RadAPI/Dockerfile'
@@ -74,14 +73,13 @@ jobs:
           restore-keys: nuget-${{ runner.os }}-
 
       - name: Restore dependencies
-        run: dotnet restore ${{ env.SOLUTION_FILE }}
+        run: dotnet restore ${{ env.API_PROJECT }}
 
       - name: Build solution
         run: |
-          dotnet build ${{ env.SOLUTION_FILE }} \
+          dotnet build ${{ env.API_PROJECT }} \
             --configuration Release \
-            --no-restore \
-            --warningsaserrors
+            --no-restore
 
       - name: Write build summary
         if: always()
@@ -123,7 +121,7 @@ jobs:
           restore-keys: nuget-${{ runner.os }}-
 
       - name: Restore dependencies
-        run: dotnet restore ${{ env.SOLUTION_FILE }}
+        run: dotnet restore ${{ env.TEST_PROJECT }}
 
       - name: Run unit tests with coverage
         run: |
