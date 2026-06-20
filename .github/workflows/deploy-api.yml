@@ -1,4 +1,20 @@
-﻿name: Deploy 1RAD API
+# ─────────────────────────────────────────────────────────────────────────────
+# 1RAD .NET API — Build, Dockerise, Deploy to E2E Networks VM
+#
+# Triggers:
+#   develop branch  →  deploys to Dev VM automatically
+#   main branch     →  deploys to Prod VM (requires approval)
+#
+# Required GitHub Secrets (repo Settings → Secrets → Actions):
+#   DEV_SSH_HOST       Dev VM public IP  (151.185.45.77)
+#   DEV_SSH_USER       root
+#   DEV_SSH_KEY        Private SSH key (contents of myapp_dev file)
+#   PROD_SSH_HOST      Prod VM public IP
+#   PROD_SSH_USER      root
+#   PROD_SSH_KEY       Private SSH key for Prod VM
+#   GHCR_TOKEN         GitHub Personal Access Token (write:packages)
+# ─────────────────────────────────────────────────────────────────────────────
+name: Deploy 1RAD API
 
 on:
   push:
@@ -11,32 +27,45 @@ env:
 
 jobs:
   build-and-push:
-    name: Build and Push Docker Image
+    name: Build & Push Docker Image
     runs-on: ubuntu-latest
+
     outputs:
       image_tag: ${{ steps.meta.outputs.version }}
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GHCR_TOKEN }}
-      - id: meta
+
+      - name: Extract metadata
+        id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
             type=sha,prefix=,suffix=,format=short
             type=ref,event=branch
-      - uses: docker/build-push-action@v5
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
         with:
           context: .
           file: ./1RadAPI/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   deploy-dev:
     name: Deploy to Dev VM
@@ -44,19 +73,28 @@ jobs:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/develop'
     environment: development
+
     steps:
-      - uses: appleboy/ssh-action@v1.0.3
+      - name: Deploy to Dev VM via SSH
+        uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DEV_SSH_HOST }}
           username: ${{ secrets.DEV_SSH_USER }}
-          key: ${{ secrets.DEV_SSH_KEY }}
+          password: ${{ secrets.DEV_SSH_PASSWORD }}
+          port: 22
           script: |
             echo ${{ secrets.GHCR_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
             docker pull ${{ env.IMAGE_NAME }}:${{ needs.build-and-push.outputs.image_tag }}
             docker stop 1rad-api-dev || true
-            docker rm 1rad-api-dev || true
-            docker run -d --name 1rad-api-dev --restart unless-stopped -p 5000:80 --env-file /opt/myapp/dev.env ${{ env.IMAGE_NAME }}:${{ needs.build-and-push.outputs.image_tag }}
+            docker rm   1rad-api-dev || true
+            docker run -d \
+              --name 1rad-api-dev \
+              --restart unless-stopped \
+              --network host \
+              --env-file /opt/myapp/dev.env \
+              ${{ env.IMAGE_NAME }}:${{ needs.build-and-push.outputs.image_tag }}
             docker image prune -f
+            echo "Dev deploy done"
 
   deploy-prod:
     name: Deploy to Prod VM
@@ -64,16 +102,28 @@ jobs:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
     environment: production
+
     steps:
-      - uses: appleboy/ssh-action@v1.0.3
+      - name: Deploy to Prod VM via SSH
+        uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.PROD_SSH_HOST }}
           username: ${{ secrets.PROD_SSH_USER }}
-          key: ${{ secrets.PROD_SSH_KEY }}
+          password: ${{ secrets.PROD_SSH_PASSWORD }}
+          port: 22
           script: |
             echo ${{ secrets.GHCR_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
             docker pull ${{ env.IMAGE_NAME }}:${{ needs.build-and-push.outputs.image_tag }}
+            docker run -d \
+              --name 1rad-api-prod-new \
+              --restart unless-stopped \
+              -p 5000:80 \
+              --env-file /opt/myapp/prod.env \
+              ${{ env.IMAGE_NAME }}:${{ needs.build-and-push.outputs.image_tag }}
+            sleep 5
             docker stop 1rad-api-prod || true
-            docker rm 1rad-api-prod || true
-            docker run -d --name 1rad-api-prod --restart unless-stopped -p 5000:80 --env-file /opt/myapp/prod.env ${{ env.IMAGE_NAME }}:${{ needs.build-and-push.outputs.image_tag }}
+            docker rm   1rad-api-prod || true
+            docker rename 1rad-api-prod-new 1rad-api-prod
+            nginx -s reload
             docker image prune -f
+            echo "Prod deploy done"
