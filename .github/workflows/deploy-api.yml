@@ -249,6 +249,7 @@ jobs:
           username: ${{ secrets.DEV_SSH_USER }}
           password: ${{ secrets.DEV_SSH_PASSWORD }}
           port: 22
+          request_pty: true
           command_timeout: 10m
           script: |
             set -e
@@ -287,6 +288,7 @@ jobs:
           username: ${{ secrets.DEV_SSH_USER }}
           password: ${{ secrets.DEV_SSH_PASSWORD }}
           port: 22
+          request_pty: true
           script: |
             echo "Waiting 10s for API to start..."
             sleep 10
