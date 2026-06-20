@@ -170,70 +170,66 @@ jobs:
     steps:
       - name: Prepare SSH key
         run: |
-          echo "${{ secrets.DEV_SSH_KEY_B64 }}" | base64 -d > ${{ github.workspace }}/deploy_key
-          chmod 600 ${{ github.workspace }}/deploy_key
+          echo "${{ secrets.DEV_SSH_KEY_B64 }}" | base64 -d > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
 
       - name: Deploy to Dev VM
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.DEV_SSH_HOST }}
-          username: ${{ secrets.DEV_SSH_USER }}
-          key_path: ${{ github.workspace }}/deploy_key
-          port: 22
-          command_timeout: 10m
-          script: |
-            set -e
-            IMAGE="${{ env.IMAGE_NAME }}:${{ needs.docker.outputs.image_tag }}"
+        run: |
+          ssh -i /tmp/deploy_key \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o ConnectTimeout=30 \
+            ${{ secrets.DEV_SSH_USER }}@${{ secrets.DEV_SSH_HOST }} << 'ENDSSH'
+          set -e
+          IMAGE="${{ env.IMAGE_NAME }}:${{ needs.docker.outputs.image_tag }}"
 
-            echo "▶ Step 1/4 — Login to GHCR"
-            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io \
-              -u ${{ github.actor }} --password-stdin
+          echo "▶ Step 1/4 — Login to GHCR"
+          echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io \
+            -u ${{ github.actor }} --password-stdin
 
-            echo "▶ Step 2/4 — Pull image: $IMAGE"
-            docker pull "$IMAGE"
+          echo "▶ Step 2/4 — Pull image: $IMAGE"
+          docker pull "$IMAGE"
 
-            echo "▶ Step 3/4 — Stop and remove old container"
-            docker stop 1rad-api-dev 2>/dev/null || true
-            docker rm   1rad-api-dev 2>/dev/null || true
+          echo "▶ Step 3/4 — Stop and remove old container"
+          docker stop 1rad-api-dev 2>/dev/null || true
+          docker rm   1rad-api-dev 2>/dev/null || true
 
-            echo "▶ Step 4/4 — Start new container"
-            docker run -d \
-              --name 1rad-api-dev \
-              --restart unless-stopped \
-              --network host \
-              --env-file /opt/myapp/dev.env \
-              "$IMAGE"
+          echo "▶ Step 4/4 — Start new container"
+          docker run -d \
+            --name 1rad-api-dev \
+            --restart unless-stopped \
+            --network host \
+            --env-file /opt/myapp/dev.env \
+            "$IMAGE"
 
-            docker image prune -f
+          docker image prune -f
 
-            echo ""
-            echo "✅ Deploy complete"
-            echo "   Image:     $IMAGE"
-            echo "   Container: $(docker ps --filter name=1rad-api-dev --format '{{.Status}}')"
+          echo ""
+          echo "✅ Deploy complete"
+          echo "   Image:     $IMAGE"
+          echo "   Container: $(docker ps --filter name=1rad-api-dev --format '{{.Status}}')"
+          ENDSSH
 
       - name: Health check
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.DEV_SSH_HOST }}
-          username: ${{ secrets.DEV_SSH_USER }}
-          key_path: ${{ github.workspace }}/deploy_key
-          port: 22
-          script: |
-            echo "Waiting 10s for API to start..."
-            sleep 10
-            for i in $(seq 1 6); do
-              STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:80/api/health 2>/dev/null || echo "000")
-              if [ "$STATUS" = "200" ] || [ "$STATUS" = "204" ]; then
-                echo "✅ API health check passed (HTTP $STATUS)"
-                exit 0
-              fi
-              echo "⏳ Attempt $i/6 — got HTTP $STATUS, retrying in 5s..."
-              sleep 5
-            done
-            echo "⚠️  Health check did not return 200 — check container logs:"
-            docker logs 1rad-api-dev --tail 20
-            # Don't fail the pipeline — API may not have /health endpoint yet
-            exit 0
+        run: |
+          sleep 10
+          ssh -i /tmp/deploy_key \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            ${{ secrets.DEV_SSH_USER }}@${{ secrets.DEV_SSH_HOST }} << 'ENDSSH'
+          for i in $(seq 1 6); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:80/api/health 2>/dev/null || echo "000")
+            if [ "$STATUS" = "200" ] || [ "$STATUS" = "204" ]; then
+              echo "✅ API health check passed (HTTP $STATUS)"
+              exit 0
+            fi
+            echo "⏳ Attempt $i/6 — got HTTP $STATUS, retrying in 5s..."
+            sleep 5
+          done
+          echo "⚠️  Health check did not return 200 — check container logs:"
+          docker logs 1rad-api-dev --tail 20
+          exit 0
+          ENDSSH
 
       - name: Write deploy summary
         if: always()
