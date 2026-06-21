@@ -158,22 +158,20 @@ jobs:
           echo "| Digest | \`${{ steps.build.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# STAGE 3 — DEPLOY DEV  (Watchtower-based — no SSH needed)
+# STAGE 3 — DEPLOY DEV  (renders /opt/myapp/dev.env from GitHub, then deploys)
 # ═══════════════════════════════════════════════════════════════════════════════
 #
-# Watchtower runs on the Dev VM and polls GHCR every 30 s.
-# After Stage 2 pushes the new image, Watchtower pulls it and restarts
-# 1rad-api-dev automatically. This stage just waits ~60 s then health-checks.
+# GitHub is the single source of truth for the Dev environment. This stage SSHes
+# to the Dev VM, writes /opt/myapp/dev.env from repo Secrets (sensitive) and
+# Variables (non-secret), pulls the new image, and recreates the container —
+# so env vars are never hand-edited on the VM again. (Replaces Watchtower.)
 #
-# One-time VM setup (already done):
-#   docker login ghcr.io -u Nexeagle-AI        # prompts for PAT
-#   docker run -d --name watchtower \
-#     --restart unless-stopped \
-#     -e WATCHTOWER_POLL_INTERVAL=30 \
-#     -v /var/run/docker.sock:/var/run/docker.sock \
-#     -v /root/.docker/config.json:/config.json \
-#     -e DOCKER_CONFIG=/config.json \
-#     containrrr/watchtower --include-stopped 1rad-api-dev
+# Required SECRETS  (Settings → Secrets and variables → Actions → Secrets):
+#   DEV_SSH_HOST, DEV_SSH_USER, DEV_SSH_PASSWORD, GHCR_TOKEN,
+#   DEV_DB_CONNECTION, JWT_SECRET, SMTP_APP_PASSWORD, WHATSAPP_TOKEN,
+#   ANTHROPIC_KEY, GEMINI_KEY, STORAGE_ACCESS_KEY, STORAGE_SECRET_KEY
+# Required VARIABLES  (… → Variables):
+#   STORAGE_ENDPOINT, STORAGE_BUCKET, STORAGE_REGION
 # ─────────────────────────────────────────────────────────────────────────────
   deploy-dev:
     name: "Stage 3 — Deploy → Dev"
@@ -183,23 +181,75 @@ jobs:
     environment: development
 
     steps:
-      - name: Wait for Watchtower to pull and restart
-        run: |
-          echo "Image pushed: ${{ env.IMAGE_NAME }}:${{ needs.docker.outputs.image_tag }}"
-          echo "Watchtower polls every 30 s — waiting 75 s for it to pick up the new image..."
-          sleep 75
-          echo "Done waiting."
+      - name: Render dev.env from GitHub + deploy on Dev VM
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          IMAGE: ${{ env.IMAGE_NAME }}:${{ needs.docker.outputs.image_tag }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          # Secrets (sensitive)
+          DB_CONN: ${{ secrets.DEV_DB_CONNECTION }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          SMTP_PW: ${{ secrets.SMTP_APP_PASSWORD }}
+          WHATSAPP_TOKEN: ${{ secrets.WHATSAPP_TOKEN }}
+          ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_KEY }}
+          GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
+          STORAGE_ACCESS_KEY: ${{ secrets.STORAGE_ACCESS_KEY }}
+          STORAGE_SECRET_KEY: ${{ secrets.STORAGE_SECRET_KEY }}
+          # Variables (non-secret config — editable in Settings → Variables)
+          STORAGE_ENDPOINT: ${{ vars.STORAGE_ENDPOINT }}
+          STORAGE_BUCKET: ${{ vars.STORAGE_BUCKET }}
+          STORAGE_REGION: ${{ vars.STORAGE_REGION }}
+        with:
+          host: ${{ secrets.DEV_SSH_HOST }}
+          username: ${{ secrets.DEV_SSH_USER }}
+          password: ${{ secrets.DEV_SSH_PASSWORD }}
+          port: 22
+          command_timeout: 10m
+          # Forward the values into the remote shell so we can write them with
+          # printf (literal — no $/quote/heredoc-indent pitfalls).
+          envs: IMAGE,GHCR_TOKEN,ACTOR,DB_CONN,JWT_SECRET,SMTP_PW,WHATSAPP_TOKEN,ANTHROPIC_KEY,GEMINI_KEY,STORAGE_ACCESS_KEY,STORAGE_SECRET_KEY,STORAGE_ENDPOINT,STORAGE_BUCKET,STORAGE_REGION
+          script: |
+            set -e
+            mkdir -p /opt/myapp
+            [ -f /opt/myapp/dev.env ] && cp /opt/myapp/dev.env /opt/myapp/dev.env.bak
 
-      - name: Health check
+            # GitHub is the single source of truth — rewrite dev.env every deploy.
+            {
+              printf 'ASPNETCORE_ENVIRONMENT=%s\n' 'Development'
+              printf 'ASPNETCORE_URLS=%s\n'         'http://+:5000'
+              printf 'ConnectionStrings__DefaultConnection=%s\n' "$DB_CONN"
+              printf 'Jwt__Secret=%s\n'             "$JWT_SECRET"
+              printf 'Smtp__AppPassword=%s\n'       "$SMTP_PW"
+              printf 'WhatsApp__AccessToken=%s\n'   "$WHATSAPP_TOKEN"
+              printf 'Anthropic__ApiKey=%s\n'       "$ANTHROPIC_KEY"
+              printf 'Gemini__ApiKey=%s\n'          "$GEMINI_KEY"
+              printf 'Storage__Provider=%s\n'       'Minio'
+              printf 'Storage__PublicBaseUrl=%s\n'  "$STORAGE_ENDPOINT"
+              printf 'Storage__Minio__Bucket=%s\n'  "$STORAGE_BUCKET"
+              printf 'Storage__Minio__AccessKey=%s\n' "$STORAGE_ACCESS_KEY"
+              printf 'Storage__Minio__SecretKey=%s\n' "$STORAGE_SECRET_KEY"
+              printf 'Storage__Minio__Region=%s\n'  "$STORAGE_REGION"
+            } > /opt/myapp/dev.env
+
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+            docker pull "$IMAGE"
+            docker rm -f 1rad-api-dev 2>/dev/null || true
+            docker run -d --name 1rad-api-dev --restart unless-stopped \
+              --network host --env-file /opt/myapp/dev.env "$IMAGE"
+            docker image prune -f || true
+
+      - name: Health check (via nginx :80)
         run: |
+          sleep 10
           for i in 1 2 3 4 5 6; do
             S=$(curl -s -o /dev/null -w '%{http_code}' \
-                http://${{ secrets.DEV_SSH_HOST }}:5000/api/health 2>/dev/null || echo 000)
+                http://${{ secrets.DEV_SSH_HOST }}/api/v1/health 2>/dev/null || echo 000)
             echo "Attempt $i — HTTP $S"
             [ "$S" = "200" ] && echo "✅ API is up" && exit 0
             sleep 10
           done
-          echo "⚠️  Health check did not return 200 — check Watchtower logs on VM"
+          echo "⚠️  Health did not return 200 — check: docker logs 1rad-api-dev"
           exit 0
 
       - name: Write deploy summary
