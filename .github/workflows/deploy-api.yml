@@ -179,7 +179,8 @@ jobs:
           GHCR_TOKEN: "${{ secrets.GHCR_TOKEN }}"
           ACTOR: "${{ github.actor }}"
         run: |
-          cat > /tmp/deploy.sh << 'EOF'
+          # Bake values into the script locally (unquoted EOF so vars expand here)
+          cat > /tmp/deploy.sh << EOF
           set -e
           echo "▶ Step 1/4 — Login to GHCR"
           echo "$GHCR_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
@@ -192,9 +193,15 @@ jobs:
           docker run -d --name 1rad-api-dev --restart unless-stopped --network host --env-file /opt/myapp/dev.env "$IMAGE"
           docker image prune -f
           echo "✅ Deploy complete — $IMAGE"
-          echo "Container: $(docker ps --filter name=1rad-api-dev --format '{{.Status}}')"
           EOF
-          ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 ${{ secrets.DEV_SSH_USER }}@${{ secrets.DEV_SSH_HOST }} IMAGE="$IMAGE" GHCR_TOKEN="$GHCR_TOKEN" ACTOR="$ACTOR" bash -s < /tmp/deploy.sh
+
+          # Copy script to VM then execute — same pattern as easyrad (works)
+          scp -i /tmp/deploy_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              /tmp/deploy.sh ${{ secrets.DEV_SSH_USER }}@${{ secrets.DEV_SSH_HOST }}:/tmp/1rad_deploy.sh
+
+          ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              ${{ secrets.DEV_SSH_USER }}@${{ secrets.DEV_SSH_HOST }} \
+              'bash /tmp/1rad_deploy.sh'
 
       - name: Health check
         run: |
