@@ -201,11 +201,11 @@ jobs:
           sleep 10
           ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${{ secrets.DEV_SSH_USER }}@${{ secrets.DEV_SSH_HOST }} '
             for i in $(seq 1 6); do
-              STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:80/api/health 2>/dev/null || echo "000")
+              STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5000/api/health 2>/dev/null || echo "000")
               if [ "$STATUS" = "200" ] || [ "$STATUS" = "204" ]; then echo "✅ Health check passed (HTTP $STATUS)"; exit 0; fi
               echo "⏳ Attempt $i/6 — HTTP $STATUS, retrying..."; sleep 5
             done
-            echo "⚠️ Health check failed — last 20 log lines:"
+            echo "⚠️ Health check did not return 200 — last 20 log lines:"
             docker logs 1rad-api-dev --tail 20
             exit 0
           '
