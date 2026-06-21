@@ -277,14 +277,21 @@ namespace _1RadAPI.Controllers
             var cdnBase = ResolveCdnBaseUrl(_configuration);
             if (string.IsNullOrWhiteSpace(cdnBase))
             {
-                // No CDN configured. On the self-hosted MinIO backend the buckets
-                // are PRIVATE, so the browser cannot fetch a raw blob URL — route
-                // reads through the signed proxy-asset endpoint (no Bearer needed;
-                // the HMAC signature is the capability, and the manifest is
-                // re-fetched per page load so signatures stay fresh). Azure
-                // (public-container) setups keep returning the raw URL unchanged.
+                // No CDN. On the object-storage (MinIO/S3/E2E) backend the buckets
+                // are PRIVATE, so a raw blob URL isn't browser-readable. Two modes:
+                //   • DirectReads=true (default): a short-lived presigned GET URL so
+                //     the browser downloads STRAIGHT from object storage (no API hop)
+                //     — best for remote stores like E2E; supports native byte-range.
+                //     Needs the bucket's CORS to allow the SPA origin.
+                //   • DirectReads=false: stream through the signed proxy-asset
+                //     endpoint (same-origin, private) — better for local MinIO.
+                // The manifest is re-fetched per page load, so URLs stay fresh.
                 if (string.Equals(_configuration["Storage:Provider"], "Minio", StringComparison.OrdinalIgnoreCase))
-                    return SignedProxyUrl(blobUrl) ?? blobUrl;
+                {
+                    return _configuration.GetValue("Storage:DirectReads", true)
+                        ? _blobService.GeneratePresignedReadUrl(blobUrl, SignedUrlTtl)
+                        : (SignedProxyUrl(blobUrl) ?? blobUrl);
+                }
                 return blobUrl;
             }
             // Tolerate scheme-less configuration ("myfd.azurefd.net"). Without

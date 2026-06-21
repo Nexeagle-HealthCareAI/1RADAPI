@@ -44,6 +44,15 @@ namespace _1Rad.Application.Interfaces
         Task<SasUploadTarget> GenerateSasUploadUrlAsync(string blobPath, string containerName, TimeSpan validFor, string? contentType = null);
 
         /// <summary>
+        /// Short-lived presigned GET URL for DIRECT download of the blob at the given
+        /// stored URL — lets the browser/bridge read straight from object storage,
+        /// bypassing the API. Important for remote stores (e.g. E2E) so DICOM bytes
+        /// don't round-trip through the VM. Implementations that can't presign return
+        /// the input URL unchanged.
+        /// </summary>
+        string GeneratePresignedReadUrl(string fileUrl, TimeSpan validFor);
+
+        /// <summary>
         /// Returns true if a blob exists at the given path. Used by `upload-complete` to verify
         /// the browser actually uploaded what it claimed.
         /// </summary>

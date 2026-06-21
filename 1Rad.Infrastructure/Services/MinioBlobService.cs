@@ -213,6 +213,30 @@ namespace _1Rad.Infrastructure.Services
             };
         }
 
+        // Presigned GET so the browser/bridge downloads straight from object storage
+        // (no API hop). Pure local signing — no network call. Returns the input URL
+        // unchanged if it can't be parsed into a (bucket, key).
+        public string GeneratePresignedReadUrl(string fileUrl, TimeSpan validFor)
+        {
+            if (string.IsNullOrEmpty(fileUrl)) return fileUrl;
+            try
+            {
+                var (bucket, key) = FromUrl(fileUrl);
+                if (string.IsNullOrEmpty(key)) return fileUrl;
+                return _s3.GetPreSignedURL(new GetPreSignedUrlRequest
+                {
+                    BucketName = bucket,
+                    Key = key,
+                    Verb = HttpVerb.GET,
+                    Expires = DateTime.UtcNow.Add(validFor),
+                });
+            }
+            catch
+            {
+                return fileUrl;
+            }
+        }
+
         // ── Existence / size / read URL ───────────────────────────────────────────
 
         public async Task<bool> BlobExistsAsync(string blobPath, string containerName)

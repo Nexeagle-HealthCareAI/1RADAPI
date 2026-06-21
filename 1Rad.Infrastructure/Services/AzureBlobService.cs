@@ -210,6 +210,40 @@ namespace _1Rad.Infrastructure.Services
             };
         }
 
+        // Short-lived read SAS so the browser can download the blob directly.
+        // Returns the URL unchanged if SAS can't be generated (e.g. MSI-only auth).
+        public string GeneratePresignedReadUrl(string fileUrl, TimeSpan validFor)
+        {
+            if (string.IsNullOrEmpty(fileUrl)) return fileUrl;
+            try
+            {
+                var uri = new Uri(fileUrl);
+                var segs = uri.AbsolutePath.TrimStart('/').Split('/', 2);
+                if (segs.Length < 2) return fileUrl;
+                var container = segs[0];
+                var blobName = Uri.UnescapeDataString(segs[1]);
+
+                var blobClient = _blobServiceClient.GetBlobContainerClient(container).GetBlobClient(blobName);
+                if (!blobClient.CanGenerateSasUri) return fileUrl;
+
+                var sas = new BlobSasBuilder
+                {
+                    BlobContainerName = container,
+                    BlobName = blobName,
+                    Resource = "b",
+                    StartsOn = DateTimeOffset.UtcNow.AddMinutes(-5),
+                    ExpiresOn = DateTimeOffset.UtcNow.Add(validFor),
+                    Protocol = SasProtocol.Https,
+                };
+                sas.SetPermissions(BlobSasPermissions.Read);
+                return blobClient.GenerateSasUri(sas).ToString();
+            }
+            catch
+            {
+                return fileUrl;
+            }
+        }
+
         public async Task<bool> BlobExistsAsync(string blobPath, string containerName)
         {
             if (string.IsNullOrWhiteSpace(blobPath) || string.IsNullOrWhiteSpace(containerName))
