@@ -275,7 +275,18 @@ namespace _1RadAPI.Controllers
         {
             if (string.IsNullOrEmpty(blobUrl)) return blobUrl;
             var cdnBase = ResolveCdnBaseUrl(_configuration);
-            if (string.IsNullOrWhiteSpace(cdnBase)) return blobUrl;
+            if (string.IsNullOrWhiteSpace(cdnBase))
+            {
+                // No CDN configured. On the self-hosted MinIO backend the buckets
+                // are PRIVATE, so the browser cannot fetch a raw blob URL — route
+                // reads through the signed proxy-asset endpoint (no Bearer needed;
+                // the HMAC signature is the capability, and the manifest is
+                // re-fetched per page load so signatures stay fresh). Azure
+                // (public-container) setups keep returning the raw URL unchanged.
+                if (string.Equals(_configuration["Storage:Provider"], "Minio", StringComparison.OrdinalIgnoreCase))
+                    return SignedProxyUrl(blobUrl) ?? blobUrl;
+                return blobUrl;
+            }
             // Tolerate scheme-less configuration ("myfd.azurefd.net"). Without
             // a scheme the emitted URL is RELATIVE — the browser resolves it
             // against the SPA origin and gets index.html instead of DICOM
