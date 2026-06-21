@@ -158,8 +158,23 @@ jobs:
           echo "| Digest | \`${{ steps.build.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# STAGE 3 — DEPLOY DEV
+# STAGE 3 — DEPLOY DEV  (Watchtower-based — no SSH needed)
 # ═══════════════════════════════════════════════════════════════════════════════
+#
+# Watchtower runs on the Dev VM and polls GHCR every 30 s.
+# After Stage 2 pushes the new image, Watchtower pulls it and restarts
+# 1rad-api-dev automatically. This stage just waits ~60 s then health-checks.
+#
+# One-time VM setup (already done):
+#   docker login ghcr.io -u Nexeagle-AI        # prompts for PAT
+#   docker run -d --name watchtower \
+#     --restart unless-stopped \
+#     -e WATCHTOWER_POLL_INTERVAL=30 \
+#     -v /var/run/docker.sock:/var/run/docker.sock \
+#     -v /root/.docker/config.json:/config.json \
+#     -e DOCKER_CONFIG=/config.json \
+#     containrrr/watchtower --include-stopped 1rad-api-dev
+# ─────────────────────────────────────────────────────────────────────────────
   deploy-dev:
     name: "Stage 3 — Deploy → Dev"
     runs-on: ubuntu-latest
@@ -168,62 +183,31 @@ jobs:
     environment: development
 
     steps:
-      - name: Prepare SSH key
-        env:
-          KEY_B64: ${{ secrets.DEV_SSH_KEY_B64 }}
+      - name: Wait for Watchtower to pull and restart
         run: |
-          echo "$KEY_B64" | base64 -d > /tmp/deploy_key
-          chmod 600 /tmp/deploy_key
-          echo "Key size: $(wc -c < /tmp/deploy_key) bytes"
-
-      - name: Debug secrets
-        env:
-          SSH_HOST: ${{ secrets.DEV_SSH_HOST }}
-          SSH_USER: ${{ secrets.DEV_SSH_USER }}
-        run: |
-          echo "SSH_USER is set: $( [ -n "$SSH_USER" ] && echo YES || echo NO)"
-          echo "SSH_HOST is set: $( [ -n "$SSH_HOST" ] && echo YES || echo NO)"
-          echo "SSH_HOST value:  ${SSH_HOST}"
-
-      - name: Deploy to Dev VM
-        env:
-          SSH_HOST: ${{ secrets.DEV_SSH_HOST }}
-          SSH_USER: ${{ secrets.DEV_SSH_USER }}
-          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
-          ACTOR: ${{ github.actor }}
-          IMAGE: "${{ env.IMAGE_NAME }}:${{ needs.docker.outputs.image_tag }}"
-        run: |
-          SSH=(ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 "${SSH_USER}@${SSH_HOST}")
-
-          echo "▶ 1/4 Login to GHCR"
-          "${SSH[@]}" "echo '${GHCR_TOKEN}' | docker login ghcr.io -u '${ACTOR}' --password-stdin"
-
-          echo "▶ 2/4 Pull image"
-          "${SSH[@]}" "docker pull '${IMAGE}'"
-
-          echo "▶ 3/4 Stop old container"
-          "${SSH[@]}" "docker stop 1rad-api-dev 2>/dev/null; docker rm 1rad-api-dev 2>/dev/null; true"
-
-          echo "▶ 4/4 Start new container"
-          "${SSH[@]}" "docker run -d --name 1rad-api-dev --restart unless-stopped --network host --env-file /opt/myapp/dev.env '${IMAGE}' && docker image prune -f"
-
-          echo "✅ Deploy complete"
+          echo "Image pushed: ${{ env.IMAGE_NAME }}:${{ needs.docker.outputs.image_tag }}"
+          echo "Watchtower polls every 30 s — waiting 75 s for it to pick up the new image..."
+          sleep 75
+          echo "Done waiting."
 
       - name: Health check
-        env:
-          SSH_HOST: ${{ secrets.DEV_SSH_HOST }}
-          SSH_USER: ${{ secrets.DEV_SSH_USER }}
         run: |
-          sleep 10
-          SSH=(ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "${SSH_USER}@${SSH_HOST}")
-          "${SSH[@]}" "for i in 1 2 3 4 5 6; do S=\$(curl -s -o /dev/null -w '%{http_code}' http://localhost:5000/api/health 2>/dev/null || echo 000); [ \"\$S\" = '200' ] && echo OK && exit 0; echo \"Attempt \$i — HTTP \$S\"; sleep 5; done; docker logs 1rad-api-dev --tail 20; exit 0"
+          for i in 1 2 3 4 5 6; do
+            S=$(curl -s -o /dev/null -w '%{http_code}' \
+                http://${{ secrets.DEV_SSH_HOST }}:5000/api/health 2>/dev/null || echo 000)
+            echo "Attempt $i — HTTP $S"
+            [ "$S" = "200" ] && echo "✅ API is up" && exit 0
+            sleep 10
+          done
+          echo "⚠️  Health check did not return 200 — check Watchtower logs on VM"
+          exit 0
 
       - name: Write deploy summary
         if: always()
         run: |
           echo "## 🚀 Deploy — Dev" >> $GITHUB_STEP_SUMMARY
           if [ "${{ job.status }}" = "success" ]; then
-            echo "**Status:** ✅ Deployed" >> $GITHUB_STEP_SUMMARY
+            echo "**Status:** ✅ Image pushed — Watchtower deployed it" >> $GITHUB_STEP_SUMMARY
           else
             echo "**Status:** ❌ Failed" >> $GITHUB_STEP_SUMMARY
           fi
@@ -244,46 +228,45 @@ jobs:
     environment: production    # ← requires manual approval in GitHub
 
     steps:
+      - name: Prepare SSH key
+        run: |
+          echo "${{ secrets.PROD_SSH_KEY_B64 }}" | base64 -d > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
+
+      - name: Login to GHCR on Prod VM
+        env:
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          ssh -i /tmp/deploy_key \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              -o ConnectTimeout=30 \
+              ${{ secrets.PROD_SSH_USER }}@${{ secrets.PROD_SSH_HOST }} \
+              "echo '$GHCR_TOKEN' | docker login ghcr.io -u '$ACTOR' --password-stdin"
+
       - name: Deploy to Prod VM
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.PROD_SSH_HOST }}
-          username: ${{ secrets.PROD_SSH_USER }}
-          password: ${{ secrets.PROD_SSH_PASSWORD }}
-          port: 22
-          command_timeout: 10m
-          script: |
-            set -e
-            IMAGE="${{ env.IMAGE_NAME }}:${{ needs.docker.outputs.image_tag }}"
+        env:
+          IMAGE: "${{ env.IMAGE_NAME }}:${{ needs.docker.outputs.image_tag }}"
+        run: |
+          ssh -i /tmp/deploy_key \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              -o ConnectTimeout=30 \
+              ${{ secrets.PROD_SSH_USER }}@${{ secrets.PROD_SSH_HOST }} \
+              "docker pull '$IMAGE'"
 
-            echo "▶ Step 1/5 — Login to GHCR"
-            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io \
-              -u ${{ github.actor }} --password-stdin
+          ssh -i /tmp/deploy_key \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              ${{ secrets.PROD_SSH_USER }}@${{ secrets.PROD_SSH_HOST }} \
+              "docker run -d --name 1rad-api-prod-new --restart unless-stopped --network host --env-file /opt/myapp/prod.env '$IMAGE'"
 
-            echo "▶ Step 2/5 — Pull new image"
-            docker pull "$IMAGE"
-
-            echo "▶ Step 3/5 — Start new container (zero-downtime)"
-            docker run -d \
-              --name 1rad-api-prod-new \
-              --restart unless-stopped \
-              --network host \
-              --env-file /opt/myapp/prod.env \
-              "$IMAGE"
-
-            echo "▶ Step 4/5 — Wait for new container to be ready"
-            sleep 10
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:80/api/health 2>/dev/null || echo "000")
-            echo "  Health check: HTTP $STATUS"
-
-            echo "▶ Step 5/5 — Switch traffic to new container"
-            docker stop  1rad-api-prod 2>/dev/null || true
-            docker rm    1rad-api-prod 2>/dev/null || true
-            docker rename 1rad-api-prod-new 1rad-api-prod
-            nginx -s reload 2>/dev/null || true
-
-            docker image prune -f
-            echo "✅ Prod deploy complete — $IMAGE"
+          ssh -i /tmp/deploy_key \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              ${{ secrets.PROD_SSH_USER }}@${{ secrets.PROD_SSH_HOST }} \
+              "sleep 10 && docker stop 1rad-api-prod 2>/dev/null; docker rm 1rad-api-prod 2>/dev/null; docker rename 1rad-api-prod-new 1rad-api-prod && docker image prune -f"
 
       - name: Write deploy summary
         if: always()
