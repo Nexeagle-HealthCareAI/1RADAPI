@@ -174,6 +174,16 @@ jobs:
         run: |
           echo "$KEY_B64" | base64 -d > /tmp/deploy_key
           chmod 600 /tmp/deploy_key
+          echo "Key size: $(wc -c < /tmp/deploy_key) bytes"
+
+      - name: Debug secrets
+        env:
+          SSH_HOST: ${{ secrets.DEV_SSH_HOST }}
+          SSH_USER: ${{ secrets.DEV_SSH_USER }}
+        run: |
+          echo "SSH_USER is set: $( [ -n "$SSH_USER" ] && echo YES || echo NO)"
+          echo "SSH_HOST is set: $( [ -n "$SSH_HOST" ] && echo YES || echo NO)"
+          echo "SSH_HOST value:  ${SSH_HOST}"
 
       - name: Deploy to Dev VM
         env:
