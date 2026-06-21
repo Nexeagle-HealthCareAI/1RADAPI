@@ -173,35 +173,27 @@ jobs:
           echo "${{ secrets.DEV_SSH_KEY_B64 }}" | base64 -d > /tmp/deploy_key
           chmod 600 /tmp/deploy_key
 
-      - name: Deploy to Dev VM
-        env:
-          IMAGE: "${{ env.IMAGE_NAME }}:${{ needs.docker.outputs.image_tag }}"
-          GHCR_TOKEN: "${{ secrets.GHCR_TOKEN }}"
-          ACTOR: "${{ github.actor }}"
+      - name: "Deploy 1/3 — Login to GHCR on VM"
         run: |
-          # Bake values into the script locally (unquoted EOF so vars expand here)
-          cat > /tmp/deploy.sh << EOF
-          set -e
-          echo "▶ Step 1/4 — Login to GHCR"
-          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
-          echo "▶ Step 2/4 — Pull image: $IMAGE"
-          docker pull "$IMAGE"
-          echo "▶ Step 3/4 — Stop and remove old container"
-          docker stop 1rad-api-dev 2>/dev/null || true
-          docker rm   1rad-api-dev 2>/dev/null || true
-          echo "▶ Step 4/4 — Start new container"
-          docker run -d --name 1rad-api-dev --restart unless-stopped --network host --env-file /opt/myapp/dev.env "$IMAGE"
-          docker image prune -f
-          echo "✅ Deploy complete — $IMAGE"
-          EOF
-
-          # Copy script to VM then execute — same pattern as easyrad (works)
-          scp -i /tmp/deploy_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              /tmp/deploy.sh ${{ secrets.DEV_SSH_USER }}@${{ secrets.DEV_SSH_HOST }}:/tmp/1rad_deploy.sh
-
           ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
               ${{ secrets.DEV_SSH_USER }}@${{ secrets.DEV_SSH_HOST }} \
-              'bash /tmp/1rad_deploy.sh'
+              'echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin'
+
+      - name: "Deploy 2/3 — Pull image"
+        run: |
+          ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              ${{ secrets.DEV_SSH_USER }}@${{ secrets.DEV_SSH_HOST }} \
+              'docker pull ${{ env.IMAGE_NAME }}:${{ needs.docker.outputs.image_tag }}'
+
+      - name: "Deploy 3/3 — Restart container"
+        run: |
+          ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              ${{ secrets.DEV_SSH_USER }}@${{ secrets.DEV_SSH_HOST }} \
+              'docker stop 1rad-api-dev 2>/dev/null || true;
+               docker rm   1rad-api-dev 2>/dev/null || true;
+               docker run -d --name 1rad-api-dev --restart unless-stopped --network host --env-file /opt/myapp/dev.env ${{ env.IMAGE_NAME }}:${{ needs.docker.outputs.image_tag }};
+               docker image prune -f;
+               echo "✅ Container started: $(docker ps --filter name=1rad-api-dev --format "{{.Status}}")"'
 
       - name: Health check
         run: |
