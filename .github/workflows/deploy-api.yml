@@ -175,39 +175,37 @@ jobs:
 
       - name: "Deploy 1/3 — Login to GHCR on VM"
         run: |
-          ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+          ssh -i /tmp/deploy_key \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              -o ConnectTimeout=30 \
               ${{ secrets.DEV_SSH_USER }}@${{ secrets.DEV_SSH_HOST }} \
               'echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin'
 
       - name: "Deploy 2/3 — Pull image"
         run: |
-          ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+          ssh -i /tmp/deploy_key \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
               ${{ secrets.DEV_SSH_USER }}@${{ secrets.DEV_SSH_HOST }} \
               'docker pull ${{ env.IMAGE_NAME }}:${{ needs.docker.outputs.image_tag }}'
 
       - name: "Deploy 3/3 — Restart container"
         run: |
-          ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+          ssh -i /tmp/deploy_key \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
               ${{ secrets.DEV_SSH_USER }}@${{ secrets.DEV_SSH_HOST }} \
-              'docker stop 1rad-api-dev 2>/dev/null || true;
-               docker rm   1rad-api-dev 2>/dev/null || true;
-               docker run -d --name 1rad-api-dev --restart unless-stopped --network host --env-file /opt/myapp/dev.env ${{ env.IMAGE_NAME }}:${{ needs.docker.outputs.image_tag }};
-               docker image prune -f;
-               echo "✅ Container started: $(docker ps --filter name=1rad-api-dev --format "{{.Status}}")"'
+              'docker stop 1rad-api-dev 2>/dev/null || true && docker rm 1rad-api-dev 2>/dev/null || true && docker run -d --name 1rad-api-dev --restart unless-stopped --network host --env-file /opt/myapp/dev.env ${{ env.IMAGE_NAME }}:${{ needs.docker.outputs.image_tag }} && docker image prune -f'
 
       - name: Health check
         run: |
           sleep 10
-          ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${{ secrets.DEV_SSH_USER }}@${{ secrets.DEV_SSH_HOST }} '
-            for i in $(seq 1 6); do
-              STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5000/api/health 2>/dev/null || echo "000")
-              if [ "$STATUS" = "200" ] || [ "$STATUS" = "204" ]; then echo "✅ Health check passed (HTTP $STATUS)"; exit 0; fi
-              echo "⏳ Attempt $i/6 — HTTP $STATUS, retrying..."; sleep 5
-            done
-            echo "⚠️ Health check did not return 200 — last 20 log lines:"
-            docker logs 1rad-api-dev --tail 20
-            exit 0
-          '
+          ssh -i /tmp/deploy_key \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              ${{ secrets.DEV_SSH_USER }}@${{ secrets.DEV_SSH_HOST }} \
+              'for i in 1 2 3 4 5 6; do STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5000/api/health 2>/dev/null || echo 000); [ "$STATUS" = "200" ] && echo "✅ Health OK" && exit 0; echo "⏳ Attempt $i — HTTP $STATUS"; sleep 5; done; docker logs 1rad-api-dev --tail 20; exit 0'
 
       - name: Write deploy summary
         if: always()
