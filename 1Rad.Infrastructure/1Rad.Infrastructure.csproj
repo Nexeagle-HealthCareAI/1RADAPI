@@ -6,6 +6,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- S3-compatible client for the self-hosted MinIO storage backend (VM).
+         Works against MinIO with ForcePathStyle. Azure.Storage.Blobs is retained
+         so the legacy Azure backend stays selectable via Storage:Provider. -->
+    <PackageReference Include="AWSSDK.S3" Version="3.7.*" />
     <PackageReference Include="Azure.Storage.Blobs" Version="12.19.*" />
     <PackageReference Include="BCrypt.Net-Next" Version="4.0.3" />
     <PackageReference Include="ClosedXML" Version="0.105.0" />

@@ -2228,12 +2228,17 @@ namespace _1RadAPI.Controllers
             {
                 if (string.IsNullOrEmpty(url)) return BadRequest("URL is required");
 
-                // Security check: only proxy our own storage. Accept any of our
-                // accounts (dev "1radstorage", prod "1radstorageprod", …) — the
-                // old check hardcoded "1radstorage.blob.core.windows.net", which
-                // does NOT match "1radstorageprod.blob…", so the proxy rejected
-                // every production asset as "Unauthorized asset origin".
-                if (!url.Contains("1radstorage") || !url.Contains(".blob.core.windows.net"))
+                // Security check: only proxy our own storage. Accept the configured
+                // storage host (Storage:PublicBaseUrl — e.g. the self-hosted MinIO
+                // endpoint) and, for back-compat, any of our legacy Azure accounts
+                // ("1radstorage", "1radstorageprod", …).
+                var storageBase = _configuration["Storage:PublicBaseUrl"]
+                                  ?? _configuration["Storage:Minio:PublicBaseUrl"];
+                var isOwnStorage =
+                    (!string.IsNullOrWhiteSpace(storageBase) &&
+                     url.StartsWith(storageBase!.TrimEnd('/'), StringComparison.OrdinalIgnoreCase))
+                    || (url.Contains("1radstorage") && url.Contains(".blob.core.windows.net"));
+                if (!isOwnStorage)
                     return BadRequest("Unauthorized asset origin");
 
                 // Authorization. This endpoint is [AllowAnonymous] because the

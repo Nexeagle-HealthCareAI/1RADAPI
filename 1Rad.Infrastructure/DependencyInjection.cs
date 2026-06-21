@@ -80,7 +80,15 @@ public static class DependencyInjection
         services.AddScoped<ISessionAlertService, SessionAlertService>();
         services.AddScoped<IPasswordHasher, PasswordHasher>();
         services.AddScoped<IOtpService, OtpService>();
-        services.AddScoped<IBlobService, AzureBlobService>();
+        // Storage backend is pluggable: "Minio" (self-hosted on the VM) or "Azure"
+        // (legacy Azure Blob). Both implement IBlobService identically, so nothing
+        // downstream changes — the proxy-asset reads, AssetUrlSigner, extraction and
+        // metering all work against either. Defaults to Azure for back-compat.
+        var storageProvider = (configuration["Storage:Provider"] ?? "Azure").Trim().ToLowerInvariant();
+        if (storageProvider == "minio")
+            services.AddScoped<IBlobService, MinioBlobService>();
+        else
+            services.AddScoped<IBlobService, AzureBlobService>();
         // Signs short-lived capability URLs for proxy-asset reads of the private
         // PHI container (stateless — singleton).
         services.AddSingleton<IAssetUrlSigner, AssetUrlSigner>();
