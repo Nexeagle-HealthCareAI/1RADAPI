@@ -234,6 +234,14 @@ jobs:
           envs: IMAGE,GHCR_TOKEN,ACTOR,DB_CONN,JWT_SECRET,SMTP_PW,WHATSAPP_TOKEN,ANTHROPIC_KEY,GEMINI_KEY,STORAGE_ACCESS_KEY,STORAGE_SECRET_KEY,STORAGE_ENDPOINT,STORAGE_BUCKET,STORAGE_REGION
           script: |
             set -e
+
+            # Fail fast if a boot-critical secret rendered empty — otherwise we'd
+            # ship a container that crash-loops (e.g. empty Jwt__Secret →
+            # "IDX10703: key length is zero", empty DB conn → startup DB failure).
+            # ${VAR:?msg} aborts when VAR is unset OR empty.
+            : "${DB_CONN:?DEV_DB_CONNECTION secret is empty/missing}"
+            : "${JWT_SECRET:?JWT_SECRET secret is empty/missing}"
+
             mkdir -p /opt/myapp
             [ -f /opt/myapp/dev.env ] && cp /opt/myapp/dev.env /opt/myapp/dev.env.bak
 
