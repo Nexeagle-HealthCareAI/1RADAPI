@@ -181,6 +181,29 @@ jobs:
     environment: development
 
     steps:
+      # ── Diagnostic: confirm the SSH secrets are actually populated ──────────
+      # The ssh-action masks secret VALUES in the log, so you can't eyeball them.
+      # A length of 0 proves a secret is missing/empty (a top cause of "attempted
+      # methods [none password]"); a length that doesn't match your real password,
+      # or a trailing-whitespace warning, points at a bad paste. Values are never
+      # printed — only their character counts. Non-failing (annotations only) so
+      # the deploy still proceeds and surfaces the real auth error if creds are bad.
+      - name: Verify SSH credentials are present (values never printed)
+        env:
+          H: ${{ secrets.DEV_SSH_HOST }}
+          U: ${{ secrets.DEV_SSH_USER }}
+          P: ${{ secrets.DEV_SSH_PASSWORD }}
+        run: |
+          echo "DEV_SSH_HOST     length: ${#H}"
+          echo "DEV_SSH_USER     length: ${#U}"
+          echo "DEV_SSH_PASSWORD length: ${#P}"
+          [ -n "$H" ] || echo "::error::DEV_SSH_HOST is empty/missing"
+          [ -n "$U" ] || echo "::error::DEV_SSH_USER is empty/missing"
+          [ -n "$P" ] || echo "::error::DEV_SSH_PASSWORD is empty/missing"
+          case "$P" in *[[:space:]]) echo "::warning::DEV_SSH_PASSWORD ends in whitespace/newline — re-enter it via the web UI" ;; esac
+          case "$U" in *[[:space:]]) echo "::warning::DEV_SSH_USER ends in whitespace/newline" ;; esac
+          true
+
       - name: Render dev.env from GitHub + deploy on Dev VM
         uses: appleboy/ssh-action@v1.0.3
         env:
