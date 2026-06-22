@@ -213,6 +213,97 @@ namespace _1Rad.Infrastructure.Services
             };
         }
 
+        // ── Multipart (parallel) upload ───────────────────────────────────────────
+
+        public async Task<MultipartUploadInit> InitiateMultipartUploadAsync(
+            string blobPath, string containerName, int partCount, TimeSpan validFor, string? contentType = null)
+        {
+            if (string.IsNullOrWhiteSpace(blobPath))
+                throw new ArgumentException("blobPath is required", nameof(blobPath));
+            if (string.IsNullOrWhiteSpace(containerName))
+                throw new ArgumentException("containerName is required", nameof(containerName));
+            if (partCount < 1)
+                throw new ArgumentOutOfRangeException(nameof(partCount), "partCount must be >= 1.");
+
+            var relPath = SanitisePath(blobPath);
+            var (bucket, key) = Resolve(containerName, blobPath);
+            await EnsureBucketAsync(bucket);
+
+            var init = await _s3.InitiateMultipartUploadAsync(new InitiateMultipartUploadRequest
+            {
+                BucketName = bucket,
+                Key = key,
+                // Content-Type is set on the object at initiate time (not pinned
+                // into each part's signature — same rationale as the single-PUT
+                // path: a byte-exact match is brittle across browser/bridge).
+                ContentType = string.IsNullOrWhiteSpace(contentType) ? "application/octet-stream" : contentType,
+            });
+
+            var expires = DateTime.UtcNow.Add(validFor);
+            var parts = new List<MultipartUploadPart>(partCount);
+            for (int part = 1; part <= partCount; part++)
+            {
+                // Presigned UploadPart URL: UploadId + PartNumber make the SDK
+                // sign the part-PUT operation rather than a whole-object PUT.
+                var url = _s3.GetPreSignedURL(new GetPreSignedUrlRequest
+                {
+                    BucketName = bucket,
+                    Key = key,
+                    Verb = HttpVerb.PUT,
+                    UploadId = init.UploadId,
+                    PartNumber = part,
+                    Expires = expires,
+                });
+                parts.Add(new MultipartUploadPart { PartNumber = part, Url = url });
+            }
+
+            return new MultipartUploadInit
+            {
+                UploadId = init.UploadId,
+                BlobPath = relPath,
+                ContainerName = containerName,
+                PublicReadUrl = UrlFor(bucket, key),
+                Parts = parts,
+                ExpiresAt = DateTimeOffset.UtcNow.Add(validFor),
+            };
+        }
+
+        public async Task CompleteMultipartUploadAsync(
+            string blobPath, string containerName, string uploadId, IEnumerable<MultipartCompletedPart> parts)
+        {
+            if (string.IsNullOrWhiteSpace(uploadId))
+                throw new ArgumentException("uploadId is required", nameof(uploadId));
+
+            var (bucket, key) = Resolve(containerName, blobPath);
+            // S3 requires parts in ascending PartNumber order on commit.
+            var partETags = parts
+                .OrderBy(p => p.PartNumber)
+                .Select(p => new PartETag(p.PartNumber, p.ETag))
+                .ToList();
+            if (partETags.Count == 0)
+                throw new ArgumentException("At least one completed part is required.", nameof(parts));
+
+            await _s3.CompleteMultipartUploadAsync(new CompleteMultipartUploadRequest
+            {
+                BucketName = bucket,
+                Key = key,
+                UploadId = uploadId,
+                PartETags = partETags,
+            });
+        }
+
+        public async Task AbortMultipartUploadAsync(string blobPath, string containerName, string uploadId)
+        {
+            if (string.IsNullOrWhiteSpace(uploadId)) return;
+            var (bucket, key) = Resolve(containerName, blobPath);
+            await _s3.AbortMultipartUploadAsync(new AbortMultipartUploadRequest
+            {
+                BucketName = bucket,
+                Key = key,
+                UploadId = uploadId,
+            });
+        }
+
         // Presigned GET so the browser/bridge downloads straight from object storage
         // (no API hop). Pure local signing — no network call. Returns the input URL
         // unchanged if it can't be parsed into a (bucket, key).

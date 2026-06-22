@@ -77,6 +77,62 @@ namespace _1Rad.Application.Interfaces
         /// exist / the URL can't be parsed. Used by storage metering.
         /// </summary>
         Task<long> GetBlobSizeByUrlAsync(string fileUrl);
+
+        // ── Multipart (parallel) upload ──────────────────────────────────────
+        // S3/MinIO multipart upload: split one large object into parts the
+        // browser PUTs in parallel, then commit. A single PUT is throughput-
+        // capped by one TCP stream's bandwidth-delay product on a high-RTT
+        // link; parallel parts saturate the pipe. (Azure has an equivalent
+        // client-side block protocol against a single SAS URL, so the Azure
+        // implementation of these is a no-op / NotSupported — the client
+        // routes Azure large uploads down its own block path.)
+
+        /// <summary>
+        /// Begins a multipart upload at <paramref name="blobPath"/> and mints a
+        /// presigned PUT URL for each of <paramref name="partCount"/> parts. The
+        /// client uploads parts concurrently, collects each part's ETag, then
+        /// calls <see cref="CompleteMultipartUploadAsync"/>.
+        /// </summary>
+        Task<MultipartUploadInit> InitiateMultipartUploadAsync(string blobPath, string containerName, int partCount, TimeSpan validFor, string? contentType = null);
+
+        /// <summary>
+        /// Commits a multipart upload from the per-part ETags the client gathered.
+        /// After this the blob is readable as a single object.
+        /// </summary>
+        Task CompleteMultipartUploadAsync(string blobPath, string containerName, string uploadId, IEnumerable<MultipartCompletedPart> parts);
+
+        /// <summary>
+        /// Cancels an in-flight multipart upload and discards any staged parts
+        /// (storage doesn't bill for them once aborted). Best-effort cleanup for
+        /// a client that failed mid-upload.
+        /// </summary>
+        Task AbortMultipartUploadAsync(string blobPath, string containerName, string uploadId);
+    }
+
+    /// <summary>Result of initiating a multipart upload — the upload id plus a
+    /// presigned PUT URL per part for the browser to fan out across.</summary>
+    public class MultipartUploadInit
+    {
+        public string UploadId { get; set; } = string.Empty;
+        public string BlobPath { get; set; } = string.Empty;       // container-relative
+        public string ContainerName { get; set; } = string.Empty;
+        public string PublicReadUrl { get; set; } = string.Empty;  // canonical read URL
+        public List<MultipartUploadPart> Parts { get; set; } = new();
+        public DateTimeOffset ExpiresAt { get; set; }
+    }
+
+    public class MultipartUploadPart
+    {
+        public int PartNumber { get; set; }   // 1-based, as S3 requires
+        public string Url { get; set; } = string.Empty;
+    }
+
+    /// <summary>A part the client finished uploading: its number + the ETag the
+    /// storage returned on the part PUT (needed to commit the upload).</summary>
+    public class MultipartCompletedPart
+    {
+        public int PartNumber { get; set; }
+        public string ETag { get; set; } = string.Empty;
     }
 
     public class SasUploadTarget

@@ -210,6 +210,22 @@ namespace _1Rad.Infrastructure.Services
             };
         }
 
+        // ── Multipart (parallel) upload ───────────────────────────────────────────
+        // Not implemented for Azure: the browser already parallelises large Azure
+        // uploads with the native staged-block protocol (PUT ...&comp=block then
+        // &comp=blocklist) against the single write SAS this service mints — it
+        // needs no server-minted per-part URLs. The client detects the Azure
+        // backend and routes large uploads down that block path, so it never calls
+        // these. They throw (rather than silently no-op) to surface a mis-route.
+        public Task<MultipartUploadInit> InitiateMultipartUploadAsync(string blobPath, string containerName, int partCount, TimeSpan validFor, string? contentType = null)
+            => throw new NotSupportedException("Multipart upload is S3/MinIO-only; Azure uploads use the client-side staged-block protocol against the write SAS.");
+
+        public Task CompleteMultipartUploadAsync(string blobPath, string containerName, string uploadId, IEnumerable<MultipartCompletedPart> parts)
+            => throw new NotSupportedException("Multipart upload is S3/MinIO-only; Azure uploads use the client-side staged-block protocol against the write SAS.");
+
+        public Task AbortMultipartUploadAsync(string blobPath, string containerName, string uploadId)
+            => Task.CompletedTask; // nothing staged server-side on Azure
+
         // Short-lived read SAS so the browser can download the blob directly.
         // Returns the URL unchanged if SAS can't be generated (e.g. MSI-only auth).
         public string GeneratePresignedReadUrl(string fileUrl, TimeSpan validFor)
