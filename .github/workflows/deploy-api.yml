@@ -233,10 +233,12 @@ jobs:
             } > /opt/myapp/dev.env
 
             echo "$GHCR_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
-            docker pull "$IMAGE"
+            # GHCR/Docker image refs must be lowercase; the org (Nexeagle-AI) isn't.
+            IMAGE_LC=$(printf '%s' "$IMAGE" | tr '[:upper:]' '[:lower:]')
+            docker pull "$IMAGE_LC"
             docker rm -f 1rad-api-dev 2>/dev/null || true
             docker run -d --name 1rad-api-dev --restart unless-stopped \
-              --network host --env-file /opt/myapp/dev.env "$IMAGE"
+              --network host --env-file /opt/myapp/dev.env "$IMAGE_LC"
             docker image prune -f || true
 
       - name: Health check (via nginx :80)
