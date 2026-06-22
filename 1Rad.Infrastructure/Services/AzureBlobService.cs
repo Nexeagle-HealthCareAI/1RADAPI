@@ -295,6 +295,22 @@ namespace _1Rad.Infrastructure.Services
             }
         }
 
+        public async Task<(bool Exists, long Size)> TryGetBlobInfoAsync(string blobPath, string containerName)
+        {
+            if (string.IsNullOrWhiteSpace(blobPath) || string.IsNullOrWhiteSpace(containerName))
+                return (false, 0);
+            try
+            {
+                var blobClient = _blobServiceClient.GetBlobContainerClient(containerName).GetBlobClient(blobPath);
+                var props = await blobClient.GetPropertiesAsync();
+                return (true, props.Value.ContentLength);
+            }
+            catch (Azure.RequestFailedException ex) when (ex.Status == 404)
+            {
+                return (false, 0);
+            }
+        }
+
         public async Task<long> GetBlobSizeByUrlAsync(string fileUrl)
         {
             if (string.IsNullOrEmpty(fileUrl)) return 0;

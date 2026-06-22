@@ -73,6 +73,15 @@ namespace _1Rad.Application.Interfaces
         Task<long> GetBlobSizeAsync(string blobPath, string containerName);
 
         /// <summary>
+        /// Existence AND size in a SINGLE round-trip (one HEAD/metadata call).
+        /// Returns (false, 0) when the blob doesn't exist. /upload-complete uses
+        /// this to verify + meter the just-uploaded blob in one network call
+        /// instead of a separate exists-then-size probe — the two add up on a
+        /// remote object store (the "binding" delay after an upload finishes).
+        /// </summary>
+        Task<(bool Exists, long Size)> TryGetBlobInfoAsync(string blobPath, string containerName);
+
+        /// <summary>
         /// Size in bytes of the blob at the given full HTTPS URL, or 0 if it doesn't
         /// exist / the URL can't be parsed. Used by storage metering.
         /// </summary>

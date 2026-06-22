@@ -370,6 +370,22 @@ namespace _1Rad.Infrastructure.Services
             }
         }
 
+        public async Task<(bool Exists, long Size)> TryGetBlobInfoAsync(string blobPath, string containerName)
+        {
+            if (string.IsNullOrWhiteSpace(blobPath) || string.IsNullOrWhiteSpace(containerName))
+                return (false, 0);
+            var (bucket, key) = Resolve(containerName, blobPath);
+            try
+            {
+                var meta = await _s3.GetObjectMetadataAsync(bucket, key);
+                return (true, meta.ContentLength);
+            }
+            catch (AmazonS3Exception ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+            {
+                return (false, 0);
+            }
+        }
+
         public async Task<long> GetBlobSizeByUrlAsync(string fileUrl)
         {
             if (string.IsNullOrEmpty(fileUrl)) return 0;

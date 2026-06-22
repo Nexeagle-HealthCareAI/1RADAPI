@@ -1300,8 +1300,10 @@ namespace _1RadAPI.Controllers
                     return BadRequest(new { success = false, error = "BlobPath does not belong to this appointment." });
                 }
 
-                // Verify the blob actually exists in Azure before we write any DB row.
-                var exists = await _blobService.BlobExistsAsync(request.BlobPath, request.ContainerName);
+                // Verify existence AND meter size in ONE round-trip before writing
+                // any DB row — a separate exists-then-size probe doubled the
+                // remote-storage latency of this "binding" step.
+                var (exists, actualBytes) = await _blobService.TryGetBlobInfoAsync(request.BlobPath, request.ContainerName);
                 if (!exists)
                 {
                     return BadRequest(new
@@ -1320,11 +1322,9 @@ namespace _1RadAPI.Controllers
                     .IgnoreQueryFilters()
                     .FirstOrDefaultAsync(a => a.Id == request.AssetId);
 
-                // Meter the VERIFIED blob (Phase 3) and enforce the per-file cap
-                // + quota on its real size — the token-time gate only saw the
-                // client-declared FileSize and the presigned PUT bound neither.
-                // Reject + delete the offending blob before writing any row.
-                var actualBytes = await _blobService.GetBlobSizeAsync(request.BlobPath, request.ContainerName);
+                // Enforce the per-file cap + quota on the VERIFIED size — the
+                // token-time gate only saw the client-declared FileSize and the
+                // presigned PUT bound neither. Reject + delete before writing a row.
                 var sizeBlock = await EnforceVerifiedSizeAsync(appointment.HospitalId, actualBytes, asset?.StorageBytes ?? 0);
                 if (sizeBlock != null)
                 {
@@ -1864,7 +1864,9 @@ namespace _1RadAPI.Controllers
                     return BadRequest(new { success = false, error = "BlobPath does not belong to this study." });
                 }
 
-                if (!await _blobService.BlobExistsAsync(request.BlobPath, request.ContainerName))
+                // One round-trip for existence + size (see /upload-complete).
+                var (exists, actualBytes) = await _blobService.TryGetBlobInfoAsync(request.BlobPath, request.ContainerName);
+                if (!exists)
                 {
                     return BadRequest(new { success = false, error = "Blob not found in Azure. The PUT may have failed or the SAS expired before upload finished." });
                 }
@@ -1876,10 +1878,9 @@ namespace _1RadAPI.Controllers
                     .IgnoreQueryFilters()
                     .FirstOrDefaultAsync(a => a.Id == request.AssetId);
 
-                // Meter the VERIFIED blob and enforce the per-file cap + quota on
-                // its real size (the token gate only saw the client-declared
-                // FileSize; the presigned PUT bound neither). See /upload-complete.
-                var actualBytes = await _blobService.GetBlobSizeAsync(request.BlobPath, request.ContainerName);
+                // Enforce the per-file cap + quota on the VERIFIED size (the token
+                // gate only saw the client-declared FileSize; the presigned PUT
+                // bound neither). See /upload-complete.
                 var sizeBlock = await EnforceVerifiedSizeAsync(study.HospitalId, actualBytes, asset?.StorageBytes ?? 0);
                 if (sizeBlock != null)
                 {
