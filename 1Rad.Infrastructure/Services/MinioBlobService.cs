@@ -441,6 +441,16 @@ namespace _1Rad.Infrastructure.Services
         private async Task EnsureBucketAsync(string bucket)
         {
             if (_ensured.Contains(bucket)) return;
+            // Single-bucket mode: the bucket is configured + pre-created, so skip
+            // the existence/create round-trip entirely. That probe put the REMOTE
+            // object store on the presigned-URL hot path — a slow/unreachable
+            // endpoint stalled /upload-token (browser stuck at "requesting-token
+            // 0%") even though presigning itself is a purely LOCAL operation.
+            if (_singleBucket != null)
+            {
+                _ensured.Add(bucket);
+                return;
+            }
             try
             {
                 if (!await AmazonS3Util.DoesS3BucketExistV2Async(_s3, bucket))
