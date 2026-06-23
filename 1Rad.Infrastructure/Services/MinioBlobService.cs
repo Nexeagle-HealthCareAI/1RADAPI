@@ -4,6 +4,7 @@ using Amazon.S3.Model;
 using Amazon.S3.Util;
 using Microsoft.Extensions.Configuration;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -40,7 +41,10 @@ namespace _1Rad.Infrastructure.Services
         private readonly string _publicBaseUrl;    // e.g. http://151.185.45.77:9000
         private readonly string? _singleBucket;    // set => single-bucket mode; null => bucket-per-container
         private readonly string _defaultContainer; // default container when none supplied
-        private readonly HashSet<string> _ensured = new(StringComparer.Ordinal);
+        // Thread-safe: this service is a SINGLETON (one AmazonS3Client reused
+        // across all requests so connections to the object store stay warm), so
+        // the "bucket already ensured" set is hit concurrently.
+        private readonly ConcurrentDictionary<string, byte> _ensured = new(StringComparer.Ordinal);
 
         public MinioBlobService(IConfiguration configuration)
         {
@@ -456,7 +460,7 @@ namespace _1Rad.Infrastructure.Services
         // which case a real PutObject error surfaces the actual problem.
         private async Task EnsureBucketAsync(string bucket)
         {
-            if (_ensured.Contains(bucket)) return;
+            if (_ensured.ContainsKey(bucket)) return;
             // Single-bucket mode: the bucket is configured + pre-created, so skip
             // the existence/create round-trip entirely. That probe put the REMOTE
             // object store on the presigned-URL hot path — a slow/unreachable
@@ -464,7 +468,7 @@ namespace _1Rad.Infrastructure.Services
             // 0%") even though presigning itself is a purely LOCAL operation.
             if (_singleBucket != null)
             {
-                _ensured.Add(bucket);
+                _ensured.TryAdd(bucket, 0);
                 return;
             }
             try
@@ -473,7 +477,7 @@ namespace _1Rad.Infrastructure.Services
                     await _s3.PutBucketAsync(new PutBucketRequest { BucketName = bucket });
             }
             catch { /* best-effort */ }
-            _ensured.Add(bucket);
+            _ensured.TryAdd(bucket, 0);
         }
 
         private static string SanitisePath(string blobPath) =>

@@ -259,6 +259,28 @@ public class DicomExtractionService : IDicomExtractionService
         }
     }
 
+    // Best-effort sibling of UploadWithRetryAsync for OPTIONAL artifacts
+    // (frame / preview / thumbnail): swallows failures → null so one missing
+    // extra never fails the slice, and — when a slice fires its uploads in
+    // PARALLEL — never surfaces as an unobserved task fault if the critical
+    // .dcm upload throws first. Cancellation still propagates (shutdown).
+    private async Task<string?> SafeUploadAsync(byte[] bytes, string path, string contentType, CancellationToken ct, string label, Guid assetId)
+    {
+        try
+        {
+            return await UploadWithRetryAsync(bytes, path, contentType, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "[DICOM_EXTRACT] Asset {AssetId} optional {Label} upload failed — continuing without.", assetId, label);
+            return null;
+        }
+    }
+
     public async Task<int> ExtractAsync(Guid assetId, CancellationToken cancellationToken)
     {
         var asset = await _db.StudyAssets
@@ -472,76 +494,92 @@ public class DicomExtractionService : IDicomExtractionService
 
                         // Slice blob path: deterministic, easy to delete by prefix.
                         var sliceBlobPath = $"{hospitalIdN}/{appointmentIdN}/extracted/{assetIdN}/series/{seriesIndex:D3}/{i:D4}.dcm";
-                        var sliceUrl = await UploadWithRetryAsync(uploadBytes, sliceBlobPath, "application/dicom", cancellationToken);
 
-                        // Raw HTJ2K frame, served alongside the .dcm for byte-range
-                        // progressive loading. Best-effort: a slice without a
-                        // streamable frame just falls back to whole-file .dcm loading.
-                        string? frameUrl = null;
+                        // C1: render the optional artifacts (CPU) up front, then upload
+                        // the slice + frame + preview + thumbnail in PARALLEL. These were
+                        // 2–4 SEQUENTIAL round-trips per slice; firing them together over
+                        // the now-warm singleton connection cuts per-slice latency to
+                        // roughly one round-trip.
+
+                        // Raw HTJ2K frame for byte-range progressive loading (optional).
+                        byte[]? frameBytes = null; string? frameBlobPath = null, frameContentType = null;
                         try
                         {
                             var fr = _writeFrames ? ExtractStreamableFrame(uploadBytes) : null;
                             if (fr.HasValue)
                             {
-                                var frameBlobPath = $"{hospitalIdN}/{appointmentIdN}/extracted/{assetIdN}/series/{seriesIndex:D3}/{i:D4}.jhc";
-                                var frameContentType = $"application/octet-stream; transfer-syntax={fr.Value.TransferSyntaxUid}";
-                                frameUrl = await UploadWithRetryAsync(fr.Value.Frame, frameBlobPath, frameContentType, cancellationToken);
-                                Interlocked.Add(ref totalUploadedBytes, fr.Value.Frame.Length);
+                                frameBytes = fr.Value.Frame;
+                                frameBlobPath = $"{hospitalIdN}/{appointmentIdN}/extracted/{assetIdN}/series/{seriesIndex:D3}/{i:D4}.jhc";
+                                frameContentType = $"application/octet-stream; transfer-syntax={fr.Value.TransferSyntaxUid}";
+                                Interlocked.Add(ref totalUploadedBytes, frameBytes.Length);
                             }
                         }
                         catch (Exception frEx)
                         {
-                            _logger.LogDebug(frEx, "[DICOM_EXTRACT] Asset {AssetId} frame {Idx}/{I} write failed — progressive disabled for this slice.", assetId, seriesIndex, i);
+                            _logger.LogDebug(frEx, "[DICOM_EXTRACT] Asset {AssetId} frame {Idx}/{I} extract failed — progressive disabled for this slice.", assetId, seriesIndex, i);
                         }
 
-                        // Per-slice progressive PREVIEW (blurry→sharp) + series
-                        // THUMBNAIL (first slice only) — both from ONE decode.
-                        string? thumbnailUrl = null;
-                        string? previewUrl = null;
+                        // Per-slice progressive PREVIEW + series THUMBNAIL (first slice
+                        // only) — both from ONE decode.
+                        byte[]? prevBytes = null; string? prevPath = null;
+                        byte[]? thumbBytes = null; string? thumbPath = null;
                         if (_writeSlicePreviews || i == 0)
                         {
                             try
                             {
                                 if (_writeSlicePreviews)
                                 {
-                                    var prev = RenderGrayscaleJpeg(dicom, PreviewMaxDim, 55);
-                                    if (prev != null)
+                                    prevBytes = RenderGrayscaleJpeg(dicom, PreviewMaxDim, 55);
+                                    if (prevBytes != null)
                                     {
-                                        var prevPath = $"{hospitalIdN}/{appointmentIdN}/extracted/{assetIdN}/series/{seriesIndex:D3}/{i:D4}_prev.jpg";
-                                        previewUrl = await UploadWithRetryAsync(prev, prevPath, "image/jpeg", cancellationToken);
-                                        Interlocked.Add(ref totalUploadedBytes, prev.Length);
+                                        prevPath = $"{hospitalIdN}/{appointmentIdN}/extracted/{assetIdN}/series/{seriesIndex:D3}/{i:D4}_prev.jpg";
+                                        Interlocked.Add(ref totalUploadedBytes, prevBytes.Length);
                                     }
                                 }
                                 if (i == 0)
                                 {
-                                    var thumb = RenderGrayscaleJpeg(dicom, ThumbnailMaxDim, 70);
-                                    if (thumb != null)
-                                    {
-                                        var thumbPath = $"{hospitalIdN}/{appointmentIdN}/extracted/{assetIdN}/thumbs/{seriesIndex:D3}.jpg";
-                                        thumbnailUrl = await UploadWithRetryAsync(thumb, thumbPath, "image/jpeg", cancellationToken);
-                                    }
+                                    thumbBytes = RenderGrayscaleJpeg(dicom, ThumbnailMaxDim, 70);
+                                    if (thumbBytes != null)
+                                        thumbPath = $"{hospitalIdN}/{appointmentIdN}/extracted/{assetIdN}/thumbs/{seriesIndex:D3}.jpg";
                                 }
                             }
                             catch (Exception pvEx)
                             {
-                                _logger.LogWarning(pvEx, "[DICOM_EXTRACT] Asset {AssetId} preview/thumb {Idx}/{I} failed — continuing without.", assetId, seriesIndex, i);
+                                _logger.LogWarning(pvEx, "[DICOM_EXTRACT] Asset {AssetId} preview/thumb {Idx}/{I} render failed — continuing without.", assetId, seriesIndex, i);
                             }
                         }
 
-                        // Metadata JSON computed HERE (while the DICOM is open), then
-                        // carried in the result — the EF phase no longer needs the
-                        // parsed file, so nothing heavy survives this task.
-                        var metadataJson = ExtractMetadataJson(dicom, frameUrl, previewUrl);
+                        // Fire all uploads concurrently. The .dcm is CRITICAL (its
+                        // failure fails the slice → propagates); the rest are best-effort
+                        // via SafeUploadAsync (failure → null, never an unobserved fault).
+                        var sliceTask = UploadWithRetryAsync(uploadBytes, sliceBlobPath, "application/dicom", cancellationToken);
+                        var frameTask = frameBytes != null
+                            ? SafeUploadAsync(frameBytes, frameBlobPath!, frameContentType!, cancellationToken, "frame", assetId)
+                            : Task.FromResult<string?>(null);
+                        var previewTask = prevBytes != null
+                            ? SafeUploadAsync(prevBytes, prevPath!, "image/jpeg", cancellationToken, "preview", assetId)
+                            : Task.FromResult<string?>(null);
+                        var thumbTask = thumbBytes != null
+                            ? SafeUploadAsync(thumbBytes, thumbPath!, "image/jpeg", cancellationToken, "thumbnail", assetId)
+                            : Task.FromResult<string?>(null);
 
-                        // Server-side MPR: write this slice's downsampled plane into
-                        // the volume accumulator. Its z-index is fixed by SopUid, so
-                        // each task writes a DISTINCT plane — lock-free. Best-effort:
-                        // a failure just leaves that plane zero, never fails the slice.
+                        // Server-side MPR plane fill (CPU) overlaps with the upload I/O.
+                        // Its z-index is fixed by SopUid, so each task writes a DISTINCT
+                        // plane — lock-free; a failure just leaves that plane zero.
                         if (reformatAcc != null && reformatAcc.ZBySop.TryGetValue(p.SopUid, out var rz))
                         {
                             if (FillReformatPlane(dicom, reformatAcc, rz))
                                 Interlocked.Increment(ref reformatAcc.FilledPlanes);
                         }
+
+                        var sliceUrl = await sliceTask;            // critical → propagates on failure
+                        var frameUrl = await frameTask;
+                        var previewUrl = await previewTask;
+                        var thumbnailUrl = await thumbTask;
+
+                        // Metadata JSON (while the DICOM is still open), carried in the
+                        // result — the EF phase no longer needs the parsed file.
+                        var metadataJson = ExtractMetadataJson(dicom, frameUrl, previewUrl);
 
                         // Release the raw bytes now that this slice is fully uploaded,
                         // so held memory shrinks as the study progresses.

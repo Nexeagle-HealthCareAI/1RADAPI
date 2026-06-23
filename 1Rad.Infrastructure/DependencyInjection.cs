@@ -84,11 +84,17 @@ public static class DependencyInjection
         // (legacy Azure Blob). Both implement IBlobService identically, so nothing
         // downstream changes — the proxy-asset reads, AssetUrlSigner, extraction and
         // metering all work against either. Defaults to Azure for back-compat.
+        // SINGLETON, not Scoped: the underlying AmazonS3Client / Azure BlobServiceClient
+        // (and their HttpClient) are thread-safe and meant to be reused. A per-request
+        // instance opened a COLD TCP+TLS connection to the (remote) object store on every
+        // call — so each bind HEAD and every extraction upload paid a handshake on top of
+        // the round-trip. One long-lived client keeps connections warm. Both impls hold
+        // no per-request state (Minio's bucket-ensured set is now a ConcurrentDictionary).
         var storageProvider = (configuration["Storage:Provider"] ?? "Azure").Trim().ToLowerInvariant();
         if (storageProvider == "minio")
-            services.AddScoped<IBlobService, MinioBlobService>();
+            services.AddSingleton<IBlobService, MinioBlobService>();
         else
-            services.AddScoped<IBlobService, AzureBlobService>();
+            services.AddSingleton<IBlobService, AzureBlobService>();
         // Signs short-lived capability URLs for proxy-asset reads of the private
         // PHI container (stateless — singleton).
         services.AddSingleton<IAssetUrlSigner, AssetUrlSigner>();
