@@ -217,11 +217,11 @@ jobs:
           WHATSAPP_TOKEN: ${{ secrets.WHATSAPP_TOKEN }}
           ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_KEY }}
           GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
-          STORAGE_ACCESS_KEY: ${{ secrets.STORAGE_ACCESS_KEY }}
-          STORAGE_SECRET_KEY: ${{ secrets.STORAGE_SECRET_KEY }}
+          STORAGE_ACCESS_KEY: ${{ secrets.DEV_STORAGE_ACCESS_KEY }}
+          STORAGE_SECRET_KEY: ${{ secrets.DEV_STORAGE_SECRET_KEY }}
           # Variables (non-secret config — editable in Settings → Variables)
-          STORAGE_ENDPOINT: ${{ vars.STORAGE_ENDPOINT }}
-          STORAGE_BUCKET: ${{ vars.STORAGE_BUCKET }}
+          STORAGE_ENDPOINT: ${{ vars.DEV_STORAGE_ENDPOINT }}
+          STORAGE_BUCKET: ${{ vars.DEV_STORAGE_BUCKET }}
           STORAGE_REGION: ${{ vars.STORAGE_REGION }}
         with:
           host: ${{ secrets.DEV_SSH_HOST }}
@@ -319,11 +319,11 @@ jobs:
 #   WHATSAPP_TOKEN         (shared with dev)
 #   ANTHROPIC_KEY          (shared with dev)
 #   GEMINI_KEY             (shared with dev)
-#   STORAGE_ACCESS_KEY     (shared with dev)
-#   STORAGE_SECRET_KEY     (shared with dev)
+#   PROD_STORAGE_ACCESS_KEY  E2E Object Storage access key for nexeagle-prod bucket
+#   PROD_STORAGE_SECRET_KEY  E2E Object Storage secret key for nexeagle-prod bucket
 #   GHCR_TOKEN             (already set)
 # Required VARIABLES (Settings → Secrets and variables → Actions → Variables):
-#   STORAGE_ENDPOINT, STORAGE_BUCKET, STORAGE_REGION  (already set)
+#   STORAGE_ENDPOINT, PROD_STORAGE_BUCKET, STORAGE_REGION
 # ─────────────────────────────────────────────────────────────────────────────
   deploy-prod:
     name: "Stage 4 — Deploy → Prod"
@@ -346,10 +346,10 @@ jobs:
           WHATSAPP_TOKEN:     ${{ secrets.WHATSAPP_TOKEN }}
           ANTHROPIC_KEY:      ${{ secrets.ANTHROPIC_KEY }}
           GEMINI_KEY:         ${{ secrets.GEMINI_KEY }}
-          STORAGE_ACCESS_KEY: ${{ secrets.STORAGE_ACCESS_KEY }}
-          STORAGE_SECRET_KEY: ${{ secrets.STORAGE_SECRET_KEY }}
-          STORAGE_ENDPOINT:   ${{ vars.STORAGE_ENDPOINT }}
-          STORAGE_BUCKET:     ${{ vars.STORAGE_BUCKET }}
+          STORAGE_ACCESS_KEY: ${{ secrets.PROD_STORAGE_ACCESS_KEY }}
+          STORAGE_SECRET_KEY: ${{ secrets.PROD_STORAGE_SECRET_KEY }}
+          STORAGE_ENDPOINT:   ${{ vars.PROD_STORAGE_ENDPOINT }}
+          STORAGE_BUCKET:     ${{ vars.PROD_STORAGE_BUCKET }}
           STORAGE_REGION:     ${{ vars.STORAGE_REGION }}
         run: |
           : "${DB_CONN:?PROD_DB_CONNECTION secret is empty/missing}"
