@@ -207,6 +207,140 @@ namespace _1RadAPI.Controllers
             catch { /* best-effort */ }
         }
 
+        // Shared "bind the verified blob to a StudyAsset row" step for an
+        // APPOINTMENT. Used by /upload-complete (single PUT) AND the merged
+        // multipart finalize — so a multipart upload skips a whole extra
+        // client→API round-trip (it binds in the same call that assembles the
+        // object). Caller has already tenant-validated the blob path and fetched
+        // the VERIFIED size. Returns Ok(asset), or the size/quota 4xx (after
+        // deleting the offending blob).
+        private async Task<IActionResult> FinalizeAppointmentUploadAsync(
+            Appointment appointment, Guid assetId, Guid? appointmentServiceId,
+            string blobPath, string containerName, string fileName, long actualBytes, string source)
+        {
+            // Idempotent: existing asset (retry / double-tap) → update in place.
+            var asset = await _context.StudyAssets
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(a => a.Id == assetId);
+
+            var sizeBlock = await EnforceVerifiedSizeAsync(appointment.HospitalId, actualBytes, asset?.StorageBytes ?? 0);
+            if (sizeBlock != null)
+            {
+                await TryDeleteBlobAsync(blobPath, containerName);
+                return sizeBlock;
+            }
+
+            var cleanName = Path.GetFileName(fileName);
+            var extension = Path.GetExtension(cleanName).ToLower().TrimStart('.');
+            // Canonical read URL on OUR account — never a client-echoed URL.
+            var readUrl = _blobService.GetBlobReadUrl(blobPath, containerName);
+
+            if (asset == null)
+            {
+                asset = new StudyAsset
+                {
+                    Id = assetId,
+                    AppointmentId = appointment.AppointmentId,
+                    AppointmentServiceId = appointmentServiceId,
+                    BlobUrl = readUrl,
+                    FileName = cleanName,
+                    FileType = string.IsNullOrEmpty(extension) ? "bin" : extension,
+                    UploadedAt = DateTime.UtcNow,
+                    HospitalId = appointment.HospitalId,
+                };
+                _context.StudyAssets.Add(asset);
+            }
+            else
+            {
+                asset.BlobUrl = readUrl;
+                asset.UploadedAt = DateTime.UtcNow;
+                if (appointmentServiceId.HasValue)
+                    asset.AppointmentServiceId = appointmentServiceId;
+            }
+
+            asset.StorageBytes = actualBytes;
+            _storage.Invalidate(appointment.HospitalId);
+
+            if (appointment.Status != "SCANNED" && appointment.Status != "REPORTED")
+                appointment.Status = "IN_PROGRESS";
+
+            if (NeedsExtraction(asset.FileType))
+                asset.ExtractionStatus = "Queued";
+
+            if (IsImagingFileType(asset.FileType))
+                EnsureImagingStudy(asset, appointment, source, directlyViewable: !NeedsExtraction(asset.FileType));
+
+            await _context.SaveChangesAsync(default);
+
+            if (asset.ExtractionStatus == "Queued")
+                _extractionQueue.Enqueue(asset.Id);
+
+            return Ok(new { success = true, data = asset });
+        }
+
+        // Study-owned sibling of FinalizeAppointmentUploadAsync.
+        private async Task<IActionResult> FinalizeStudyUploadAsync(
+            ImagingStudy study, Guid assetId, string blobPath, string containerName, string fileName, long actualBytes)
+        {
+            var asset = await _context.StudyAssets
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(a => a.Id == assetId);
+
+            var sizeBlock = await EnforceVerifiedSizeAsync(study.HospitalId, actualBytes, asset?.StorageBytes ?? 0);
+            if (sizeBlock != null)
+            {
+                await TryDeleteBlobAsync(blobPath, containerName);
+                return sizeBlock;
+            }
+
+            var cleanName = Path.GetFileName(fileName);
+            var extension = Path.GetExtension(cleanName).ToLower().TrimStart('.');
+            var readUrl = _blobService.GetBlobReadUrl(blobPath, containerName);
+
+            if (asset == null)
+            {
+                asset = new StudyAsset
+                {
+                    Id = assetId,
+                    ImagingStudyId = study.Id,
+                    AppointmentId = null,
+                    BlobUrl = readUrl,
+                    FileName = cleanName,
+                    FileType = string.IsNullOrEmpty(extension) ? "bin" : extension,
+                    UploadedAt = DateTime.UtcNow,
+                    HospitalId = study.HospitalId,
+                };
+                _context.StudyAssets.Add(asset);
+            }
+            else
+            {
+                asset.BlobUrl = readUrl;
+                asset.UploadedAt = DateTime.UtcNow;
+                asset.ImagingStudyId = study.Id;
+            }
+
+            asset.StorageBytes = actualBytes;
+            _storage.Invalidate(study.HospitalId);
+
+            if (NeedsExtraction(asset.FileType))
+                asset.ExtractionStatus = "Queued";
+
+            if (IsImagingFileType(asset.FileType)
+                && !NeedsExtraction(asset.FileType)
+                && study.Status == ImagingStudyStatus.Received)
+            {
+                study.Status = ImagingStudyStatus.Ready;
+                study.ReadyAt = DateTime.UtcNow;
+            }
+
+            await _context.SaveChangesAsync(default);
+
+            if (asset.ExtractionStatus == "Queued")
+                _extractionQueue.Enqueue(asset.Id);
+
+            return Ok(new { success = true, data = asset });
+        }
+
         // Phase 1 of the RIS/PACS split: every DICOM-bearing asset belongs to
         // an ImagingStudy aggregate. Re-uploads keep the asset's existing
         // study; otherwise one is created seeded from the appointment —
@@ -1313,79 +1447,9 @@ namespace _1RadAPI.Controllers
                     });
                 }
 
-                var fileName = Path.GetFileName(request.FileName);
-                var extension = Path.GetExtension(fileName).ToLower().TrimStart('.');
-
-                // Idempotent: if this AssetId was already inserted (retry / double-tap),
-                // just bump UploadedAt instead of duplicating.
-                var asset = await _context.StudyAssets
-                    .IgnoreQueryFilters()
-                    .FirstOrDefaultAsync(a => a.Id == request.AssetId);
-
-                // Enforce the per-file cap + quota on the VERIFIED size — the
-                // token-time gate only saw the client-declared FileSize and the
-                // presigned PUT bound neither. Reject + delete before writing a row.
-                var sizeBlock = await EnforceVerifiedSizeAsync(appointment.HospitalId, actualBytes, asset?.StorageBytes ?? 0);
-                if (sizeBlock != null)
-                {
-                    await TryDeleteBlobAsync(request.BlobPath, request.ContainerName);
-                    return sizeBlock;
-                }
-
-                // Canonical read URL derived from the verified container + path on
-                // OUR account — never the client-echoed PublicReadUrl, which the
-                // caller could point at someone else's blob.
-                var readUrl = _blobService.GetBlobReadUrl(request.BlobPath, request.ContainerName);
-
-                if (asset == null)
-                {
-                    asset = new StudyAsset
-                    {
-                        Id = request.AssetId,
-                        AppointmentId = request.AppointmentId,
-                        AppointmentServiceId = request.AppointmentServiceId,
-                        BlobUrl = readUrl,
-                        FileName = fileName,
-                        FileType = string.IsNullOrEmpty(extension) ? "bin" : extension,
-                        UploadedAt = DateTime.UtcNow,
-                        HospitalId = appointment.HospitalId,
-                    };
-                    _context.StudyAssets.Add(asset);
-                }
-                else
-                {
-                    asset.BlobUrl = readUrl;
-                    asset.UploadedAt = DateTime.UtcNow;
-                    if (request.AppointmentServiceId.HasValue)
-                        asset.AppointmentServiceId = request.AppointmentServiceId;
-                }
-
-                // Extraction recomputes the durable total (blob + slices) for ZIPs later.
-                asset.StorageBytes = actualBytes;
-                _storage.Invalidate(appointment.HospitalId);
-
-                if (appointment.Status != "SCANNED" && appointment.Status != "REPORTED")
-                {
-                    appointment.Status = "IN_PROGRESS";
-                }
-
-                // Mark for DICOM extraction (Option C). ZIPs and single DCMs
-                // are normalised by the worker; other types are NotApplicable.
-                if (NeedsExtraction(asset.FileType))
-                {
-                    asset.ExtractionStatus = "Queued";
-                }
-
-                if (IsImagingFileType(asset.FileType))
-                    EnsureImagingStudy(asset, appointment, "sas-upload",
-                        directlyViewable: !NeedsExtraction(asset.FileType));
-
-                await _context.SaveChangesAsync(default);
-
-                if (asset.ExtractionStatus == "Queued")
-                    _extractionQueue.Enqueue(asset.Id);
-
-                return Ok(new { success = true, data = asset });
+                return await FinalizeAppointmentUploadAsync(
+                    appointment, request.AssetId, request.AppointmentServiceId,
+                    request.BlobPath, request.ContainerName, request.FileName, actualBytes, "sas-upload");
             }
             catch (Exception ex)
             {
@@ -1494,9 +1558,46 @@ namespace _1RadAPI.Controllers
                     return StatusCode(500, new { success = false, error = $"MULTIPART_COMPLETE_FAILURE: {ex.Message}" });
                 }
 
-                // The StudyAsset row + verified-size/quota enforcement live in the
-                // /upload-complete (or /studies/{id}/upload-complete) the client
-                // calls next against this same blobPath.
+                // MERGED FINALIZE: if the client passed binding context, create the
+                // StudyAsset row right here — the object is now assembled, so
+                // existence is guaranteed — instead of a second /upload-complete
+                // round-trip. Size is metered with one HEAD (still authoritative,
+                // never the client-declared size). Without context, fall back to
+                // the legacy two-call flow.
+                if (request.AssetId is Guid assetId && assetId != Guid.Empty
+                    && !string.IsNullOrWhiteSpace(request.FileName)
+                    && (request.AppointmentId.HasValue || request.ImagingStudyId.HasValue))
+                {
+                    var (_, actualBytes) = await _blobService.TryGetBlobInfoAsync(request.BlobPath, request.ContainerName);
+
+                    if (request.AppointmentId is Guid apptId && apptId != Guid.Empty)
+                    {
+                        var appointment = await _context.Appointments
+                            .IgnoreQueryFilters()
+                            .FirstOrDefaultAsync(a => a.AppointmentId == apptId);
+                        if (appointment == null)
+                            return NotFound(new { success = false, error = "Appointment not found." });
+                        var apptTenant = EnsureHospitalAccess(appointment.HospitalId);
+                        if (apptTenant != null) return apptTenant;
+                        var apptPrefix = $"{appointment.HospitalId:N}/{appointment.AppointmentId:N}/";
+                        if (!request.BlobPath.Replace('\\', '/').TrimStart('/').StartsWith(apptPrefix, StringComparison.OrdinalIgnoreCase))
+                            return BadRequest(new { success = false, error = "BlobPath does not belong to this appointment." });
+                        return await FinalizeAppointmentUploadAsync(
+                            appointment, assetId, request.AppointmentServiceId,
+                            request.BlobPath, request.ContainerName, request.FileName, actualBytes, "sas-upload");
+                    }
+
+                    var (study, studyErr) = await LoadStudyForWriteAsync(request.ImagingStudyId!.Value);
+                    if (studyErr != null) return studyErr;
+                    var studyPrefix = $"{study!.HospitalId:N}/{study.Id:N}/";
+                    if (!request.BlobPath.Replace('\\', '/').TrimStart('/').StartsWith(studyPrefix, StringComparison.OrdinalIgnoreCase))
+                        return BadRequest(new { success = false, error = "BlobPath does not belong to this study." });
+                    return await FinalizeStudyUploadAsync(
+                        study, assetId, request.BlobPath, request.ContainerName, request.FileName, actualBytes);
+                }
+
+                // Legacy: no binding context → the client calls /upload-complete
+                // (or /studies/{id}/upload-complete) next against this blobPath.
                 return Ok(new { success = true, data = new { blobPath = request.BlobPath, containerName = request.ContainerName } });
             }
             catch (Exception ex)
@@ -1871,71 +1972,8 @@ namespace _1RadAPI.Controllers
                     return BadRequest(new { success = false, error = "Blob not found in Azure. The PUT may have failed or the SAS expired before upload finished." });
                 }
 
-                var fileName = Path.GetFileName(request.FileName);
-                var extension = Path.GetExtension(fileName).ToLower().TrimStart('.');
-
-                var asset = await _context.StudyAssets
-                    .IgnoreQueryFilters()
-                    .FirstOrDefaultAsync(a => a.Id == request.AssetId);
-
-                // Enforce the per-file cap + quota on the VERIFIED size (the token
-                // gate only saw the client-declared FileSize; the presigned PUT
-                // bound neither). See /upload-complete.
-                var sizeBlock = await EnforceVerifiedSizeAsync(study.HospitalId, actualBytes, asset?.StorageBytes ?? 0);
-                if (sizeBlock != null)
-                {
-                    await TryDeleteBlobAsync(request.BlobPath, request.ContainerName);
-                    return sizeBlock;
-                }
-
-                var readUrl = _blobService.GetBlobReadUrl(request.BlobPath, request.ContainerName);
-
-                if (asset == null)
-                {
-                    asset = new StudyAsset
-                    {
-                        Id = request.AssetId,
-                        ImagingStudyId = study.Id,
-                        AppointmentId = null,
-                        BlobUrl = readUrl,
-                        FileName = fileName,
-                        FileType = string.IsNullOrEmpty(extension) ? "bin" : extension,
-                        UploadedAt = DateTime.UtcNow,
-                        HospitalId = study.HospitalId,
-                    };
-                    _context.StudyAssets.Add(asset);
-                }
-                else
-                {
-                    asset.BlobUrl = readUrl;
-                    asset.UploadedAt = DateTime.UtcNow;
-                    asset.ImagingStudyId = study.Id;
-                }
-
-                asset.StorageBytes = actualBytes;
-                _storage.Invalidate(study.HospitalId);
-
-                if (NeedsExtraction(asset.FileType))
-                    asset.ExtractionStatus = "Queued";
-
-                // Extractable types (ZIP + single DCM) flip to Processing→Ready
-                // in the extraction worker — single DCMs are normalised there
-                // too (preamble-less files come out as valid HTJ2K P10). Only
-                // non-DICOM imaging attachments are Ready immediately.
-                if (IsImagingFileType(asset.FileType)
-                    && !NeedsExtraction(asset.FileType)
-                    && study.Status == ImagingStudyStatus.Received)
-                {
-                    study.Status = ImagingStudyStatus.Ready;
-                    study.ReadyAt = DateTime.UtcNow;
-                }
-
-                await _context.SaveChangesAsync(default);
-
-                if (asset.ExtractionStatus == "Queued")
-                    _extractionQueue.Enqueue(asset.Id);
-
-                return Ok(new { success = true, data = asset });
+                return await FinalizeStudyUploadAsync(
+                    study, request.AssetId, request.BlobPath, request.ContainerName, request.FileName, actualBytes);
             }
             catch (Exception ex)
             {
@@ -2679,6 +2717,16 @@ namespace _1RadAPI.Controllers
         public string ContainerName { get; set; } = string.Empty;
         public string UploadId { get; set; } = string.Empty;
         public List<MultipartCompletePartDto> Parts { get; set; } = new();
+
+        // Optional binding context. When present, this call ALSO creates the
+        // StudyAsset row (merged finalize) — the object is assembled here, so
+        // existence is guaranteed — letting the client skip the separate
+        // /upload-complete round-trip. Omit for the legacy two-call flow.
+        public Guid? AssetId { get; set; }
+        public Guid? AppointmentId { get; set; }       // appointment-owned upload
+        public Guid? ImagingStudyId { get; set; }      // study-owned upload
+        public Guid? AppointmentServiceId { get; set; }
+        public string? FileName { get; set; }
     }
 
     public class MultipartAbortRequest
