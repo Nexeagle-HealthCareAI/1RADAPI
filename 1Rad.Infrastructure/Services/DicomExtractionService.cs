@@ -76,6 +76,13 @@ public class DicomExtractionService : IDicomExtractionService
     // Dicom:WriteSlicePreviews=false to skip it (e.g. to speed extraction).
     private readonly bool _writeSlicePreviews;
 
+    // Max slices processed (transcode + parallel uploads) in flight at once.
+    // Tunable now that the S3 client is a warm singleton and each slice fans its
+    // .dcm/preview/thumbnail out concurrently — raise it to push more throughput
+    // to the object store, lower it if the endpoint starts 503-ing. Bounds peak
+    // memory too (~this many decoded slices held at once).
+    private readonly int _sliceUploadConcurrency;
+
     // ── Server-side MPR reformatting (Dicom:WriteReformattedPlanes) ───────────
     // OFF by default. When ON, a reformat-eligible axial series ALSO gets
     // backend-generated CORONAL + SAGITTAL stacks, delivered as ordinary 2D
@@ -112,6 +119,7 @@ public class DicomExtractionService : IDicomExtractionService
         // only to keep ZIPs (e.g. for debugging a problematic feed).
         _deleteSourceAfterExtraction = configuration.GetValue("Dicom:DeleteSourceAfterExtraction", true);
         _writeSlicePreviews = configuration.GetValue("Dicom:WriteSlicePreviews", true);
+        _sliceUploadConcurrency = Math.Clamp(configuration.GetValue("Dicom:ExtractionSliceConcurrency", 6), 1, 32);
         _writeReformattedPlanes = configuration.GetValue("Dicom:WriteReformattedPlanes", false);
         // 256² in-plane keeps reformats triage-sharp while bounding memory + bytes
         // (these planes serve low-bandwidth/mobile, not primary full-res reads).
@@ -465,7 +473,7 @@ public class DicomExtractionService : IDicomExtractionService
             // the slices that DID succeed and only fail the extraction if none
             // did. (`series.Index` is carried as a plain int so the result tuple
             // is nameable/nullable.)
-            using var uploadGate = new SemaphoreSlim(6);
+            using var uploadGate = new SemaphoreSlim(_sliceUploadConcurrency);
             var sliceTasks = bySeries
                 .SelectMany(series => series.Slices.Select((p, i) => (seriesIndex: series.Index, p, i)))
                 .Select(async item =>
