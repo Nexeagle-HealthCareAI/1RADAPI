@@ -210,6 +210,56 @@ namespace _1Rad.Infrastructure.Services
             };
         }
 
+        // ── Multipart (parallel) upload ───────────────────────────────────────────
+        // Not implemented for Azure: the browser already parallelises large Azure
+        // uploads with the native staged-block protocol (PUT ...&comp=block then
+        // &comp=blocklist) against the single write SAS this service mints — it
+        // needs no server-minted per-part URLs. The client detects the Azure
+        // backend and routes large uploads down that block path, so it never calls
+        // these. They throw (rather than silently no-op) to surface a mis-route.
+        public Task<MultipartUploadInit> InitiateMultipartUploadAsync(string blobPath, string containerName, int partCount, TimeSpan validFor, string? contentType = null)
+            => throw new NotSupportedException("Multipart upload is S3/MinIO-only; Azure uploads use the client-side staged-block protocol against the write SAS.");
+
+        public Task CompleteMultipartUploadAsync(string blobPath, string containerName, string uploadId, IEnumerable<MultipartCompletedPart> parts)
+            => throw new NotSupportedException("Multipart upload is S3/MinIO-only; Azure uploads use the client-side staged-block protocol against the write SAS.");
+
+        public Task AbortMultipartUploadAsync(string blobPath, string containerName, string uploadId)
+            => Task.CompletedTask; // nothing staged server-side on Azure
+
+        // Short-lived read SAS so the browser can download the blob directly.
+        // Returns the URL unchanged if SAS can't be generated (e.g. MSI-only auth).
+        public string GeneratePresignedReadUrl(string fileUrl, TimeSpan validFor)
+        {
+            if (string.IsNullOrEmpty(fileUrl)) return fileUrl;
+            try
+            {
+                var uri = new Uri(fileUrl);
+                var segs = uri.AbsolutePath.TrimStart('/').Split('/', 2);
+                if (segs.Length < 2) return fileUrl;
+                var container = segs[0];
+                var blobName = Uri.UnescapeDataString(segs[1]);
+
+                var blobClient = _blobServiceClient.GetBlobContainerClient(container).GetBlobClient(blobName);
+                if (!blobClient.CanGenerateSasUri) return fileUrl;
+
+                var sas = new BlobSasBuilder
+                {
+                    BlobContainerName = container,
+                    BlobName = blobName,
+                    Resource = "b",
+                    StartsOn = DateTimeOffset.UtcNow.AddMinutes(-5),
+                    ExpiresOn = DateTimeOffset.UtcNow.Add(validFor),
+                    Protocol = SasProtocol.Https,
+                };
+                sas.SetPermissions(BlobSasPermissions.Read);
+                return blobClient.GenerateSasUri(sas).ToString();
+            }
+            catch
+            {
+                return fileUrl;
+            }
+        }
+
         public async Task<bool> BlobExistsAsync(string blobPath, string containerName)
         {
             if (string.IsNullOrWhiteSpace(blobPath) || string.IsNullOrWhiteSpace(containerName))
@@ -242,6 +292,22 @@ namespace _1Rad.Infrastructure.Services
             catch
             {
                 return 0; // missing blob / transient failure — metering treats it as unknown
+            }
+        }
+
+        public async Task<(bool Exists, long Size)> TryGetBlobInfoAsync(string blobPath, string containerName)
+        {
+            if (string.IsNullOrWhiteSpace(blobPath) || string.IsNullOrWhiteSpace(containerName))
+                return (false, 0);
+            try
+            {
+                var blobClient = _blobServiceClient.GetBlobContainerClient(containerName).GetBlobClient(blobPath);
+                var props = await blobClient.GetPropertiesAsync();
+                return (true, props.Value.ContentLength);
+            }
+            catch (Azure.RequestFailedException ex) when (ex.Status == 404)
+            {
+                return (false, 0);
             }
         }
 

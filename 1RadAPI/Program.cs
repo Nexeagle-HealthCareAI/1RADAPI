@@ -128,11 +128,24 @@ builder.Services.AddCors(options =>
 // access to the repo could forge tokens for environments that forgot to
 // configure the secret.
 var jwtSettings = builder.Configuration.GetSection("Jwt");
-var secretKey = jwtSettings["Secret"]
-    ?? throw new InvalidOperationException(
-        "Jwt:Secret is required but was not configured. " +
+var secretKey = jwtSettings["Secret"];
+// `??` alone only catches a MISSING key. An env var set to an empty string —
+// e.g. `Jwt__Secret=` rendered from a blank JWT_SECRET CI secret — reads as ""
+// (not null), slips past a null check, and reaches
+// `new SymmetricSecurityKey([])`, which throws the cryptic
+// "IDX10703: key length is zero" at startup. Validate presence AND length here
+// so the failure names the real problem instead of crash-looping the container.
+if (string.IsNullOrWhiteSpace(secretKey))
+    throw new InvalidOperationException(
+        "Jwt:Secret is required but was empty or not configured. " +
         "Set it via App Service Configuration (Prod), appsettings.Development.json (local dev), " +
-        "or the Jwt__Secret environment variable.");
+        "or the Jwt__Secret environment variable (check the JWT_SECRET CI secret isn't blank).");
+// HMAC-SHA256 needs a key of at least 256 bits (32 bytes); a shorter one throws
+// "IDX10653" the first time a token is signed/validated. Fail fast at startup.
+if (Encoding.UTF8.GetByteCount(secretKey) < 32)
+    throw new InvalidOperationException(
+        $"Jwt:Secret is too short ({Encoding.UTF8.GetByteCount(secretKey)} bytes). " +
+        "HMAC-SHA256 requires at least 32 bytes (256 bits) — use a longer random secret.");
 
 builder.Services.AddAuthentication(options =>
 {

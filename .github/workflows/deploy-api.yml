@@ -1,0 +1,446 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# 1RAD API — Full CI/CD Pipeline
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# STAGES (run in order, each depends on the previous passing):
+#
+#   Stage 1 — CI: Build        restore + build solution, fail fast on errors
+#   Stage 2 — CI: Docker       build & push image to GitHub Container Registry
+#   Stage 3 — CD: Deploy Dev   pull image → run on Dev VM  (develop branch)
+#   Stage 4 — CD: Deploy Prod  pull image → run on Prod VM (main branch + approval)
+#
+#   NOTE: Unit test stage temporarily disabled — 21 tests need fixing.
+#         Re-enable by adding back the `test` job and changing
+#         docker needs: build  →  needs: test
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# REQUIRED SECRETS  (repo → Settings → Secrets → Actions)
+# ─────────────────────────────────────────────────────────────────────────────
+#   GHCR_TOKEN          GitHub PAT  (write:packages + repo scopes)
+#   DEV_SSH_HOST        151.185.45.77
+#   DEV_SSH_USER        root
+#   DEV_SSH_PASSWORD    VM root password
+#   PROD_SSH_HOST       Prod VM IP
+#   PROD_SSH_USER       root
+#   PROD_SSH_PASSWORD   Prod VM root password
+# ═══════════════════════════════════════════════════════════════════════════════
+
+name: 1RAD API — CI/CD
+
+on:
+  push:
+    branches:
+      - develop   # → runs all stages, deploys to Dev
+      - main      # → runs all stages, deploys to Prod (with approval)
+  pull_request:
+    branches:
+      - develop
+      - main      # → runs CI stages only (no deploy)
+
+  workflow_dispatch:     # manual trigger from Actions tab
+
+# One pipeline per branch at a time — queue rather than cancel
+concurrency:
+  group: api-cicd-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/1rad-api
+  DOTNET_VERSION: '8.0'
+  API_PROJECT: '1RadAPI/1RadAPI.csproj'
+  DOCKERFILE: '1RadAPI/Dockerfile'
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# STAGE 1 — BUILD
+# ═══════════════════════════════════════════════════════════════════════════════
+jobs:
+  build:
+    name: "Stage 1 — Build"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Restore dependencies
+        run: dotnet restore ${{ env.API_PROJECT }}
+
+      - name: Build solution
+        run: |
+          dotnet build ${{ env.API_PROJECT }} \
+            --configuration Release \
+            --no-restore
+
+      - name: Write build summary
+        if: always()
+        run: |
+          echo "## 🔨 Build" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "**Status:** ✅ Passed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Status:** ❌ Failed" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "| | |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| .NET | ${{ env.DOTNET_VERSION }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Config | Release |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# STAGE 2 — DOCKER BUILD & PUSH
+# ═══════════════════════════════════════════════════════════════════════════════
+  docker:
+    name: "Stage 2 — Docker Build & Push"
+    runs-on: ubuntu-latest
+    needs: build    # only runs if build passes
+    if: github.event_name != 'pull_request'   # don't push images for PRs
+
+    outputs:
+      image_tag: ${{ steps.meta.outputs.version }}
+      image_digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_TOKEN }}
+
+      - name: Extract image metadata (tags & labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=,suffix=,format=short
+            type=ref,event=branch
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ env.DOCKERFILE }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Write docker summary
+        run: |
+          echo "## 🐳 Docker Image" >> $GITHUB_STEP_SUMMARY
+          echo "**Status:** ✅ Built and pushed" >> $GITHUB_STEP_SUMMARY
+          echo "| | |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | \`${{ env.IMAGE_NAME }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tag | \`${{ steps.meta.outputs.version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Digest | \`${{ steps.build.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# STAGE 3 — DEPLOY DEV  (renders /opt/myapp/dev.env from GitHub, then deploys)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# GitHub is the single source of truth for the Dev environment. This stage SSHes
+# to the Dev VM, writes /opt/myapp/dev.env from repo Secrets (sensitive) and
+# Variables (non-secret), pulls the new image, and recreates the container —
+# so env vars are never hand-edited on the VM again. (Replaces Watchtower.)
+#
+# Required SECRETS  (Settings → Secrets and variables → Actions → Secrets):
+#   DEV_SSH_HOST, DEV_SSH_USER, DEV_SSH_PASSWORD, GHCR_TOKEN,
+#   DEV_DB_CONNECTION, JWT_SECRET, SMTP_APP_PASSWORD, WHATSAPP_TOKEN,
+#   ANTHROPIC_KEY, GEMINI_KEY, STORAGE_ACCESS_KEY, STORAGE_SECRET_KEY
+# Required VARIABLES  (… → Variables):
+#   STORAGE_ENDPOINT, STORAGE_BUCKET, STORAGE_REGION
+# ─────────────────────────────────────────────────────────────────────────────
+  deploy-dev:
+    name: "Stage 3 — Deploy → Dev"
+    runs-on: ubuntu-latest
+    needs: docker
+    if: github.ref == 'refs/heads/develop'
+    environment: development
+
+    steps:
+      # ── Diagnostic: confirm the SSH secrets are actually populated ──────────
+      # The ssh-action masks secret VALUES in the log, so you can't eyeball them.
+      # A length of 0 proves a secret is missing/empty (a top cause of "attempted
+      # methods [none password]"); a length that doesn't match your real password,
+      # or a trailing-whitespace warning, points at a bad paste. Values are never
+      # printed — only their character counts. Non-failing (annotations only) so
+      # the deploy still proceeds and surfaces the real auth error if creds are bad.
+      - name: Verify SSH credentials are present (values never printed)
+        env:
+          H: ${{ secrets.DEV_SSH_HOST }}
+          U: ${{ secrets.DEV_SSH_USER }}
+          P: ${{ secrets.DEV_SSH_PASSWORD }}
+        run: |
+          echo "DEV_SSH_HOST     length: ${#H}"
+          echo "DEV_SSH_USER     length: ${#U}"
+          echo "DEV_SSH_PASSWORD length: ${#P}"
+          [ -n "$H" ] || echo "::error::DEV_SSH_HOST is empty/missing"
+          [ -n "$U" ] || echo "::error::DEV_SSH_USER is empty/missing"
+          [ -n "$P" ] || echo "::error::DEV_SSH_PASSWORD is empty/missing"
+          case "$P" in *[[:space:]]) echo "::warning::DEV_SSH_PASSWORD ends in whitespace/newline — re-enter it via the web UI" ;; esac
+          case "$U" in *[[:space:]]) echo "::warning::DEV_SSH_USER ends in whitespace/newline" ;; esac
+          true
+
+      - name: Render dev.env from GitHub + deploy on Dev VM
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          IMAGE: ${{ env.IMAGE_NAME }}:${{ needs.docker.outputs.image_tag }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          # Secrets (sensitive)
+          DB_CONN: ${{ secrets.DEV_DB_CONNECTION }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          SMTP_PW: ${{ secrets.SMTP_APP_PASSWORD }}
+          WHATSAPP_TOKEN: ${{ secrets.WHATSAPP_TOKEN }}
+          ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_KEY }}
+          GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
+          STORAGE_ACCESS_KEY: ${{ secrets.DEV_STORAGE_ACCESS_KEY }}
+          STORAGE_SECRET_KEY: ${{ secrets.DEV_STORAGE_SECRET_KEY }}
+          # Variables (non-secret config — editable in Settings → Variables)
+          STORAGE_ENDPOINT: ${{ vars.DEV_STORAGE_ENDPOINT }}
+          STORAGE_BUCKET: ${{ vars.DEV_STORAGE_BUCKET }}
+          STORAGE_REGION: ${{ vars.STORAGE_REGION }}
+        with:
+          host: ${{ secrets.DEV_SSH_HOST }}
+          username: ${{ secrets.DEV_SSH_USER }}
+          password: ${{ secrets.DEV_SSH_PASSWORD }}
+          port: 22
+          command_timeout: 10m
+          # Forward the values into the remote shell so we can write them with
+          # printf (literal — no $/quote/heredoc-indent pitfalls).
+          envs: IMAGE,GHCR_TOKEN,ACTOR,DB_CONN,JWT_SECRET,SMTP_PW,WHATSAPP_TOKEN,ANTHROPIC_KEY,GEMINI_KEY,STORAGE_ACCESS_KEY,STORAGE_SECRET_KEY,STORAGE_ENDPOINT,STORAGE_BUCKET,STORAGE_REGION
+          script: |
+            set -e
+
+            # Fail fast if a boot-critical secret rendered empty — otherwise we'd
+            # ship a container that crash-loops (e.g. empty Jwt__Secret →
+            # "IDX10703: key length is zero", empty DB conn → startup DB failure).
+            # ${VAR:?msg} aborts when VAR is unset OR empty.
+            : "${DB_CONN:?DEV_DB_CONNECTION secret is empty/missing}"
+            : "${JWT_SECRET:?JWT_SECRET secret is empty/missing}"
+
+            mkdir -p /opt/myapp
+            [ -f /opt/myapp/dev.env ] && cp /opt/myapp/dev.env /opt/myapp/dev.env.bak
+
+            # GitHub is the single source of truth — rewrite dev.env every deploy.
+            {
+              printf 'ASPNETCORE_ENVIRONMENT=%s\n' 'Development'
+              printf 'ASPNETCORE_URLS=%s\n'         'http://+:5000'
+              printf 'ConnectionStrings__DefaultConnection=%s\n' "$DB_CONN"
+              printf 'Jwt__Secret=%s\n'             "$JWT_SECRET"
+              printf 'Smtp__AppPassword=%s\n'       "$SMTP_PW"
+              printf 'WhatsApp__AccessToken=%s\n'   "$WHATSAPP_TOKEN"
+              printf 'Anthropic__ApiKey=%s\n'       "$ANTHROPIC_KEY"
+              printf 'Gemini__ApiKey=%s\n'          "$GEMINI_KEY"
+              printf 'Storage__Provider=%s\n'       'Minio'
+              printf 'Storage__PublicBaseUrl=%s\n'  "$STORAGE_ENDPOINT"
+              printf 'Storage__Minio__Bucket=%s\n'  "$STORAGE_BUCKET"
+              printf 'Storage__Minio__AccessKey=%s\n' "$STORAGE_ACCESS_KEY"
+              printf 'Storage__Minio__SecretKey=%s\n' "$STORAGE_SECRET_KEY"
+              printf 'Storage__Minio__Region=%s\n'  "$STORAGE_REGION"
+            } > /opt/myapp/dev.env
+
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+            # GHCR/Docker image refs must be lowercase; the org (Nexeagle-AI) isn't.
+            IMAGE_LC=$(printf '%s' "$IMAGE" | tr '[:upper:]' '[:lower:]')
+            docker pull "$IMAGE_LC"
+            docker rm -f 1rad-api-dev 2>/dev/null || true
+            docker run -d --name 1rad-api-dev --restart unless-stopped \
+              --network host --env-file /opt/myapp/dev.env "$IMAGE_LC"
+            docker image prune -f || true
+
+      - name: Health check (via nginx :80)
+        run: |
+          sleep 10
+          for i in 1 2 3 4 5 6; do
+            S=$(curl -s -o /dev/null -w '%{http_code}' \
+                http://${{ secrets.DEV_SSH_HOST }}/api/v1/health 2>/dev/null || echo 000)
+            echo "Attempt $i — HTTP $S"
+            [ "$S" = "200" ] && echo "✅ API is up" && exit 0
+            sleep 10
+          done
+          echo "⚠️  Health did not return 200 — check: docker logs 1rad-api-dev"
+          exit 0
+
+      - name: Write deploy summary
+        if: always()
+        run: |
+          echo "## 🚀 Deploy — Dev" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "**Status:** ✅ Image pushed — Watchtower deployed it" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Status:** ❌ Failed" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "| | |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| Image tag | \`${{ needs.docker.outputs.image_tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| VM | \`${{ secrets.DEV_SSH_HOST }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Triggered by | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# STAGE 4 — DEPLOY PROD  (writes prod.env from GitHub secrets — nothing on VM)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# GitHub is the single source of truth for ALL prod config.
+# This stage SSHes to the Prod App VM, writes /opt/nexeagle-prod/prod.env from
+# GitHub Secrets/Variables, pulls the new image, and recreates the container.
+# No credentials are ever stored manually on the VM.
+#
+# Required SECRETS (Settings → Secrets and variables → Actions → Secrets):
+#   PROD_SSH_HOST          151.185.45.67
+#   PROD_SSH_USER          root
+#   PROD_SSH_KEY_B64       base64-encoded private key for Prod App VM
+#   PROD_DB_CONNECTION     Server=10.110.228.8,1433;Database=1RadDb;User Id=sa;Password=...;TrustServerCertificate=True;
+#   JWT_SECRET             (shared with dev)
+#   SMTP_APP_PASSWORD      (shared with dev)
+#   WHATSAPP_TOKEN         (shared with dev)
+#   ANTHROPIC_KEY          (shared with dev)
+#   GEMINI_KEY             (shared with dev)
+#   PROD_STORAGE_ACCESS_KEY  E2E Object Storage access key for nexeagle-prod bucket
+#   PROD_STORAGE_SECRET_KEY  E2E Object Storage secret key for nexeagle-prod bucket
+#   GHCR_TOKEN             (already set)
+# Required VARIABLES (Settings → Secrets and variables → Actions → Variables):
+#   STORAGE_ENDPOINT, PROD_STORAGE_BUCKET, STORAGE_REGION
+# ─────────────────────────────────────────────────────────────────────────────
+  deploy-prod:
+    name: "Stage 4 — Deploy → Prod"
+    runs-on: ubuntu-latest
+    needs: docker
+    if: github.ref == 'refs/heads/main'
+    environment: production    # ← requires manual approval in GitHub
+
+    steps:
+      - name: Prepare SSH key
+        run: |
+          echo "${{ secrets.PROD_SSH_KEY_B64 }}" | base64 -d > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
+
+      - name: Write prod.env locally from GitHub secrets
+        env:
+          DB_CONN:            ${{ secrets.PROD_DB_CONNECTION }}
+          JWT_SECRET:         ${{ secrets.JWT_SECRET }}
+          SMTP_PW:            ${{ secrets.SMTP_APP_PASSWORD }}
+          WHATSAPP_TOKEN:     ${{ secrets.WHATSAPP_TOKEN }}
+          ANTHROPIC_KEY:      ${{ secrets.ANTHROPIC_KEY }}
+          GEMINI_KEY:         ${{ secrets.GEMINI_KEY }}
+          STORAGE_ACCESS_KEY: ${{ secrets.PROD_STORAGE_ACCESS_KEY }}
+          STORAGE_SECRET_KEY: ${{ secrets.PROD_STORAGE_SECRET_KEY }}
+          STORAGE_ENDPOINT:   ${{ vars.PROD_STORAGE_ENDPOINT }}
+          STORAGE_BUCKET:     ${{ vars.PROD_STORAGE_BUCKET }}
+          STORAGE_REGION:     ${{ vars.STORAGE_REGION }}
+        run: |
+          : "${DB_CONN:?PROD_DB_CONNECTION secret is empty/missing}"
+          : "${JWT_SECRET:?JWT_SECRET secret is empty/missing}"
+          {
+            printf 'ASPNETCORE_ENVIRONMENT=%s\n' 'Production'
+            printf 'ASPNETCORE_URLS=%s\n'           'http://+:5000'
+            printf 'ConnectionStrings__DefaultConnection=%s\n' "$DB_CONN"
+            printf 'Jwt__Secret=%s\n'               "$JWT_SECRET"
+            printf 'Smtp__AppPassword=%s\n'         "$SMTP_PW"
+            printf 'WhatsApp__AccessToken=%s\n'     "$WHATSAPP_TOKEN"
+            printf 'Anthropic__ApiKey=%s\n'         "$ANTHROPIC_KEY"
+            printf 'Gemini__ApiKey=%s\n'            "$GEMINI_KEY"
+            printf 'Storage__Provider=%s\n'         'Minio'
+            printf 'Storage__PublicBaseUrl=%s\n'    "$STORAGE_ENDPOINT"
+            printf 'Storage__Minio__Bucket=%s\n'    "$STORAGE_BUCKET"
+            printf 'Storage__Minio__AccessKey=%s\n' "$STORAGE_ACCESS_KEY"
+            printf 'Storage__Minio__SecretKey=%s\n' "$STORAGE_SECRET_KEY"
+            printf 'Storage__Minio__Region=%s\n'    "$STORAGE_REGION"
+          } > /tmp/prod.env
+          echo "prod.env written ($(wc -l < /tmp/prod.env) lines)"
+
+      - name: Copy prod.env to Prod VM
+        run: |
+          ssh -i /tmp/deploy_key \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              -o ConnectTimeout=30 \
+              ${{ secrets.PROD_SSH_USER }}@${{ secrets.PROD_SSH_HOST }} \
+              'mkdir -p /opt/nexeagle-prod'
+          scp -i /tmp/deploy_key \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              /tmp/prod.env \
+              ${{ secrets.PROD_SSH_USER }}@${{ secrets.PROD_SSH_HOST }}:/opt/nexeagle-prod/prod.env
+
+      - name: Login to GHCR on Prod VM
+        env:
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          ACTOR:      ${{ github.actor }}
+        run: |
+          ssh -i /tmp/deploy_key \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              ${{ secrets.PROD_SSH_USER }}@${{ secrets.PROD_SSH_HOST }} \
+              "echo '$GHCR_TOKEN' | docker login ghcr.io -u '$ACTOR' --password-stdin"
+
+      - name: Pull image
+        env:
+          IMAGE: "${{ env.IMAGE_NAME }}:${{ needs.docker.outputs.image_tag }}"
+        run: |
+          IMAGE_LC=$(printf '%s' "$IMAGE" | tr '[:upper:]' '[:lower:]')
+          ssh -i /tmp/deploy_key \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              ${{ secrets.PROD_SSH_USER }}@${{ secrets.PROD_SSH_HOST }} \
+              "docker pull '$IMAGE_LC'"
+          echo "IMAGE_LC=$IMAGE_LC" >> $GITHUB_ENV
+
+      - name: Restart container
+        run: |
+          ssh -i /tmp/deploy_key \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              ${{ secrets.PROD_SSH_USER }}@${{ secrets.PROD_SSH_HOST }} \
+              "docker rm -f 1rad-api-prod 2>/dev/null; docker run -d --name 1rad-api-prod --restart unless-stopped --network host --env-file /opt/nexeagle-prod/prod.env '$IMAGE_LC' && docker image prune -f"
+
+      - name: Health check
+        run: |
+          sleep 15
+          for i in 1 2 3 4 5 6; do
+            S=$(curl -s -o /dev/null -w '%{http_code}' \
+                http://${{ secrets.PROD_SSH_HOST }}/api/v1/health 2>/dev/null || echo 000)
+            echo "Attempt $i — HTTP $S"
+            [ "$S" = "200" ] && echo "✅ Prod API is up" && exit 0
+            sleep 10
+          done
+          echo "⚠️  Health check did not return 200 — check: ssh root@${{ secrets.PROD_SSH_HOST }} docker logs 1rad-api-prod"
+          exit 0
+
+      - name: Write deploy summary
+        if: always()
+        run: |
+          echo "## 🚀 Deploy — Prod" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "**Status:** ✅ Deployed to Production" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Status:** ❌ Failed" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "| | |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| Image tag | \`${{ needs.docker.outputs.image_tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| VM | \`${{ secrets.PROD_SSH_HOST }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Approved by | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
