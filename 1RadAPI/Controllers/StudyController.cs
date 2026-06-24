@@ -657,10 +657,14 @@ namespace _1RadAPI.Controllers
                 foreach (var a in lazyAppointment) _extractionQueue.Enqueue(a.Id);
             }
 
-            // Reload with slices included for the manifest DTOs.
+            // Reload with slices included for the manifest DTOs. AsNoTracking:
+            // this query is a pure read for serialization (never mutated), so
+            // skipping EF change-tracking avoids tracking hundreds of slice
+            // entities + their MetadataJson on every viewer open.
             assets = await _context.StudyAssets
                 .Where(a => a.AppointmentId == appointment.AppointmentId)
                 .Include(a => a.Slices)
+                .AsNoTracking()
                 .OrderByDescending(a => a.UploadedAt)
                 .ToListAsync(cancellationToken);
 
@@ -695,22 +699,32 @@ namespace _1RadAPI.Controllers
             if (study == null)
                 return NotFound(new { success = false, error = "Imaging study not found." });
 
-            var assets = await _context.StudyAssets
+            // Lightweight tracked pass for the lazy-extraction fallback only —
+            // NeedsLazyExtraction reads FileType/ExtractionStatus, not slices, so
+            // this query skips the heavy .Include(Slices). NON-BLOCKING: enqueue
+            // for the worker; the frontend polls and shows "processing" until
+            // slices are ready.
+            var statusAssets = await _context.StudyAssets
                 .Where(a => a.ImagingStudyId == study.Id)
-                .Include(a => a.Slices)
-                .OrderByDescending(a => a.UploadedAt)
                 .ToListAsync(cancellationToken);
-
-            // Same lazy-extraction fallback as the by-appointment route, but
-            // NON-BLOCKING: enqueue for the worker; the frontend polls and
-            // shows "processing" until slices are ready.
-            var lazyStudy = assets.Where(NeedsLazyExtraction).ToList();
+            var lazyStudy = statusAssets.Where(NeedsLazyExtraction).ToList();
             if (lazyStudy.Count > 0)
             {
                 foreach (var a in lazyStudy) a.ExtractionStatus = "Queued";
                 await _context.SaveChangesAsync(cancellationToken);
                 foreach (var a in lazyStudy) _extractionQueue.Enqueue(a.Id);
             }
+
+            // Read-only reload WITH slices for the DTOs. AsNoTracking skips
+            // change-tracking hundreds of slice entities (pure waste — the
+            // manifest is serialized, never mutated). Reflects the "Queued"
+            // status just persisted above.
+            var assets = await _context.StudyAssets
+                .Where(a => a.ImagingStudyId == study.Id)
+                .Include(a => a.Slices)
+                .AsNoTracking()
+                .OrderByDescending(a => a.UploadedAt)
+                .ToListAsync(cancellationToken);
 
             return Ok(new
             {
