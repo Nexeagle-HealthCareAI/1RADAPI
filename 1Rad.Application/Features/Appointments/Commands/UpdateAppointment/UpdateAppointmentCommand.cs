@@ -39,6 +39,10 @@ public record UpdateAppointmentCommand(
     string? Mobile = null,
     string? PatientAge = null,
     string? PatientGender = null,
+    string? Village = null,
+    string? District = null,
+    string? Address = null,
+    string? SourceOfInfo = null,
     decimal? Amount = null,
     decimal? ReferralCutValue = null,
     // Clinical urgency: STAT / URGENT / ROUTINE. Null = leave unchanged.
@@ -188,10 +192,15 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         // Update the underlying Patient entity as well
         if (appointment.Patient != null)
         {
-            if (!string.IsNullOrEmpty(request.PatientName)) appointment.Patient.FullName = NameNormalizer.Upper(request.PatientName);
-            if (!string.IsNullOrEmpty(request.Mobile)) appointment.Patient.Mobile = request.Mobile;
-            if (!string.IsNullOrEmpty(request.PatientAge)) appointment.Patient.Age = request.PatientAge;
-            if (!string.IsNullOrEmpty(request.PatientGender)) appointment.Patient.Gender = request.PatientGender;
+            appointment.Patient.FullName = NameNormalizer.Upper(request.PatientName ?? string.Empty);
+            appointment.Patient.Mobile = request.Mobile;
+            appointment.Patient.Age = request.PatientAge;
+            appointment.Patient.Gender = request.PatientGender;
+            
+            appointment.Patient.Address = request.Address;
+            appointment.Patient.Village = NameNormalizer.Upper(request.Village);
+            appointment.Patient.District = NameNormalizer.Upper(request.District);
+            appointment.Patient.SourceOfInfo = request.SourceOfInfo;
         }
 
         // Load every live AppointmentService row on this visit. We reconcile

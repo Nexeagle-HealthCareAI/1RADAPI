@@ -74,14 +74,16 @@ public class HospitalsController : ControllerBase
     }
 }
 
-public record UpdateHospitalDetailsRequest(
-    string HospitalName,
-    string HospitalAddress,
-    string? GSTIN,
-    string? RegistrationNumber,
-    string? PAN,
-    string? NABHNumber,
-    bool IsAutoBillingEnabled = false);
+public class UpdateHospitalDetailsRequest
+{
+    public string HospitalName { get; set; } = string.Empty;
+    public string HospitalAddress { get; set; } = string.Empty;
+    public string? GSTIN { get; set; }
+    public string? RegistrationNumber { get; set; }
+    public string? PAN { get; set; }
+    public string? NABHNumber { get; set; }
+    public bool IsAutoBillingEnabled { get; set; }
+}
 
 public record CreateChainRequest(
     string ChainName,

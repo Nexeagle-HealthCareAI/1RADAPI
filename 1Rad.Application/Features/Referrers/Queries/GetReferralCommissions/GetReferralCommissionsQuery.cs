@@ -83,7 +83,12 @@ public class GetReferralCommissionsQueryHandler : IRequestHandler<GetReferralCom
                 Commission = c,
                 ReferrerName = c.Referrer.Name,
                 ReferrerIsDoctor = c.Referrer.IsDoctor,
-                SupportedByDoctor = c.Referrer.SupportedByDoctor,
+                // Look up the specific supported doctor for this visit from the Appointment;
+                // fall back to the Agent's default profile if missing.
+                SupportedByDoctor = _context.Appointments
+                    .Where(a => a.AppointmentId == c.AppointmentId)
+                    .Select(a => a.SupportedByDoctor)
+                    .FirstOrDefault() ?? c.Referrer.SupportedByDoctor,
                 // Join with Appointments/Patients to get the true identity
                 PatientName = _context.Appointments
                     .Where(a => a.AppointmentId == c.AppointmentId)

@@ -1,0 +1,16 @@
+{
+	"folders": [
+		{
+			"path": "../.."
+		},
+		{
+			"path": "../../../1RadDb"
+		},
+		{
+			"path": "../../../easyrad"
+		},
+		{
+			"path": "../../../nexegale-dicom-bridge"
+		}
+	]
+}
