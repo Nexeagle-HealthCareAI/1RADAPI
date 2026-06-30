@@ -261,6 +261,7 @@ jobs:
               printf 'Storage__Minio__AccessKey=%s\n' "$STORAGE_ACCESS_KEY"
               printf 'Storage__Minio__SecretKey=%s\n' "$STORAGE_SECRET_KEY"
               printf 'Storage__Minio__Region=%s\n'  "$STORAGE_REGION"
+              printf 'DesktopApp__InstallerUrl=%s\n' "${STORAGE_ENDPOINT%/}/$STORAGE_BUCKET/downloads/1Rad-Setup.exe"
             } > /opt/myapp/dev.env
 
             echo "$GHCR_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
@@ -369,6 +370,7 @@ jobs:
             printf 'Storage__Minio__AccessKey=%s\n' "$STORAGE_ACCESS_KEY"
             printf 'Storage__Minio__SecretKey=%s\n' "$STORAGE_SECRET_KEY"
             printf 'Storage__Minio__Region=%s\n'    "$STORAGE_REGION"
+            printf 'DesktopApp__InstallerUrl=%s\n'  "${STORAGE_ENDPOINT%/}/$STORAGE_BUCKET/downloads/1Rad-Setup.exe"
           } > /tmp/prod.env
           echo "prod.env written ($(wc -l < /tmp/prod.env) lines)"
 

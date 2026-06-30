@@ -59,7 +59,11 @@ public record AppointmentDto(
     // The per-appointment supporting doctor (set when ReferredBy is an agent).
     // Lets the edit drawer prefill THIS visit's doctor without re-typing, and
     // syncs offline like the other scalar fields.
-    string? SupportedByDoctor = null
+    string? SupportedByDoctor = null,
+    string? Village = null,
+    string? District = null,
+    string? Address = null,
+    string? SourceOfInfo = null
 );
 
 /// <summary>
