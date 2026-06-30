@@ -27,6 +27,11 @@ public record ReferralCommissionDto(
     string? ReferenceNumber,
     string? Remarks,
     string? PatientName,
+    string? PatientDisplayId = null,
+    string? PatientAge = null,
+    string? PatientGender = null,
+    string? PatientMobile = null,
+    string? ServiceName = null,
     string? PatientPaymentStatus = null,
     DateTime? UpdatedAt = null,
     DateTime? DeletedAt = null,
@@ -89,10 +94,13 @@ public class GetReferralCommissionsQueryHandler : IRequestHandler<GetReferralCom
                     .Where(a => a.AppointmentId == c.AppointmentId)
                     .Select(a => a.SupportedByDoctor)
                     .FirstOrDefault() ?? c.Referrer.SupportedByDoctor,
-                // Join with Appointments/Patients to get the true identity
-                PatientName = _context.Appointments
+                PatientDetails = _context.Appointments
                     .Where(a => a.AppointmentId == c.AppointmentId)
-                    .Select(a => a.Patient.FullName)
+                    .Select(a => new { a.Patient.FullName, a.Patient.PatientIdentifier, a.Patient.Age, a.Patient.Gender, a.Patient.Mobile })
+                    .FirstOrDefault(),
+                ServiceName = _context.Appointments
+                    .Where(a => a.AppointmentId == c.AppointmentId)
+                    .Select(a => a.Service)
                     .FirstOrDefault(),
                 // Match the commission to its invoice (AppointmentId first, then the
                 // display InvoiceId stored in ReferenceNumber).
@@ -118,7 +126,12 @@ public class GetReferralCommissionsQueryHandler : IRequestHandler<GetReferralCom
                 x.Commission.Status ?? "UNPAID",
                 x.Commission.ReferenceNumber,
                 x.Commission.Remarks,
-                x.PatientName ?? "Unknown Patient",
+                x.PatientDetails?.FullName ?? "Unknown Patient",
+                x.PatientDetails?.PatientIdentifier,
+                x.PatientDetails?.Age,
+                x.PatientDetails?.Gender,
+                x.PatientDetails?.Mobile,
+                x.ServiceName,
                 ResolvePatientPaymentStatus(x.Invoice?.PaidAmount, x.Invoice?.TotalAmount, x.Invoice?.Status),
                 x.Commission.UpdatedAt,
                 x.Commission.DeletedAt,
