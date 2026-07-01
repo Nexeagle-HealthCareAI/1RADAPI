@@ -90,7 +90,17 @@ public class GetAppointmentByIdQueryHandler : IRequestHandler<GetAppointmentById
                 x.Appointment.Patient != null ? (x.Appointment.Patient.Village ?? string.Empty) : string.Empty,
                 x.Appointment.Patient != null ? (x.Appointment.Patient.District ?? string.Empty) : string.Empty,
                 x.Appointment.Patient != null ? (x.Appointment.Patient.Address ?? string.Empty) : string.Empty,
-                x.Appointment.Patient != null ? (x.Appointment.Patient.SourceOfInfo ?? string.Empty) : string.Empty
+                x.Appointment.Patient != null ? (x.Appointment.Patient.SourceOfInfo ?? string.Empty) : string.Empty,
+                // Referrer Degree
+                _context.Referrers
+                    .Where(r => r.HospitalId == x.Appointment.HospitalId && r.Name == x.Appointment.ReferredBy)
+                    .Select(r => r.Degree)
+                    .FirstOrDefault(),
+                // Referrer Specialty
+                _context.Referrers
+                    .Where(r => r.HospitalId == x.Appointment.HospitalId && r.Name == x.Appointment.ReferredBy)
+                    .Select(r => r.Specialty)
+                    .FirstOrDefault()
             ))
 
             .FirstOrDefaultAsync(cancellationToken);

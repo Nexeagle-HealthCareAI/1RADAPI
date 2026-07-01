@@ -159,7 +159,9 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
                     x.Appointment.Patient != null ? (x.Appointment.Patient.Village ?? string.Empty) : string.Empty,
                     x.Appointment.Patient != null ? (x.Appointment.Patient.District ?? string.Empty) : string.Empty,
                     x.Appointment.Patient != null ? (x.Appointment.Patient.Address ?? string.Empty) : string.Empty,
-                    x.Appointment.Patient != null ? (x.Appointment.Patient.SourceOfInfo ?? string.Empty) : string.Empty
+                    x.Appointment.Patient != null ? (x.Appointment.Patient.SourceOfInfo ?? string.Empty) : string.Empty,
+                    (string?)null, // ReferrerDegree
+                    (string?)null  // ReferrerSpecialty
                 ))
                 .ToListAsync(cancellationToken);
 
