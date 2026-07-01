@@ -239,7 +239,7 @@ app.MapGet("/", context =>
     return Task.CompletedTask;
 });
 
-app.UseHttpsRedirection();
+// app.UseHttpsRedirection();
 
 app.UseCors("AllowedOrigins"); // Enable CORS
 
