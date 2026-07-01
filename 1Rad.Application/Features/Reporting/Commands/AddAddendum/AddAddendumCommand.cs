@@ -15,7 +15,7 @@ namespace _1Rad.Application.Features.Reporting.Commands.AddAddendum;
 /// </summary>
 public record AddAddendumCommand : IRequest<DiagnosticReport>
 {
-    public string AppointmentId { get; init; } = string.Empty;
+    public string? AppointmentId { get; init; }
     public Guid? ImagingStudyId { get; init; }
     public Guid? AppointmentServiceId { get; init; }
 

@@ -8,7 +8,7 @@ namespace _1Rad.Application.Features.Reporting.Commands.GenerateVoiceReport;
 
 public record GenerateVoiceReportCommand : IRequest<GenerateVoiceReportResult>
 {
-    public string AppointmentId { get; init; } = string.Empty;
+    public string? AppointmentId { get; init; }
     // Multi-service rollout (batch-3 fix). When supplied, the dictation
     // context handed to Claude Haiku names this specific service line
     // — so a CT report dictation isn't seeded with the X-ray service

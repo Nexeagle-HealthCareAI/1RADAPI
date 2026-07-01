@@ -7,7 +7,7 @@ namespace _1Rad.Application.Features.Reporting.Queries.GetReport;
 
 public record GetReportQuery : IRequest<DiagnosticReport?>
 {
-    public string AppointmentId { get; init; } = string.Empty;
+    public string? AppointmentId { get; init; }
     // Multi-service rollout (step 6). When supplied, returns the report
     // scoped to this specific AppointmentService line. Null = legacy
     // behaviour: return the earliest-created report on the visit,
