@@ -8,7 +8,7 @@ namespace _1Rad.Application.Features.Reporting.Commands.SaveReport;
 
 public record SaveReportCommand : IRequest<DiagnosticReport>
 {
-    public string AppointmentId { get; init; } = string.Empty;
+    public string? AppointmentId { get; init; }
 
     // Cloud PACS-only: report written directly against an ImagingStudy with no
     // visit. Mutually exclusive with AppointmentId — when set, the report is
