@@ -63,7 +63,9 @@ public record AppointmentDto(
     string? Village = null,
     string? District = null,
     string? Address = null,
-    string? SourceOfInfo = null
+    string? SourceOfInfo = null,
+    string? ReferrerDegree = null,
+    string? ReferrerSpecialty = null
 );
 
 /// <summary>
