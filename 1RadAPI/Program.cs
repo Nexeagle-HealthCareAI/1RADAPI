@@ -35,6 +35,7 @@ builder.WebHost.ConfigureKestrel(options =>
     options.Limits.MaxRequestBodySize = 524288000; // 500MB
 });
 
+builder.Services.AddHttpClient();
 builder.Services.AddEndpointsApiExplorer();
 
 // Enhanced Swagger with Security Definitions
