@@ -102,14 +102,42 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
             .GroupBy(s => s.AppointmentId)
             .ToDictionary(g => g.Key, g => g.ToList());
 
+        // 4c. Fetch merge mappings
+        var allReferrers = await _context.Referrers
+            .AsNoTracking()
+            .Where(r => r.HospitalId == hospitalId)
+            .Select(r => new { r.ReferrerId, r.MergedIntoId, r.Name, r.Contact, r.Address })
+            .ToListAsync(cancellationToken);
+            
+        var mergeMap = allReferrers.ToDictionary(r => r.ReferrerId, r => r.MergedIntoId);
+        var referrersDict = allReferrers.ToDictionary(r => r.ReferrerId);
+
+        Guid ResolveReferrer(Guid id)
+        {
+            var current = id;
+            var visited = new HashSet<Guid>();
+            while (mergeMap.TryGetValue(current, out var next) && next.HasValue)
+            {
+                if (!visited.Add(current)) break; // cycle protection
+                current = next.Value;
+            }
+            return current;
+        }
+
         // 5. Aggregate Intelligence by Referrer Node. Self / walk-in is NOT a
         // partner — collapse every self visit into a SINGLE node (keyed on
         // Guid.Empty, labelled "Self / Walk-in") so it can be shown as its own
         // section on the Referrals page instead of polluting the partner list.
         var result = missionData
-            .GroupBy(m => NameNormalizer.SameName(m.ReferrerName, "Self") ? Guid.Empty : m.ReferrerId)
+            .GroupBy(m => NameNormalizer.SameName(m.ReferrerName, "Self") ? Guid.Empty : ResolveReferrer(m.ReferrerId))
             .Select(g => {
                 var isSelfGroup = NameNormalizer.SameName(g.First().ReferrerName, "Self");
+                var rootReferrerId = g.Key;
+                var rootReferrer = rootReferrerId != Guid.Empty && referrersDict.TryGetValue(rootReferrerId, out var r) ? r : null;
+                var rootName = rootReferrer?.Name ?? (isSelfGroup ? "Self / Walk-in" : g.First().ReferrerName);
+                var rootContact = rootReferrer?.Contact ?? (isSelfGroup ? "" : g.First().ReferrerContact);
+                var rootAddress = rootReferrer?.Address ?? (isSelfGroup ? "" : g.First().ReferrerAddress);
+
                 var missionsList = g.Select(m =>
                 {
                     // Per-service breakdown for this appointment. Commission
@@ -151,7 +179,7 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
                         m.Commissions.Sum(c => c.CommissionAmount),
                         m.Commissions.Any(c => c.Status.Equals("UNPAID", StringComparison.OrdinalIgnoreCase)) ? "Unpaid" : "Paid",
                         m.Financials.TotalAmount,
-                        m.ReferrerName,
+                        rootName,
                         m.Financials.DiscountAmount,
                         lines
                     );
@@ -163,10 +191,10 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
                 var totalDisc = missionsList.Sum(p => p.DiscountAmount);
 
                 return new ReferrerIntelligenceDto(
-                    g.Key,
-                    isSelfGroup ? "Self / Walk-in" : g.First().ReferrerName,
-                    isSelfGroup ? "" : g.First().ReferrerContact,
-                    isSelfGroup ? "" : g.First().ReferrerAddress,
+                    rootReferrerId,
+                    rootName,
+                    rootContact,
+                    rootAddress,
                     missionsList.Count,
                     missionsList,
                     totalComm,

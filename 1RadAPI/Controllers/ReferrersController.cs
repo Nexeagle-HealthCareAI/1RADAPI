@@ -14,6 +14,8 @@ using _1Rad.Application.Features.Referrers.Commands.RecordReferralCommission;
 using _1Rad.Application.Features.Referrers.Commands.RecordReferralCommissions;
 using _1Rad.Application.Features.Referrers.Commands.UpdateReferralCommission;
 using _1Rad.Application.Features.Referrers.Commands.UpdateReferralCommissionStatus;
+using _1Rad.Application.Features.Referrers.Commands.MergeReferrers;
+using _1Rad.Application.Features.Referrers.Commands.UnmergeReferrer;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -172,6 +174,20 @@ public class ReferrersController : ControllerBase
     public async Task<IActionResult> UpdateStatus(Guid id, [FromBody] string status)
     {
         var result = await _mediator.Send(new UpdateReferralCommissionStatusCommand(id, status));
+        return Ok(result);
+    }
+
+    [HttpPost("merge")]
+    public async Task<IActionResult> Merge([FromBody] MergeReferrersCommand command)
+    {
+        var result = await _mediator.Send(command);
+        return Ok(result);
+    }
+
+    [HttpPost("{id}/unmerge")]
+    public async Task<IActionResult> Unmerge(Guid id)
+    {
+        var result = await _mediator.Send(new UnmergeReferrerCommand(id));
         return Ok(result);
     }
 }
