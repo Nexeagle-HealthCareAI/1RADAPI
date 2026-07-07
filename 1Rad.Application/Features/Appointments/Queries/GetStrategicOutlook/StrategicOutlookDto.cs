@@ -46,6 +46,7 @@ public record DemographicSnapshot(
     GenderBrief Gender,
     List<AgeTier> AgeGroups,
     List<GeographicMetric> Villages,
+    List<GeographicMetric> Blocks,
     List<GeographicMetric> Districts
 );
 

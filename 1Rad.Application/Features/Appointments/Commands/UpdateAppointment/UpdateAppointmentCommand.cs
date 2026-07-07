@@ -40,6 +40,7 @@ public record UpdateAppointmentCommand(
     string? PatientAge = null,
     string? PatientGender = null,
     string? Village = null,
+    string? Block = null,
     string? District = null,
     string? Address = null,
     string? SourceOfInfo = null,
@@ -199,6 +200,7 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             
             appointment.Patient.Address = request.Address;
             appointment.Patient.Village = NameNormalizer.Upper(request.Village);
+            appointment.Patient.Block = NameNormalizer.Upper(request.Block);
             appointment.Patient.District = NameNormalizer.Upper(request.District);
             appointment.Patient.SourceOfInfo = request.SourceOfInfo;
         }
