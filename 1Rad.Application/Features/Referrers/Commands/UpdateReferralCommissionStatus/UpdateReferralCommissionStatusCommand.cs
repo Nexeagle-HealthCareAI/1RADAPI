@@ -6,7 +6,13 @@ namespace _1Rad.Application.Features.Referrers.Commands.UpdateReferralCommission
 
 public record UpdateReferralCommissionStatusCommand(
     Guid CommissionId,
-    string Status
+    string Status,
+    string? PaidBy = null,
+    string? PayeeName = null,
+    string? PayeeContact = null,
+    string? PayeeEmail = null,
+    string? PayeeAddress = null,
+    string? UpdatedBy = null
 ) : IRequest<bool>;
 
 public class UpdateReferralCommissionStatusCommandHandler : IRequestHandler<UpdateReferralCommissionStatusCommand, bool>
@@ -30,7 +36,15 @@ public class UpdateReferralCommissionStatusCommandHandler : IRequestHandler<Upda
         if (request.Status == "PAID")
         {
             commission.PaymentDate = DateTime.UtcNow;
+            // Persist mandatory disbursement details when marking as PAID.
+            if (!string.IsNullOrWhiteSpace(request.PaidBy))    commission.PaidBy       = request.PaidBy;
+            if (!string.IsNullOrWhiteSpace(request.PayeeName)) commission.PayeeName    = request.PayeeName;
+            if (!string.IsNullOrWhiteSpace(request.PayeeContact)) commission.PayeeContact = request.PayeeContact;
+            if (!string.IsNullOrWhiteSpace(request.PayeeEmail))   commission.PayeeEmail   = request.PayeeEmail;
+            if (!string.IsNullOrWhiteSpace(request.PayeeAddress)) commission.PayeeAddress = request.PayeeAddress;
         }
+        if (!string.IsNullOrWhiteSpace(request.UpdatedBy)) commission.UpdatedBy = request.UpdatedBy;
+        commission.UpdatedAt = DateTime.UtcNow;
 
         await _context.SaveChangesAsync(cancellationToken);
         return true;

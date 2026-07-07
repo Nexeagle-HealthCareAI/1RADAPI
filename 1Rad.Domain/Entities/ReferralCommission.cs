@@ -45,6 +45,16 @@ public class ReferralCommission : BaseEntity, IHospitalContext
     // pays whoever is named here, falling back to the referrer when null.
     public string? PayeeName { get; set; }
     public string? PayeeContact { get; set; }
+
+    // Extended payout tracking — who sent the payment and full recipient details.
+    // These are mandatory when marking a commission PAID (migration 84).
+    public string? PaidBy { get; set; }          // Name of staff / user who disbursed
+    public string? PayeeEmail { get; set; }
+    public string? PayeeAddress { get; set; }
+
+    // Audit trail
+    public string? CreatedBy { get; set; }
+    public string? UpdatedBy { get; set; }
     
     // Multi-Facility Context
     public Guid HospitalId { get; set; }

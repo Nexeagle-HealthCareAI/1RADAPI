@@ -171,9 +171,12 @@ public class ReferrersController : ControllerBase
     }
 
     [HttpPatch("commissions/{id}/status")]
-    public async Task<IActionResult> UpdateStatus(Guid id, [FromBody] string status)
+    public async Task<IActionResult> UpdateStatus(Guid id, [FromBody] CommissionStatusUpdateDto dto)
     {
-        var result = await _mediator.Send(new UpdateReferralCommissionStatusCommand(id, status));
+        var result = await _mediator.Send(new UpdateReferralCommissionStatusCommand(
+            id, dto.Status,
+            dto.PaidBy, dto.PayeeName, dto.PayeeContact,
+            dto.PayeeEmail, dto.PayeeAddress, dto.UpdatedBy));
         return Ok(result);
     }
 
@@ -191,3 +194,14 @@ public class ReferrersController : ControllerBase
         return Ok(result);
     }
 }
+
+/// <summary>Request body for PATCH /commissions/{id}/status.</summary>
+public record CommissionStatusUpdateDto(
+    string Status,
+    string? PaidBy = null,
+    string? PayeeName = null,
+    string? PayeeContact = null,
+    string? PayeeEmail = null,
+    string? PayeeAddress = null,
+    string? UpdatedBy = null
+);

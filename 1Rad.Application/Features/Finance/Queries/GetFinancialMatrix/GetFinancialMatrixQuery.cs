@@ -76,6 +76,18 @@ public class ModalityProfitabilityDto
     public double OperatingMarginPercentage { get; set; }
     public double EquipmentRoiRatio { get; set; }
     public decimal BreakEvenScansNeeded { get; set; }
+    public List<ServiceProfitabilityDto> Services { get; set; } = new();
+}
+
+public class ServiceProfitabilityDto
+{
+    public string ServiceName { get; set; } = string.Empty;
+    public int ScanCount { get; set; }
+    public decimal GrossRevenue { get; set; }
+    public decimal ReferralCut { get; set; }
+    public decimal NetRevenue { get; set; }
+    public double MarginPercentage { get; set; }
+    public double CollectionEfficiency { get; set; }
 }
 
 public class ReferralContributionDto
@@ -245,6 +257,7 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                                 x.i.InstitutionalDeduction,
                                 x.i.Status,
                                 Modality = a != null ? a.Modality : "GENERAL",
+                                Service = a != null ? a.Service : "OTHER",
                                 HasReferrer = a != null && !string.IsNullOrEmpty(a.ReferredBy),
                                 ReferredBy = a != null ? a.ReferredBy : null
                             })
@@ -487,6 +500,30 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                     var avgNetYield = count > 0 ? net / count : 0m;
                     var breakEven = avgNetYield > 0 ? Math.Round(operatingCost / avgNetYield, 1) : 0m;
 
+                    // Calculate Service Breakdown
+                    var services = g.GroupBy(x => x.Service)
+                        .Select(sg =>
+                        {
+                            var svcCount = sg.Count();
+                            var svcGross = sg.Sum(x => x.GrossAmount);
+                            var svcCut = sg.Sum(x => x.ReferralCutValue);
+                            var svcNet = svcGross - svcCut;
+                            var svcPaid = sg.Sum(x => x.PaidAmount);
+
+                            return new ServiceProfitabilityDto
+                            {
+                                ServiceName = (sg.Key ?? "OTHER").ToUpper(),
+                                ScanCount = svcCount,
+                                GrossRevenue = svcGross,
+                                ReferralCut = svcCut,
+                                NetRevenue = svcNet,
+                                MarginPercentage = svcGross > 0 ? (double)Math.Round((svcNet / svcGross) * 100, 1) : 0,
+                                CollectionEfficiency = svcGross > 0 ? (double)Math.Round((svcPaid / svcGross) * 100, 1) : 0
+                            };
+                        })
+                        .OrderByDescending(s => s.GrossRevenue)
+                        .ToList();
+
                     return new ModalityProfitabilityDto
                     {
                         Modality = mod,
@@ -500,7 +537,8 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                         NetOperatingProfit = netOpProfit,
                         OperatingMarginPercentage = opMarginPct,
                         EquipmentRoiRatio = roi,
-                        BreakEvenScansNeeded = breakEven
+                        BreakEvenScansNeeded = breakEven,
+                        Services = services
                     };
                 })
                 .OrderByDescending(m => m.GrossRevenue)
