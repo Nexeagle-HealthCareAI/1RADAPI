@@ -15,6 +15,7 @@ public record UpdatePatientCommand(
     string Age,
     string Gender,
     string Village,
+    string Block,
     string District,
     string Address,
     string SourceOfInfo,
@@ -42,6 +43,7 @@ public class UpdatePatientCommandHandler : IRequestHandler<UpdatePatientCommand,
         patient.Age = request.Age;
         patient.Gender = request.Gender;
         patient.Village = NameNormalizer.Upper(request.Village);
+        patient.Block = NameNormalizer.Upper(request.Block);
         patient.District = NameNormalizer.Upper(request.District);
         patient.Address = NameNormalizer.Upper(request.Address);
         patient.SourceOfInfo = request.SourceOfInfo;

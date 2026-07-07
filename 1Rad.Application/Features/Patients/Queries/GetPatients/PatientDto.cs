@@ -7,6 +7,7 @@ public record PatientDto(
     string Age,
     string Gender,
     string Village,
+    string Block,
     string District,
     string Address,
     string PatientIdentifier,

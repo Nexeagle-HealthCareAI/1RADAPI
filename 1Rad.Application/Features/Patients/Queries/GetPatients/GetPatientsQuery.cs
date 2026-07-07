@@ -80,6 +80,7 @@ public class GetPatientsQueryHandler : IRequestHandler<GetPatientsQuery, List<Pa
                 p.Age ?? string.Empty,
                 p.Gender ?? string.Empty,
                 p.Village ?? string.Empty,
+                p.Block ?? string.Empty,
                 p.District ?? string.Empty,
                 p.Address ?? string.Empty,
                 p.PatientIdentifier ?? string.Empty,

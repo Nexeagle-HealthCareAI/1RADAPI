@@ -61,6 +61,7 @@ public record AppointmentDto(
     // syncs offline like the other scalar fields.
     string? SupportedByDoctor = null,
     string? Village = null,
+    string? Block = null,
     string? District = null,
     string? Address = null,
     string? SourceOfInfo = null,

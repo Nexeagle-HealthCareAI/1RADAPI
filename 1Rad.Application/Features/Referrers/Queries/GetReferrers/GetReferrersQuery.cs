@@ -59,7 +59,8 @@ public class GetReferrersQueryHandler : IRequestHandler<GetReferrersQuery, List<
                 r.Specialty,
                 r.Degree,
                 r.IsDoctor,
-                r.SupportedByDoctor
+                r.SupportedByDoctor,
+                r.MergedIntoId
             ))
             .ToListAsync(cancellationToken);
     }

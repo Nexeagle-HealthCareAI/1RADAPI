@@ -65,13 +65,44 @@ public class GetReferralCommissionsQueryHandler : IRequestHandler<GetReferralCom
             .Where(c => c.HospitalId == hospitalId)
             .AsQueryable();
 
+        // 1b. Build Merge Map for Referrer Aliases
+        var allReferrers = await _context.Referrers
+            .AsNoTracking()
+            .Where(r => r.HospitalId == hospitalId)
+            .Select(r => new { r.ReferrerId, r.MergedIntoId, r.Name, r.IsDoctor, r.SupportedByDoctor })
+            .ToListAsync(cancellationToken);
+            
+        var mergeMap = allReferrers.ToDictionary(r => r.ReferrerId, r => r.MergedIntoId);
+        var referrersDict = allReferrers.ToDictionary(r => r.ReferrerId);
+
+        Guid ResolveReferrer(Guid id)
+        {
+            var current = id;
+            var visited = new HashSet<Guid>();
+            while (mergeMap.TryGetValue(current, out var next) && next.HasValue)
+            {
+                if (!visited.Add(current)) break;
+                current = next.Value;
+            }
+            return current;
+        }
+
         // 2. Apply Filters
         if (!request.IncludeDeleted)
             commissionsQuery = commissionsQuery.Where(c => c.DeletedAt == null);
         if (request.UpdatedAfter.HasValue)
             commissionsQuery = commissionsQuery.Where(c => c.UpdatedAt > request.UpdatedAfter.Value);
+        
         if (request.ReferrerId.HasValue)
-            commissionsQuery = commissionsQuery.Where(c => c.ReferrerId == request.ReferrerId.Value);
+        {
+            var targetId = ResolveReferrer(request.ReferrerId.Value);
+            var allMatchingIds = allReferrers
+                .Where(r => ResolveReferrer(r.ReferrerId) == targetId)
+                .Select(r => r.ReferrerId)
+                .ToList();
+                
+            commissionsQuery = commissionsQuery.Where(c => allMatchingIds.Contains(c.ReferrerId));
+        }
 
         if (request.StartDate.HasValue)
             commissionsQuery = commissionsQuery.Where(c => c.TransactionDate >= request.StartDate.Value);
@@ -113,10 +144,14 @@ public class GetReferralCommissionsQueryHandler : IRequestHandler<GetReferralCom
             })
             .ToListAsync(cancellationToken);
 
-        return raw.Select(x => new ReferralCommissionDto(
+        return raw.Select(x => {
+            var primaryId = ResolveReferrer(x.Commission.ReferrerId);
+            var primaryRef = referrersDict.TryGetValue(primaryId, out var r) ? r : null;
+
+            return new ReferralCommissionDto(
                 x.Commission.Id,
-                x.Commission.ReferrerId,
-                x.ReferrerName ?? x.Commission.ReferrerName ?? "Unknown Referrer",
+                primaryId,
+                primaryRef?.Name ?? x.ReferrerName ?? x.Commission.ReferrerName ?? "Unknown Referrer",
                 x.Commission.Modality ?? "Unknown",
                 x.Commission.CommissionAmount,
                 x.Commission.AccumulatedTotal,
@@ -137,10 +172,11 @@ public class GetReferralCommissionsQueryHandler : IRequestHandler<GetReferralCom
                 x.Commission.DeletedAt,
                 x.Commission.PayeeName,
                 x.Commission.PayeeContact,
-                x.ReferrerIsDoctor,
-                x.SupportedByDoctor,
+                primaryRef?.IsDoctor ?? x.ReferrerIsDoctor,
+                primaryRef?.SupportedByDoctor ?? x.SupportedByDoctor,
                 x.Commission.AppointmentId
-            )).ToList();
+            );
+        }).ToList();
     }
 
     /// <summary>

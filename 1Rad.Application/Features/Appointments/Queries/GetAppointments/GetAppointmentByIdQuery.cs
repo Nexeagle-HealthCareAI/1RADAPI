@@ -88,6 +88,7 @@ public class GetAppointmentByIdQueryHandler : IRequestHandler<GetAppointmentById
                     ?? x.Appointment.ReferredBy,
                 x.Appointment.SupportedByDoctor,
                 x.Appointment.Patient != null ? (x.Appointment.Patient.Village ?? string.Empty) : string.Empty,
+                x.Appointment.Patient != null ? (x.Appointment.Patient.Block ?? string.Empty) : string.Empty,
                 x.Appointment.Patient != null ? (x.Appointment.Patient.District ?? string.Empty) : string.Empty,
                 x.Appointment.Patient != null ? (x.Appointment.Patient.Address ?? string.Empty) : string.Empty,
                 x.Appointment.Patient != null ? (x.Appointment.Patient.SourceOfInfo ?? string.Empty) : string.Empty,

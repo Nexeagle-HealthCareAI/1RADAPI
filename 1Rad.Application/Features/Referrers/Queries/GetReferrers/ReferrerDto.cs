@@ -14,5 +14,6 @@ public record ReferrerDto(
     string? Degree = null,
     // Payee-first model: kind of referral source + the doctor an agent supports.
     bool IsDoctor = true,
-    string? SupportedByDoctor = null
+    string? SupportedByDoctor = null,
+    Guid? MergedIntoId = null
 );

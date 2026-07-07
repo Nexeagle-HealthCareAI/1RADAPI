@@ -12,6 +12,7 @@ public record CreatePatientCommand(
     string Age,
     string Gender,
     string Village,
+    string Block,
     string District,
     string Address,
     string SourceOfInfo,
@@ -55,6 +56,7 @@ public class CreatePatientCommandHandler : IRequestHandler<CreatePatientCommand,
             existingPatient.Age = request.Age;
             existingPatient.Gender = request.Gender;
             existingPatient.Village = request.Village;
+            existingPatient.Block = request.Block;
             existingPatient.District = request.District;
             existingPatient.Address = request.Address;
             existingPatient.SourceOfInfo = request.SourceOfInfo;
@@ -77,6 +79,7 @@ public class CreatePatientCommandHandler : IRequestHandler<CreatePatientCommand,
             Age = request.Age,
             Gender = request.Gender,
             Village = NameNormalizer.Upper(request.Village),
+            Block = NameNormalizer.Upper(request.Block),
             District = NameNormalizer.Upper(request.District),
             Address = NameNormalizer.Upper(request.Address),
             SourceOfInfo = request.SourceOfInfo,

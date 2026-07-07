@@ -29,6 +29,11 @@ public class Referrer : BaseEntity, IHospitalContext
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? DeletedAt { get; set; }
 
+    // Merging Support
+    public Guid? MergedIntoId { get; set; }
+    public Referrer? MergedInto { get; set; }
+    public ICollection<Referrer> MergedDuplicates { get; set; } = new List<Referrer>();
+
     // Navigation
     public Hospital Hospital { get; set; } = null!;
     public ICollection<Patient> Patients { get; set; } = new List<Patient>();

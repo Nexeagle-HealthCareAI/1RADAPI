@@ -282,7 +282,7 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
             // --- 5. DEMOGRAPHIC SNAPSHOT ---
             var hospitalPatients = await _context.Patients
                 .Where(p => p.HospitalId == hospitalId && p.CreatedAt >= rangeStart && p.CreatedAt < rangeEnd)
-                .Select(p => new { p.Gender, p.Age, p.Village, p.District })
+                .Select(p => new { p.Gender, p.Age, p.Village, p.Block, p.District })
                 .ToListAsync(cancellationToken);
 
             var genderBrief = new GenderBrief(
@@ -308,6 +308,17 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
 
             var villageMetrics = hospitalPatients
                 .GroupBy(p => string.IsNullOrWhiteSpace(p.Village) ? "Unknown" : p.Village.Trim())
+                .Select(g => new GeographicMetric(
+                    g.Key, 
+                    g.Count(), 
+                    hospitalPatients.Count > 0 ? (double)g.Count() / hospitalPatients.Count * 100 : 0
+                ))
+                .OrderByDescending(g => g.Count)
+                .Take(10)
+                .ToList();
+
+            var blockMetrics = hospitalPatients
+                .GroupBy(p => string.IsNullOrWhiteSpace(p.Block) ? "Unknown" : p.Block.Trim())
                 .Select(g => new GeographicMetric(
                     g.Key, 
                     g.Count(), 
@@ -400,7 +411,7 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
                 .Select(g => new QueueMetric(g.Key ?? "UNKNOWN", g.Count()))
                 .ToListAsync(cancellationToken);
 
-            return new StrategicOutlookDto(kpis, modalities, revenueBreakdown, trend, new DemographicSnapshot(genderBrief, ageTiers, villageMetrics, districtMetrics), topSources, loyalty, fidelity, pendingQueues);
+            return new StrategicOutlookDto(kpis, modalities, revenueBreakdown, trend, new DemographicSnapshot(genderBrief, ageTiers, villageMetrics, blockMetrics, districtMetrics), topSources, loyalty, fidelity, pendingQueues);
         }
         catch (Exception)
         {
@@ -410,7 +421,7 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
                 new List<ModalityMetric>(),
                 new List<ModalityRevenue>(),
                 Enumerable.Range(0, 7).Select(i => new VolumeDataPoint($"Day {i}", 0, false)).ToList(),
-                new DemographicSnapshot(new GenderBrief(0, 0, 0), new List<AgeTier>(), new List<GeographicMetric>(), new List<GeographicMetric>()),
+                new DemographicSnapshot(new GenderBrief(0, 0, 0), new List<AgeTier>(), new List<GeographicMetric>(), new List<GeographicMetric>(), new List<GeographicMetric>()),
                 new List<SourceMetric>(),
                 new InstitutionalLoyalty(0, 0, 0),
                 new ServiceFidelity(0, 0, "FLAT", 0),
