@@ -208,7 +208,7 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
                 // practice — a centre with >200 invoices changed in 30s
                 // is implausible. If it ever happens the next pull picks
                 // up the rest.
-                .Take(200)
+                .Take(request.IncludeDeleted ? 100000 : 200)
                 .ToListAsync(cancellationToken);
 
             // ── Batched referrer + commission resolution ──────────────────
