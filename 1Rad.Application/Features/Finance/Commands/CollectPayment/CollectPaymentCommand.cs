@@ -24,6 +24,9 @@ public record CollectPaymentCommand : IRequest<bool>
     // zero and the excess is moved into the centre discount so the centre
     // absorbs it (no negative commission, nothing recovered from the referrer).
     public bool AbsorbExcessToCentre { get; init; }
+
+    public decimal? AdditionalCharges { get; init; }
+    public string? AdditionalChargesReason { get; init; }
 }
 
 
@@ -71,17 +74,19 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
             invoice.CentreDiscount = request.CentreDiscount ?? invoice.CentreDiscount;
             invoice.ReferrerDiscount = request.ReferrerDiscount ?? invoice.ReferrerDiscount;
             invoice.InstitutionalDeduction = request.Deduction ?? invoice.InstitutionalDeduction;
+            invoice.AdditionalCharges = request.AdditionalCharges ?? invoice.AdditionalCharges;
+            invoice.AdditionalChargesReason = request.AdditionalChargesReason ?? invoice.AdditionalChargesReason;
 
             var totalDiscount = invoice.CentreDiscount + invoice.ReferrerDiscount + invoice.InstitutionalDeduction;
             
             // Re-anchor Gross to prevent drift
             var gross = invoice.Items.Any() 
                 ? invoice.Items.Sum(x => x.Amount * x.Quantity)
-                : (invoice.GrossAmount > 0 ? invoice.GrossAmount : invoice.TotalAmount + invoice.DiscountAmount);
+                : (invoice.GrossAmount > 0 ? invoice.GrossAmount : invoice.TotalAmount + invoice.DiscountAmount - invoice.AdditionalCharges);
             
             invoice.GrossAmount = gross;
             invoice.DiscountAmount = totalDiscount;
-            invoice.TotalAmount = gross - totalDiscount;
+            invoice.TotalAmount = gross + invoice.AdditionalCharges - totalDiscount;
 
             // Handle Referrer-side adjustment (Differential logic)
             if (invoice.ReferrerDiscount != oldReferrerDiscount)
