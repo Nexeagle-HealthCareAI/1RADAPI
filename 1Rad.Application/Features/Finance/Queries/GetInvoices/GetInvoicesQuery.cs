@@ -33,6 +33,8 @@ public class InvoiceDto
     public decimal CentreDiscount { get; set; }
     public decimal ReferrerDiscount { get; set; }
     public decimal InstitutionalDeduction { get; set; }
+    public decimal AdditionalCharges { get; set; }
+    public string? AdditionalChargesReason { get; set; }
     public bool IsFree { get; set; }
     public decimal TotalAmount { get; set; }
     public decimal PaidAmount { get; set; }
@@ -157,6 +159,8 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
                     CentreDiscount = i.CentreDiscount,
                     ReferrerDiscount = i.ReferrerDiscount,
                     InstitutionalDeduction = i.InstitutionalDeduction,
+                    AdditionalCharges = i.AdditionalCharges,
+                    AdditionalChargesReason = i.AdditionalChargesReason,
                     IsFree = i.IsFree,
                     TotalAmount = i.TotalAmount,
                     PaidAmount = i.PaidAmount,
@@ -208,7 +212,7 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
                 // practice — a centre with >200 invoices changed in 30s
                 // is implausible. If it ever happens the next pull picks
                 // up the rest.
-                .Take(200)
+                .Take(request.IncludeDeleted ? 100000 : 200)
                 .ToListAsync(cancellationToken);
 
             // ── Batched referrer + commission resolution ──────────────────

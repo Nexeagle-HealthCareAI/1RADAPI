@@ -273,7 +273,9 @@ public class FinanceController : ControllerBase
             DiscountAmount = request.DiscountAmount,
             CentreDiscount = request.CentreDiscount,
             ReferrerDiscount = request.ReferrerDiscount,
-            InstitutionalDeduction = request.InstitutionalDeduction
+            InstitutionalDeduction = request.InstitutionalDeduction,
+            AdditionalCharges = request.AdditionalCharges,
+            AdditionalChargesReason = request.AdditionalChargesReason
         });
         return Ok(result);
     }
@@ -287,5 +289,5 @@ public class FinanceController : ControllerBase
 }
 
 public record UpdateExpenseStatusRequest(string Status);
-public record ApplyDiscountRequest(decimal DiscountAmount, decimal? CentreDiscount = null, decimal? ReferrerDiscount = null, decimal? InstitutionalDeduction = null);
+public record ApplyDiscountRequest(decimal DiscountAmount, decimal? CentreDiscount = null, decimal? ReferrerDiscount = null, decimal? InstitutionalDeduction = null, decimal? AdditionalCharges = null, string? AdditionalChargesReason = null);
 

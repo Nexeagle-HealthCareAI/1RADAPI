@@ -112,19 +112,77 @@ internal static class ReferrerReassign
         {
             appointment.SupportedByDoctor = null;
         }
-        appointment.UpdatedAt = DateTime.UtcNow;
+        // Keep the patient's link pointing at the corrected referrer.
+        var patient = await ctx.Patients
+            .FirstOrDefaultAsync(p => p.PatientId == appointment.PatientId, ct);
+        if (patient != null) patient.ReferrerId = referrer.ReferrerId;
 
         // Re-point this appointment's commission rows; remember who they leave.
         var commissions = await ctx.ReferralCommissions
             .Where(c => c.AppointmentId == appointmentId && c.HospitalId == hospitalId && c.DeletedAt == null)
             .ToListAsync(ct);
 
+        // Fetch all live services for this appointment so we can restore base cuts or create missing rows.
+        var services = await ctx.AppointmentServices
+            .Where(s => s.AppointmentId == appointmentId && s.DeletedAt == null)
+            .ToDictionaryAsync(s => s.Id, ct);
+
         var now = DateTime.UtcNow;
         var affected = new HashSet<Guid>();
+        
+        // If the appointment has already arrived, but it was previously "Self",
+        // the system skipped creating commission rows entirely. We need to create them now
+        // if the new referrer is NOT "Self".
+        var invoiceDisplayId = await ctx.Invoices
+            .Where(i => i.AppointmentId == appointmentId && i.DeletedAt == null)
+            .Select(i => i.InvoiceId)
+            .FirstOrDefaultAsync(ct);
+        bool hasArrived = appointment.ArrivedAt != null || invoiceDisplayId != null;
+        
+        if (hasArrived && !isSelf)
+        {
+            var hospital = await ctx.Hospitals.FirstOrDefaultAsync(h => h.HospitalId == hospitalId, ct);
+            bool autoBilling = hospital?.IsAutoBillingEnabled ?? false;
+
+            var existingServiceIds = commissions.Where(c => c.AppointmentServiceId.HasValue).Select(c => c.AppointmentServiceId!.Value).ToHashSet();
+            foreach (var svc in services.Values)
+            {
+                if (!existingServiceIds.Contains(svc.Id) && (svc.ReferralCutValue > 0 || autoBilling))
+                {
+                    var newComm = new ReferralCommission
+                    {
+                        HospitalId = hospitalId,
+                        ReferrerId = referrer.ReferrerId,
+                        ReferrerName = referrer.Name ?? name,
+                        Modality = svc.Modality,
+                        PatientName = appointment.PatientName ?? "", 
+
+                        AppointmentId = appointmentId,
+                        AppointmentServiceId = svc.Id,
+                        ReferenceNumber = invoiceDisplayId,
+                        CommissionAmount = svc.ReferralCutValue,
+                        Status = "UNPAID",
+                        TransactionDate = now,
+                        ServiceDate = appointment.DateTime,
+                    };
+                    ctx.ReferralCommissions.Add(newComm);
+                }
+            }
+        }
+
         foreach (var c in commissions)
         {
             var oldReferrerId = c.ReferrerId;
             if (oldReferrerId != Guid.Empty) affected.Add(oldReferrerId);
+
+            // Resolve the base referral cut from the original service line if possible.
+            // If the old row was "Self", its CommissionAmount is 0, so we use the base cut 
+            // from the service to correctly incentivize the newly assigned doctor.
+            decimal baseCut = c.CommissionAmount;
+            if (c.AppointmentServiceId.HasValue && services.TryGetValue(c.AppointmentServiceId.Value, out var svc))
+            {
+                baseCut = svc.ReferralCutValue;
+            }
 
             // Paid path (preserveHistory) → true double-entry: the old referrer's
             // original row is KEPT, a reversal (−amount) is booked against them, and
@@ -164,7 +222,7 @@ internal static class ReferrerReassign
                     AppointmentId = c.AppointmentId,
                     AppointmentServiceId = c.AppointmentServiceId,
                     ReferenceNumber = c.ReferenceNumber,
-                    CommissionAmount = isSelf ? 0 : amount,
+                    CommissionAmount = isSelf ? 0 : baseCut,
                     Status = "UNPAID",
                     TransactionDate = now,
                     ServiceDate = c.ServiceDate,
@@ -180,16 +238,15 @@ internal static class ReferrerReassign
                 // Move: re-point the existing row to the new referrer.
                 c.ReferrerId = referrer.ReferrerId;
                 c.ReferrerName = referrer.Name ?? name;
-                if (isSelf) c.CommissionAmount = 0; // Self / walk-in earns no cut.
+                c.CommissionAmount = isSelf ? 0 : baseCut;
+                
+                // If it was cancelled because of "Self", we revive it.
+                if (c.Status == "Cancelled" && !isSelf) c.Status = "UNPAID";
+                
                 c.UpdatedAt = now;
             }
         }
         affected.Add(referrer.ReferrerId);
-
-        // Keep the patient's link pointing at the corrected referrer.
-        var patient = await ctx.Patients
-            .FirstOrDefaultAsync(p => p.PatientId == appointment.PatientId, ct);
-        if (patient != null) patient.ReferrerId = referrer.ReferrerId;
 
         // Persist the moves so the re-base query below sees current ownership.
         await ctx.SaveChangesAsync(ct);

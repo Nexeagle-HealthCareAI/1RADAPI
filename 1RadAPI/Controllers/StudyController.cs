@@ -2394,6 +2394,20 @@ namespace _1RadAPI.Controllers
                 }
 
                 study!.MatchStatus = ImagingStudyMatchStatus.ManuallyAssigned;
+
+                // Propagate the appointment to the study's assets so the Reporting DICOM viewer
+                // (which queries StudyAssets by AppointmentId) can find them.
+                if (study.AppointmentId != null)
+                {
+                    var studyAssets = await _context.StudyAssets
+                        .Where(a => a.ImagingStudyId == studyId && a.AppointmentId == null)
+                        .ToListAsync();
+                    foreach (var asset in studyAssets)
+                    {
+                        asset.AppointmentId = study.AppointmentId;
+                    }
+                }
+
                 await _context.SaveChangesAsync(default);
 
                 return Ok(new

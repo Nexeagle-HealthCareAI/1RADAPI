@@ -109,7 +109,7 @@ public class GetExpensesQueryHandler : IRequestHandler<GetExpensesQuery, List<Ex
                     UpdatedAt = e.UpdatedAt,
                     DeletedAt = e.DeletedAt
                 })
-                .Take(500)
+                .Take(request.IncludeDeleted ? 100000 : 500)
                 .ToListAsync(cancellationToken);
         }
         catch (Exception ex)

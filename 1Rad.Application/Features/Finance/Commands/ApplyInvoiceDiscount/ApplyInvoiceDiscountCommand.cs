@@ -14,6 +14,8 @@ public record ApplyInvoiceDiscountCommand : IRequest<bool>
     public decimal? CentreDiscount { get; init; }
     public decimal? ReferrerDiscount { get; init; }
     public decimal? InstitutionalDeduction { get; init; }
+    public decimal? AdditionalCharges { get; init; }
+    public string? AdditionalChargesReason { get; init; }
 }
 
 public class ApplyInvoiceDiscountCommandHandler : IRequestHandler<ApplyInvoiceDiscountCommand, bool>
@@ -50,24 +52,27 @@ public class ApplyInvoiceDiscountCommandHandler : IRequestHandler<ApplyInvoiceDi
         // invoice restores the partial edits (centre / referrer / deduction).
         var hasBreakdown = request.CentreDiscount.HasValue
                          || request.ReferrerDiscount.HasValue
-                         || request.InstitutionalDeduction.HasValue;
+                         || request.InstitutionalDeduction.HasValue
+                         || request.AdditionalCharges.HasValue;
         if (hasBreakdown)
         {
             invoice.CentreDiscount         = request.CentreDiscount         ?? invoice.CentreDiscount;
             invoice.ReferrerDiscount       = request.ReferrerDiscount       ?? invoice.ReferrerDiscount;
             invoice.InstitutionalDeduction = request.InstitutionalDeduction ?? invoice.InstitutionalDeduction;
+            invoice.AdditionalCharges      = request.AdditionalCharges      ?? invoice.AdditionalCharges;
+            invoice.AdditionalChargesReason= request.AdditionalChargesReason?? invoice.AdditionalChargesReason;
         }
 
         var discount = hasBreakdown
             ? invoice.CentreDiscount + invoice.ReferrerDiscount + invoice.InstitutionalDeduction
             : request.DiscountAmount;
-        if (discount > grossAmount)
+        if (discount > grossAmount + invoice.AdditionalCharges)
         {
-            discount = grossAmount;
+            discount = grossAmount + invoice.AdditionalCharges;
         }
 
         invoice.DiscountAmount = discount;
-        invoice.TotalAmount = grossAmount - discount;
+        invoice.TotalAmount = grossAmount + invoice.AdditionalCharges - discount;
 
         await _context.SaveChangesAsync(cancellationToken);
         return true;
