@@ -4,7 +4,16 @@ using _1Rad.Application.Interfaces;
 
 namespace _1Rad.Application.Features.Finance.Queries.GetExpenses;
 
-public record GetExpensesQuery : IRequest<List<ExpenseDto>>
+// ── Pagination DTO ─────────────────────────────────────────────────────────
+public class PagedExpenseResult
+{
+    public List<ExpenseDto> Items { get; set; } = new();
+    public string? NextCursor { get; set; }
+    public int TotalCount { get; set; }
+    public bool IsPaged { get; set; }
+}
+
+public record GetExpensesQuery : IRequest<PagedExpenseResult>
 {
     public string? Category { get; init; }
     public string? Search { get; init; }
@@ -12,6 +21,10 @@ public record GetExpensesQuery : IRequest<List<ExpenseDto>>
     public DateTime? EndDate { get; init; }
     public DateTime? UpdatedAfter { get; init; }
     public bool IncludeDeleted { get; init; }
+    // ── Keyset pagination ──────────────────────────────────────────
+    // PageSize = 0 means “return everything” (sync engine path).
+    public int PageSize { get; init; } = 0;
+    public string? Cursor { get; init; }
 }
 
 public class ExpenseDto
@@ -32,7 +45,7 @@ public class ExpenseDto
     public DateTime? DeletedAt { get; set; }
 }
 
-public class GetExpensesQueryHandler : IRequestHandler<GetExpensesQuery, List<ExpenseDto>>
+public class GetExpensesQueryHandler : IRequestHandler<GetExpensesQuery, PagedExpenseResult>
 {
     private readonly IApplicationDbContext _context;
 
@@ -41,13 +54,13 @@ public class GetExpensesQueryHandler : IRequestHandler<GetExpensesQuery, List<Ex
         _context = context;
     }
 
-    public async Task<List<ExpenseDto>> Handle(GetExpensesQuery request, CancellationToken cancellationToken)
+    public async Task<PagedExpenseResult> Handle(GetExpensesQuery request, CancellationToken cancellationToken)
     {
         try
         {
             if (_context.UserContext.HospitalId == Guid.Empty)
             {
-                return new List<ExpenseDto>();
+                return new PagedExpenseResult();
             }
 
             var query = _context.Expenses
@@ -90,8 +103,44 @@ public class GetExpensesQueryHandler : IRequestHandler<GetExpensesQuery, List<Ex
                 query = query.Where(e => e.TransactionDate <= request.EndDate.Value);
             }
 
-            return await query
+            // ── Keyset cursor decode ──────────────────────────────────────
+            bool usePaging = request.PageSize > 0 && !request.IncludeDeleted && !request.UpdatedAfter.HasValue;
+            DateTime? cursorDate = null;
+            Guid? cursorId = null;
+            if (usePaging && !string.IsNullOrEmpty(request.Cursor))
+            {
+                try
+                {
+                    var decoded = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(request.Cursor));
+                    var parts = decoded.Split('|');
+                    if (parts.Length == 2)
+                    {
+                        cursorDate = new DateTime(long.Parse(parts[0]), DateTimeKind.Utc);
+                        cursorId   = Guid.Parse(parts[1]);
+                    }
+                }
+                catch { /* malformed cursor — treat as first page */ }
+            }
+
+            if (usePaging && cursorDate.HasValue && cursorId.HasValue)
+            {
+                query = query.Where(e =>
+                    e.TransactionDate < cursorDate.Value ||
+                    (e.TransactionDate == cursorDate.Value && e.Id < cursorId.Value));
+            }
+
+            int totalCount = 0;
+            if (usePaging)
+            {
+                totalCount = await query.CountAsync(cancellationToken);
+            }
+
+            int takeCount = usePaging ? request.PageSize + 1
+                          : (request.IncludeDeleted ? 100_000 : 500);
+
+            var result = await query
                 .OrderByDescending(e => e.TransactionDate)
+                .ThenByDescending(e => e.Id)
                 .Select(e => new ExpenseDto
                 {
                     Id = e.Id,
@@ -109,8 +158,25 @@ public class GetExpensesQueryHandler : IRequestHandler<GetExpensesQuery, List<Ex
                     UpdatedAt = e.UpdatedAt,
                     DeletedAt = e.DeletedAt
                 })
-                .Take(request.IncludeDeleted ? 100000 : 500)
+                .Take(takeCount)
                 .ToListAsync(cancellationToken);
+
+            string? nextCursor = null;
+            if (usePaging && result.Count > request.PageSize)
+            {
+                result.RemoveAt(result.Count - 1);
+                var last = result.Last();
+                var raw  = $"{last.TransactionDate.Ticks}|{last.Id}";
+                nextCursor = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(raw));
+            }
+
+            return new PagedExpenseResult
+            {
+                Items      = result,
+                NextCursor = nextCursor,
+                TotalCount = usePaging ? totalCount : result.Count,
+                IsPaged    = usePaging,
+            };
         }
         catch (Exception ex)
         {

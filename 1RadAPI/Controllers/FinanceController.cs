@@ -106,7 +106,9 @@ public class FinanceController : ControllerBase
         [FromQuery] DateTime? endDate,
         [FromQuery] DateTime? updatedAfter,
         [FromQuery] Guid? appointmentId,
-        [FromQuery] bool includeDeleted = false)
+        [FromQuery] bool includeDeleted = false,
+        [FromQuery] int pageSize = 0,
+        [FromQuery] string? cursor = null)
     {
         var result = await _mediator.Send(new GetInvoicesQuery
         {
@@ -117,7 +119,16 @@ public class FinanceController : ControllerBase
             UpdatedAfter = updatedAfter,
             AppointmentId = appointmentId,
             IncludeDeleted = includeDeleted,
+            PageSize = pageSize,
+            Cursor = cursor,
         });
+
+        // Backwards-compat: the sync engine and legacy callers that do NOT
+        // send pageSize expect a plain JSON array, not a paged envelope.
+        // Return the raw list when the query wasn't paged.
+        if (!result.IsPaged)
+            return Ok(result.Items);
+
         return Ok(result);
     }
 
@@ -211,7 +222,9 @@ public class FinanceController : ControllerBase
         [FromQuery] DateTime? startDate,
         [FromQuery] DateTime? endDate,
         [FromQuery] DateTime? updatedAfter,
-        [FromQuery] bool includeDeleted = false)
+        [FromQuery] bool includeDeleted = false,
+        [FromQuery] int pageSize = 0,
+        [FromQuery] string? cursor = null)
     {
         var result = await _mediator.Send(new GetExpensesQuery
         {
@@ -221,7 +234,12 @@ public class FinanceController : ControllerBase
             EndDate = endDate,
             UpdatedAfter = updatedAfter,
             IncludeDeleted = includeDeleted,
+            PageSize = pageSize,
+            Cursor = cursor,
         });
+        // Sync-engine / legacy callers send no pageSize — keep returning a plain array.
+        if (!result.IsPaged)
+            return Ok(result.Items);
         return Ok(result);
     }
 
