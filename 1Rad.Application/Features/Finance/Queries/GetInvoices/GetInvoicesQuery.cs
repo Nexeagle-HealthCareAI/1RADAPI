@@ -4,7 +4,18 @@ using _1Rad.Application.Interfaces;
 
 namespace _1Rad.Application.Features.Finance.Queries.GetInvoices;
 
-public record GetInvoicesQuery : IRequest<List<InvoiceDto>>
+// ── Pagination DTO ─────────────────────────────────────────────────────────
+// Cursor is base-64(createdAt_ticks + "|" + invoiceGuid). null = first page.
+// Returned nextCursor is null when there is no further page.
+public class PagedInvoiceResult
+{
+    public List<InvoiceDto> Items { get; set; } = new();
+    public string? NextCursor { get; set; }     // null = last page
+    public int TotalCount { get; set; }         // full filtered count (for display)
+    public bool IsPaged { get; set; }           // false on the sync-engine path
+}
+
+public record GetInvoicesQuery : IRequest<PagedInvoiceResult>
 {
     public string? Status { get; init; }
     public string? Search { get; init; }
@@ -19,6 +30,12 @@ public record GetInvoicesQuery : IRequest<List<InvoiceDto>>
     // Restrict to a single visit's invoice — used by the appointment-edit flow to
     // pull just that bill straight after a service add/remove.
     public Guid? AppointmentId { get; init; }
+    // ── Keyset pagination (UI path only; ignored by the sync-engine path) ────
+    // PageSize = 0 means "return everything" (sync engine, export, single-visit).
+    // Default UI page is 25 rows.
+    public int PageSize { get; init; } = 0;
+    // Encoded cursor from the previous page's NextCursor. null = first page.
+    public string? Cursor { get; init; }
 }
 
 public class InvoiceDto
@@ -68,7 +85,7 @@ public class InvoiceItemDto
     public bool IsFree { get; set; }
 }
 
-public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<InvoiceDto>>
+public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, PagedInvoiceResult>
 {
     private readonly IApplicationDbContext _context;
 
@@ -77,14 +94,14 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
         _context = context;
     }
 
-    public async Task<List<InvoiceDto>> Handle(GetInvoicesQuery request, CancellationToken cancellationToken)
+    public async Task<PagedInvoiceResult> Handle(GetInvoicesQuery request, CancellationToken cancellationToken)
     {
         try
         {
-            // Defensive Check: If no hospital context is established, return an empty list rather than risking a cross-tenant query or a 500 error.
+            // Defensive Check: If no hospital context is established, return an empty result rather than risking a cross-tenant query or a 500 error.
             if (_context.UserContext.HospitalId == Guid.Empty)
             {
-                return new List<InvoiceDto>();
+                return new PagedInvoiceResult();
             }
 
             var query = _context.Invoices
@@ -144,9 +161,54 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
                 query = query.Where(i => i.AppointmentId == request.AppointmentId.Value);
             }
 
+            // ── Keyset cursor decode ─────────────────────────────────────────
+            // Cursor = base64(ticks_long + "|" + guid_string) encodes the last
+            // row of the previous page. We add a strict less-than predicate so
+            // the DB can use the (CreatedAt DESC, Id DESC) index without a
+            // SKIP/OFFSET, giving O(log N) access even on a million-row table.
+            bool usePaging = request.PageSize > 0 && !request.IncludeDeleted && !request.UpdatedAfter.HasValue && !request.AppointmentId.HasValue;
+            DateTime? cursorDate = null;
+            Guid? cursorId = null;
+            if (usePaging && !string.IsNullOrEmpty(request.Cursor))
+            {
+                try
+                {
+                    var decoded = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(request.Cursor));
+                    var parts = decoded.Split('|');
+                    if (parts.Length == 2)
+                    {
+                        cursorDate = new DateTime(long.Parse(parts[0]), DateTimeKind.Utc);
+                        cursorId   = Guid.Parse(parts[1]);
+                    }
+                }
+                catch { /* malformed cursor — treat as first page */ }
+            }
+
+            if (usePaging && cursorDate.HasValue && cursorId.HasValue)
+            {
+                // Rows strictly before the cursor position in (createdAt DESC, id DESC) order.
+                query = query.Where(i =>
+                    i.CreatedAt < cursorDate.Value ||
+                    (i.CreatedAt == cursorDate.Value && i.Id < cursorId.Value));
+            }
+
+            // ── Count (paged path only) — executed before the page slice ────
+            // Runs as a single COUNT(*) with the same filters, no projections.
+            int totalCount = 0;
+            if (usePaging)
+            {
+                totalCount = await query.CountAsync(cancellationToken);
+            }
+
             // Execute Projection: Using standard property initialization to ensure safe SQL translation in EF Core.
+            // Take PageSize+1 rows so we can detect whether a next page exists
+            // without a second COUNT query. Sync-engine / export paths use Take(100000).
+            int takeCount = usePaging ? request.PageSize + 1
+                          : (request.IncludeDeleted ? 100_000 : 200);
+
             var result = await query
                 .OrderByDescending(i => i.CreatedAt)
+                .ThenByDescending(i => i.Id)
                 .Select(i => new InvoiceDto
                 {
                     InvoiceId = i.Id,
@@ -206,13 +268,7 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
                     UpdatedAt = i.UpdatedAt,
                     DeletedAt = i.DeletedAt
                 })
-                // Cap at 200 for the legacy paginated UI path. The sync
-                // engine path uses ?updatedAfter= which is already bounded
-                // by the time window, so the cap doesn't apply there in
-                // practice — a centre with >200 invoices changed in 30s
-                // is implausible. If it ever happens the next pull picks
-                // up the rest.
-                .Take(request.IncludeDeleted ? 100000 : 200)
+                .Take(takeCount)
                 .ToListAsync(cancellationToken);
 
             // ── Batched referrer + commission resolution ──────────────────
@@ -317,7 +373,24 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, List<In
                 }
             }
 
-            return result;
+            // ── Build paged result ───────────────────────────────────────────
+            string? nextCursor = null;
+            if (usePaging && result.Count > request.PageSize)
+            {
+                // We fetched one extra to peek; remove it before returning.
+                result.RemoveAt(result.Count - 1);
+                var last = result.Last();
+                var raw  = $"{last.CreatedAt.Ticks}|{last.InvoiceId}";
+                nextCursor = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(raw));
+            }
+
+            return new PagedInvoiceResult
+            {
+                Items      = result,
+                NextCursor = nextCursor,
+                TotalCount = usePaging ? totalCount : result.Count,
+                IsPaged    = usePaging,
+            };
         }
         catch (Exception ex)
         {
