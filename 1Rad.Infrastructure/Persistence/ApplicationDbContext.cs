@@ -40,6 +40,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<AppointmentComment> AppointmentComments => Set<AppointmentComment>();
     public DbSet<ServiceCharge> ServiceCharges => Set<ServiceCharge>();
     public DbSet<Invoice> Invoices => Set<Invoice>();
+    public DbSet<InvoiceExtraCharge> InvoiceExtraCharges => Set<InvoiceExtraCharge>();
     public DbSet<Payment> Payments => Set<Payment>();
     public DbSet<CreditTransaction> CreditTransactions => Set<CreditTransaction>();
     public DbSet<Expense> Expenses => Set<Expense>();
@@ -375,6 +376,20 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.HasOne(e => e.Hospital)
                 .WithMany()
                 .HasForeignKey(e => e.HospitalId);
+        });
+
+        // InvoiceExtraCharge Configuration
+        modelBuilder.Entity<InvoiceExtraCharge>(entity =>
+        {
+            entity.ToTable("InvoiceExtraCharges", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Reason).IsRequired().HasMaxLength(4000);
+            entity.Property(e => e.Amount).HasPrecision(18, 2);
+
+            entity.HasOne(e => e.Invoice)
+                .WithMany(i => i.ExtraCharges)
+                .HasForeignKey(e => e.InvoiceId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         // InvoiceItem Configuration

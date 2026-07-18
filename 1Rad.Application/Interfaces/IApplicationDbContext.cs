@@ -21,6 +21,7 @@ public interface IApplicationDbContext
     DbSet<AppointmentComment> AppointmentComments { get; }
     DbSet<ServiceCharge> ServiceCharges { get; }
     DbSet<Invoice> Invoices { get; }
+    DbSet<InvoiceExtraCharge> InvoiceExtraCharges { get; }
     DbSet<Payment> Payments { get; }
     DbSet<CreditTransaction> CreditTransactions { get; }
     DbSet<Expense> Expenses { get; }
