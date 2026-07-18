@@ -748,7 +748,7 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                     churnAlerts.Add(new PatientChurnAlertDto
                     {
                         PatientName = name,
-                        LastModality = lastInvoice.Modality,
+                        LastModality = lastInvoice.Modality ?? "Unknown",
                         LastScanDate = lastInvoice.ServiceDate,
                         DaysSinceLastScan = daysSince,
                         RiskLevel = daysSince > 90 ? "CRITICAL" : "ELEVATED"

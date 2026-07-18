@@ -1,6 +1,7 @@
 using MediatR;
 using _1Rad.Application.Interfaces;
 using Microsoft.EntityFrameworkCore;
+using _1Rad.Domain.Entities;
 
 namespace _1Rad.Application.Features.Finance.Commands.ApplyInvoiceDiscount;
 
