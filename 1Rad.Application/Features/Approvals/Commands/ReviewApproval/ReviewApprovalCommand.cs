@@ -147,21 +147,56 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
 
         var invoice = await _context.Invoices
             .Include(i => i.Items)
+            .Include(i => i.ExtraCharges)
             .FirstOrDefaultAsync(i => i.Id == req.InvoiceId && i.HospitalId == req.HospitalId && i.DeletedAt == null, ct);
         if (invoice == null || invoice.Status == "CANCELLED") return;
 
         var (centre, referrer, deduction) = ReadDiscounts(req.Payload);
-        // Over-commission funding choice: when true, the excess above the referrer's
-        // eligible commission is absorbed by the CENTRE (commission floored at 0)
-        // instead of carried as the referrer's deficit. Mirrors CollectPayment.
+        List<_1Rad.Application.Features.Finance.Commands.ApplyInvoiceDiscount.ExtraChargeDetail>? extraCharges = null;
+        
         bool absorbToCentre = false;
-        try { using var pd = JsonDocument.Parse(string.IsNullOrWhiteSpace(req.Payload) ? "{}" : req.Payload); absorbToCentre = GetBool(pd.RootElement, "absorbExcessToCentre") ?? false; } catch { }
+        try 
+        { 
+            using var pd = JsonDocument.Parse(string.IsNullOrWhiteSpace(req.Payload) ? "{}" : req.Payload); 
+            absorbToCentre = GetBool(pd.RootElement, "absorbExcessToCentre") ?? false; 
+            
+            if (pd.RootElement.TryGetProperty("extraCharges", out var ecEl) && ecEl.ValueKind == JsonValueKind.Array)
+            {
+                extraCharges = JsonSerializer.Deserialize<List<_1Rad.Application.Features.Finance.Commands.ApplyInvoiceDiscount.ExtraChargeDetail>>(
+                    ecEl.GetRawText(), new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            }
+        } catch { }
 
         var oldReferrerDiscount = invoice.ReferrerDiscount;
 
         invoice.CentreDiscount = centre ?? invoice.CentreDiscount;
         invoice.ReferrerDiscount = referrer ?? invoice.ReferrerDiscount;
         invoice.InstitutionalDeduction = deduction ?? invoice.InstitutionalDeduction;
+
+        if (extraCharges != null && extraCharges.Any())
+        {
+            _context.InvoiceExtraCharges.RemoveRange(invoice.ExtraCharges);
+            invoice.ExtraCharges.Clear();
+            
+            foreach (var ec in extraCharges)
+            {
+                if (ec.Amount > 0)
+                {
+                    var newCharge = new InvoiceExtraCharge
+                    {
+                        InvoiceId = invoice.Id,
+                        Reason = string.IsNullOrWhiteSpace(ec.Reason) ? "Extra Charge" : ec.Reason.Trim(),
+                        Amount = ec.Amount,
+                        CreatedAt = DateTime.UtcNow
+                    };
+                    _context.InvoiceExtraCharges.Add(newCharge);
+                    invoice.ExtraCharges.Add(newCharge);
+                }
+            }
+            
+            invoice.AdditionalCharges = invoice.ExtraCharges.Sum(x => x.Amount);
+            invoice.AdditionalChargesReason = string.Join(" | ", invoice.ExtraCharges.Select(x => $"{x.Reason}: {x.Amount}"));
+        }
 
         // Resolve the commission up-front (needed for both the absorb math and the
         // differential below).
@@ -183,7 +218,8 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
         }
 
         var totalDiscount = invoice.CentreDiscount + invoice.ReferrerDiscount + invoice.InstitutionalDeduction;
-        var gross = invoice.GrossAmount > 0 ? invoice.GrossAmount : invoice.TotalAmount + invoice.DiscountAmount;
+        var gross = (invoice.Items?.Sum(i => i.Amount * i.Quantity) ?? 0) + (invoice.AdditionalCharges);
+        if (gross <= 0) gross = invoice.GrossAmount > 0 ? invoice.GrossAmount : invoice.TotalAmount + invoice.DiscountAmount;
         invoice.GrossAmount = gross;
         invoice.DiscountAmount = totalDiscount;
         invoice.TotalAmount = gross - totalDiscount;
