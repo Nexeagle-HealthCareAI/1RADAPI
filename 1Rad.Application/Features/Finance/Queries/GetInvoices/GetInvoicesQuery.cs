@@ -66,6 +66,7 @@ public class InvoiceDto
     public string? AppointmentStatus { get; set; }
     public Guid? AppointmentId { get; set; }
     public List<InvoiceItemDto> Items { get; set; } = new();
+    public List<InvoiceExtraChargeDto> ExtraCharges { get; set; } = new();
     // Sync fields. Populated for every row the sync engine pulls.
     public DateTime? UpdatedAt { get; set; }
     public DateTime? DeletedAt { get; set; }
@@ -83,6 +84,12 @@ public class InvoiceItemDto
     public string? Modality { get; set; }
     // Per-line free test — this service is free; excluded from the payable total.
     public bool IsFree { get; set; }
+}
+
+public class InvoiceExtraChargeDto
+{
+    public string Reason { get; set; } = string.Empty;
+    public decimal Amount { get; set; }
 }
 
 public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, PagedInvoiceResult>
@@ -264,6 +271,11 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, PagedIn
                                 .Select(s => s.Modality)
                                 .FirstOrDefault()
                             : (i.Appointment != null ? i.Appointment.Modality : null)
+                    }).ToList(),
+                    ExtraCharges = i.ExtraCharges.Select(ec => new InvoiceExtraChargeDto
+                    {
+                        Reason = ec.Reason,
+                        Amount = ec.Amount
                     }).ToList(),
                     UpdatedAt = i.UpdatedAt,
                     DeletedAt = i.DeletedAt

@@ -5,6 +5,12 @@ using Microsoft.EntityFrameworkCore;
 
 namespace _1Rad.Application.Features.Finance.Commands.CollectPayment;
 
+public struct ExtraChargeDetail
+{
+    public string Reason { get; init; }
+    public decimal Amount { get; init; }
+}
+
 public record CollectPaymentCommand : IRequest<bool>
 {
     public Guid InvoiceId { get; init; }
@@ -27,6 +33,8 @@ public record CollectPaymentCommand : IRequest<bool>
 
     public decimal? AdditionalCharges { get; init; }
     public string? AdditionalChargesReason { get; init; }
+
+    public List<ExtraChargeDetail>? ExtraCharges { get; init; }
 }
 
 
@@ -55,6 +63,7 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
             var invoice = await _context.Invoices
                 .Include(i => i.Payments)
                 .Include(i => i.Items)
+                .Include(i => i.ExtraCharges)
                 .FirstOrDefaultAsync(i => i.Id == request.InvoiceId && i.HospitalId == _context.UserContext.HospitalId, cancellationToken);
             
             if (invoice == null)
@@ -74,8 +83,38 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
             invoice.CentreDiscount = request.CentreDiscount ?? invoice.CentreDiscount;
             invoice.ReferrerDiscount = request.ReferrerDiscount ?? invoice.ReferrerDiscount;
             invoice.InstitutionalDeduction = request.Deduction ?? invoice.InstitutionalDeduction;
-            invoice.AdditionalCharges = request.AdditionalCharges ?? invoice.AdditionalCharges;
-            invoice.AdditionalChargesReason = request.AdditionalChargesReason ?? invoice.AdditionalChargesReason;
+            
+            // Process new ExtraCharges list if provided, otherwise fallback to legacy scalars
+            if (request.ExtraCharges != null && request.ExtraCharges.Any())
+            {
+                _context.InvoiceExtraCharges.RemoveRange(invoice.ExtraCharges);
+                invoice.ExtraCharges.Clear();
+                
+                foreach (var ec in request.ExtraCharges)
+                {
+                    if (ec.Amount > 0)
+                    {
+                        var newCharge = new InvoiceExtraCharge
+                        {
+                            InvoiceId = invoice.Id,
+                            Reason = string.IsNullOrWhiteSpace(ec.Reason) ? "Extra Charge" : ec.Reason.Trim(),
+                            Amount = ec.Amount,
+                            CreatedAt = DateTime.UtcNow
+                        };
+                        _context.InvoiceExtraCharges.Add(newCharge);
+                        invoice.ExtraCharges.Add(newCharge);
+                    }
+                }
+                
+                // Aggregate into the main fields for fast reading/backward compatibility
+                invoice.AdditionalCharges = invoice.ExtraCharges.Sum(x => x.Amount);
+                invoice.AdditionalChargesReason = string.Join(" | ", invoice.ExtraCharges.Select(x => $"{x.Reason}: {x.Amount}"));
+            }
+            else
+            {
+                invoice.AdditionalCharges = request.AdditionalCharges ?? invoice.AdditionalCharges;
+                invoice.AdditionalChargesReason = request.AdditionalChargesReason ?? invoice.AdditionalChargesReason;
+            }
 
             var totalDiscount = invoice.CentreDiscount + invoice.ReferrerDiscount + invoice.InstitutionalDeduction;
             

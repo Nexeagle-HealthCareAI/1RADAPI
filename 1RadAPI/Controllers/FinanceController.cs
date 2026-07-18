@@ -293,7 +293,8 @@ public class FinanceController : ControllerBase
             ReferrerDiscount = request.ReferrerDiscount,
             InstitutionalDeduction = request.InstitutionalDeduction,
             AdditionalCharges = request.AdditionalCharges,
-            AdditionalChargesReason = request.AdditionalChargesReason
+            AdditionalChargesReason = request.AdditionalChargesReason,
+            ExtraCharges = request.ExtraCharges
         });
         return Ok(result);
     }
@@ -307,5 +308,5 @@ public class FinanceController : ControllerBase
 }
 
 public record UpdateExpenseStatusRequest(string Status);
-public record ApplyDiscountRequest(decimal DiscountAmount, decimal? CentreDiscount = null, decimal? ReferrerDiscount = null, decimal? InstitutionalDeduction = null, decimal? AdditionalCharges = null, string? AdditionalChargesReason = null);
+public record ApplyDiscountRequest(decimal DiscountAmount, decimal? CentreDiscount = null, decimal? ReferrerDiscount = null, decimal? InstitutionalDeduction = null, decimal? AdditionalCharges = null, string? AdditionalChargesReason = null, List<_1Rad.Application.Features.Finance.Commands.ApplyInvoiceDiscount.ExtraChargeDetail>? ExtraCharges = null);
 

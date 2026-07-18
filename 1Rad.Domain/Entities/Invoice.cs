@@ -58,4 +58,5 @@ public class Invoice : BaseEntity, IHospitalContext
     public Appointment? Appointment { get; set; }
     public ICollection<InvoiceItem> Items { get; set; } = new List<InvoiceItem>();
     public ICollection<Payment> Payments { get; set; } = new List<Payment>();
+    public ICollection<InvoiceExtraCharge> ExtraCharges { get; set; } = new List<InvoiceExtraCharge>();
 }
