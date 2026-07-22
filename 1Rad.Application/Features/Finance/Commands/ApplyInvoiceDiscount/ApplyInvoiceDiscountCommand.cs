@@ -71,7 +71,14 @@ public class ApplyInvoiceDiscountCommandHandler : IRequestHandler<ApplyInvoiceDi
             
             if (request.ExtraCharges != null && request.ExtraCharges.Any())
             {
-                _context.InvoiceExtraCharges.RemoveRange(invoice.ExtraCharges);
+                // Re-query by InvoiceId to avoid EF tracking mismatches (same
+                // fix as CollectPaymentCommand — navigation collection state can
+                // diverge from what's in the DB after a prior draft cycle).
+                var existingCharges = await _context.InvoiceExtraCharges
+                    .Where(ec => ec.InvoiceId == invoice.Id)
+                    .ToListAsync(cancellationToken);
+                if (existingCharges.Count > 0)
+                    _context.InvoiceExtraCharges.RemoveRange(existingCharges);
                 invoice.ExtraCharges.Clear();
                 
                 foreach (var ec in request.ExtraCharges)

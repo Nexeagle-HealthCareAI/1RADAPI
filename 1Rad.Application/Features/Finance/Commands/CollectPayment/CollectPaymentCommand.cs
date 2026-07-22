@@ -78,6 +78,9 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
 
             // Record Previous State for Commission Differential
             var oldReferrerDiscount = invoice.ReferrerDiscount;
+            // Capture original AdditionalCharges BEFORE we mutate it in the
+            // ExtraCharges block below — needed for the correct gross fallback.
+            var originalAdditionalCharges = invoice.AdditionalCharges;
 
             // Update Deduction Vectors (Overwrite with request values if provided, else keep existing)
             invoice.CentreDiscount = request.CentreDiscount ?? invoice.CentreDiscount;
@@ -87,7 +90,15 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
             // Process new ExtraCharges list if provided, otherwise fallback to legacy scalars
             if (request.ExtraCharges != null && request.ExtraCharges.Any())
             {
-                _context.InvoiceExtraCharges.RemoveRange(invoice.ExtraCharges);
+                // Re-query by InvoiceId to avoid EF tracking mismatches that can
+                // leave stale rows when the navigation collection was populated by a
+                // prior draft-save cycle (the tracked state may differ from what's
+                // actually in the DB, causing RemoveRange to silently skip records).
+                var existingCharges = await _context.InvoiceExtraCharges
+                    .Where(ec => ec.InvoiceId == invoice.Id)
+                    .ToListAsync(cancellationToken);
+                if (existingCharges.Count > 0)
+                    _context.InvoiceExtraCharges.RemoveRange(existingCharges);
                 invoice.ExtraCharges.Clear();
                 
                 foreach (var ec in request.ExtraCharges)
@@ -118,10 +129,14 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
 
             var totalDiscount = invoice.CentreDiscount + invoice.ReferrerDiscount + invoice.InstitutionalDeduction;
             
-            // Re-anchor Gross to prevent drift
+            // Re-anchor Gross to prevent drift.
+            // IMPORTANT: use originalAdditionalCharges (captured before mutation)
+            // in the fallback formula, not invoice.AdditionalCharges which was
+            // already updated above. This prevents extra charges from vanishing or
+            // inflating when there are no Items rows to sum directly.
             var gross = invoice.Items.Any() 
                 ? invoice.Items.Sum(x => x.Amount * x.Quantity)
-                : (invoice.GrossAmount > 0 ? invoice.GrossAmount : invoice.TotalAmount + invoice.DiscountAmount - invoice.AdditionalCharges);
+                : (invoice.GrossAmount > 0 ? invoice.GrossAmount : invoice.TotalAmount + invoice.DiscountAmount - originalAdditionalCharges);
             
             invoice.GrossAmount = gross;
             invoice.DiscountAmount = totalDiscount;
