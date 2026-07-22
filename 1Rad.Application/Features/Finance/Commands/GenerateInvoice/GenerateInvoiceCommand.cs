@@ -107,6 +107,37 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
                 {
                     throw new InvalidOperationException("This appointment already has an active invoice.");
                 }
+
+                // One invoice per appointment must cover every live service on it.
+                // A second invoice for the same appointment is blocked (above), so a
+                // service silently left off this one would become permanently
+                // unbillable through this appointment — the only thing that would
+                // ever pick it up is UpdateAppointmentCommand's edit-time
+                // reconciler, which folds it into THIS invoice's total the next
+                // time the appointment is edited for any reason, changing what was
+                // billed without anyone deliberately choosing to bill it. Enforce
+                // full coverage up front instead: remove the SERVICE from the
+                // appointment first if it genuinely shouldn't be billed here.
+                var liveServiceIds = await _context.AppointmentServices
+                    .Where(s => s.AppointmentId == request.AppointmentId.Value && s.DeletedAt == null)
+                    .Select(s => s.Id)
+                    .ToListAsync(cancellationToken);
+                if (liveServiceIds.Count > 0)
+                {
+                    var coveredIds = request.Items
+                        .Where(i => i.AppointmentServiceId.HasValue)
+                        .Select(i => i.AppointmentServiceId!.Value)
+                        .ToHashSet();
+                    var missingCount = liveServiceIds.Count(id => !coveredIds.Contains(id));
+                    if (missingCount > 0)
+                    {
+                        throw new ArgumentException(
+                            $"This invoice is missing {missingCount} service(s) from the appointment. " +
+                            "An invoice must cover every live service on the visit — remove the service from " +
+                            "the appointment itself (Edit) if it shouldn't be billed at all, rather than " +
+                            "omitting it from this invoice.");
+                    }
+                }
             }
 
             var grossAmount = request.Items.Sum(x => x.Amount * x.Quantity);

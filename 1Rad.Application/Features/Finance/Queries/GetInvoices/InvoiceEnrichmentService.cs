@@ -30,6 +30,7 @@ public class InvoiceEnrichmentService : IInvoiceEnrichmentService
             var comms = await _context.ReferralCommissions
                 .AsNoTracking()
                 .Where(c => c.HospitalId == commHospitalId
+                    && c.DeletedAt == null
                     && ((c.AppointmentId != null && commApptIds.Contains(c.AppointmentId.Value))
                         || (c.ReferenceNumber != null && commDisplayIds.Contains(c.ReferenceNumber))))
                 .Select(c => new { c.Id, c.AppointmentId, c.ReferenceNumber, c.ReferrerId, c.ReferrerName, c.CommissionAmount })

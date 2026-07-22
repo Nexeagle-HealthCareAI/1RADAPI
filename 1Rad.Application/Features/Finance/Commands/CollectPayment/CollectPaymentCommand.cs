@@ -171,46 +171,78 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
             // Handle Referrer-side adjustment (Differential logic)
             if (invoice.ReferrerDiscount != oldReferrerDiscount)
             {
-                var commission = await _context.ReferralCommissions
-                    .FirstOrDefaultAsync(c =>
+                // Multi-service appointments carry ONE ReferralCommission row PER
+                // SERVICE (see UpdateAppointmentStatusCommand.GenerateBillingOnArrivalAsync),
+                // all sharing this invoice's AppointmentId/ReferenceNumber. The
+                // invoice-level ReferrerDiscount is a single aggregate figure, so the
+                // differential must be spread across the WHOLE group — picking just
+                // one row (the old FirstOrDefaultAsync) silently corrupted sibling
+                // services' commissions on multi-service visits.
+                var commissions = await _context.ReferralCommissions
+                    .Where(c =>
                         (c.AppointmentId == invoice.AppointmentId || (c.ReferenceNumber == invoice.InvoiceId && c.ReferenceNumber != null)) &&
-                        c.HospitalId == _context.UserContext.HospitalId, cancellationToken);
+                        c.HospitalId == _context.UserContext.HospitalId &&
+                        c.DeletedAt == null)
+                    .ToListAsync(cancellationToken);
 
-                // Eligible commission before any referral concession this cycle.
-                var baseCommission = (commission?.CommissionAmount ?? 0) + oldReferrerDiscount;
-
-                // Over-commission funded by the CENTRE: floor the commission at zero
-                // and shift the excess into the centre discount so the centre — not
-                // the referrer — absorbs it. The patient's total is unchanged (the
-                // excess only moves between the two discount buckets), so just the
-                // split + commission change.
-                if (request.AbsorbExcessToCentre && invoice.ReferrerDiscount > baseCommission)
+                if (commissions.Count > 0)
                 {
-                    var excess = invoice.ReferrerDiscount - baseCommission;
-                    invoice.CentreDiscount += excess;
-                    invoice.ReferrerDiscount = baseCommission;
-                    invoice.DiscountAmount = invoice.CentreDiscount + invoice.ReferrerDiscount + invoice.InstitutionalDeduction;
-                    invoice.TotalAmount = invoice.GrossAmount - invoice.DiscountAmount;
-                    if (commission != null)
-                        commission.Remarks = (commission.Remarks ?? "") + $" [Excess ₹{excess:0.##} absorbed by centre]";
-                }
+                    // Eligible commission pool before any referral concession this cycle.
+                    var currentTotal = commissions.Sum(c => c.CommissionAmount);
+                    var baseCommission = currentTotal + oldReferrerDiscount;
 
-                if (commission != null)
-                {
-                    commission.CommissionAmount += oldReferrerDiscount; // Revert
-                    commission.CommissionAmount -= invoice.ReferrerDiscount; // Apply New
-                    commission.Remarks = (commission.Remarks ?? "") + $" [Adj: ₹{oldReferrerDiscount} -> ₹{invoice.ReferrerDiscount}]";
-
-                    // Over-commission concession → the commission is now negative; the
-                    // doctor carries that deficit, recovered from future referrals. Audit
-                    // the authoriser (the authenticated user) + reason so the credit
-                    // decision is traceable. The amount itself is intentionally NOT
-                    // clamped to zero — the negative is the whole point.
-                    if (commission.CommissionAmount < 0)
+                    // Over-commission funded by the CENTRE: floor the pool at zero and
+                    // shift the excess into the centre discount so the centre — not the
+                    // referrer — absorbs it. The patient's total is unchanged (the excess
+                    // only moves between the two discount buckets), so just the split +
+                    // commission change.
+                    if (request.AbsorbExcessToCentre && invoice.ReferrerDiscount > baseCommission)
                     {
-                        var deficit = Math.Abs(commission.CommissionAmount);
-                        var reason = string.IsNullOrWhiteSpace(request.DeficitReason) ? "" : $" — {request.DeficitReason.Trim()}";
-                        commission.Remarks += $" [DEFICIT ₹{deficit:0.##} authorised by user {_context.UserContext.UserId}{reason}]";
+                        var excess = invoice.ReferrerDiscount - baseCommission;
+                        invoice.CentreDiscount += excess;
+                        invoice.ReferrerDiscount = baseCommission;
+                        invoice.DiscountAmount = invoice.CentreDiscount + invoice.ReferrerDiscount + invoice.InstitutionalDeduction;
+                        invoice.TotalAmount = invoice.GrossAmount - invoice.DiscountAmount;
+                        foreach (var c in commissions)
+                            c.Remarks = (c.Remarks ?? "") + $" [Excess ₹{excess:0.##} absorbed by centre]";
+                    }
+
+                    // Spread the new pool across the group proportionally to each row's
+                    // current share, so no single service silently absorbs the whole
+                    // invoice-level concession. The last row takes the rounding remainder
+                    // so the group sum lands exactly on (baseCommission - ReferrerDiscount).
+                    var newTotal = baseCommission - invoice.ReferrerDiscount;
+                    var allocated = 0m;
+                    for (var i = 0; i < commissions.Count; i++)
+                    {
+                        var c = commissions[i];
+                        decimal rowNew;
+                        if (i == commissions.Count - 1)
+                        {
+                            rowNew = newTotal - allocated;
+                        }
+                        else
+                        {
+                            var share = currentTotal != 0 ? c.CommissionAmount / currentTotal : 1m / commissions.Count;
+                            rowNew = Math.Round(newTotal * share, 2);
+                            allocated += rowNew;
+                        }
+
+                        var oldRowAmount = c.CommissionAmount;
+                        c.CommissionAmount = rowNew;
+                        c.Remarks = (c.Remarks ?? "") + $" [Adj: ₹{oldRowAmount:0.##} -> ₹{rowNew:0.##} (referrer discount ₹{oldReferrerDiscount:0.##} -> ₹{invoice.ReferrerDiscount:0.##})]";
+
+                        // Over-commission concession → the commission is now negative; the
+                        // doctor carries that deficit, recovered from future referrals. Audit
+                        // the authoriser (the authenticated user) + reason so the credit
+                        // decision is traceable. The amount itself is intentionally NOT
+                        // clamped to zero — the negative is the whole point.
+                        if (c.CommissionAmount < 0)
+                        {
+                            var deficit = Math.Abs(c.CommissionAmount);
+                            var reason = string.IsNullOrWhiteSpace(request.DeficitReason) ? "" : $" — {request.DeficitReason.Trim()}";
+                            c.Remarks += $" [DEFICIT ₹{deficit:0.##} authorised by user {_context.UserContext.UserId}{reason}]";
+                        }
                     }
                 }
             }

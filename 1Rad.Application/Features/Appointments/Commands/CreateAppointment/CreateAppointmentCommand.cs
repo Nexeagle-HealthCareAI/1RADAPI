@@ -33,9 +33,9 @@ public record CreateAppointmentCommand(
     DateTime DateTime,
     string Type,
     string Doctor,
-    string ReferredBy,
-    string ReferredContact,
-    string Notes,
+    string? ReferredBy = null,
+    string? ReferredContact = null,
+    string? Notes = null,
     decimal Amount = 0,
     decimal? ReferralCutValue = null,
     // Clinical urgency: STAT / URGENT / ROUTINE. Drives worklist sort order.

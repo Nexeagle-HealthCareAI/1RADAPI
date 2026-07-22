@@ -32,8 +32,8 @@ public record UpdateAppointmentCommand(
     string Modality,
     DateTime DateTime,
     string Doctor,
-    string Notes,
-    string ReferredBy,
+    string? Notes = null,
+    string? ReferredBy = null,
     string? ReferredContact = null,
     string? PatientName = null,
     string? Mobile = null,
@@ -331,10 +331,15 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
                 liveInvoice.DeletedAt = DateTime.UtcNow;
 
                 // Reverse the referral commissions — the service hasn't happened.
+                // Zero the amount before tombstoning (same convention as every other
+                // tombstone site in this file/CollectPaymentCommand) — otherwise a
+                // stale nonzero row lingers and gets double-counted into the referral
+                // total the next time this appointment re-arrives and re-bills, since
+                // reads match by AppointmentId without an amount check.
                 var comms = await _context.ReferralCommissions
                     .Where(c => c.AppointmentId == request.AppointmentId && c.DeletedAt == null)
                     .ToListAsync(cancellationToken);
-                foreach (var c in comms) { c.Status = "Cancelled"; c.DeletedAt = DateTime.UtcNow; }
+                foreach (var c in comms) { c.CommissionAmount = 0; c.Status = "Cancelled"; c.DeletedAt = DateTime.UtcNow; }
 
                 // Return money already collected into the credit ledger.
                 if (paid > 0.009m)
