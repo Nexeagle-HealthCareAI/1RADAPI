@@ -34,10 +34,12 @@ public class AppointmentScheduleController : ControllerBase
         [FromQuery] bool includeDeleted = false,
         [FromQuery] DateTime? startDate = null,
         [FromQuery] int pageSize = 0,
-        [FromQuery] string? cursor = null)
+        [FromQuery] string? cursor = null,
+        [FromQuery] string? modality = null,
+        [FromQuery] string? doctor = null)
     {
         var result = await _mediator.Send(
-            new GetAppointmentsQuery(search, status, updatedAfter, includeDeleted, startDate, pageSize, cursor));
+            new GetAppointmentsQuery(search, status, updatedAfter, includeDeleted, startDate, pageSize, cursor, modality, doctor));
 
         if (!result.IsPaged)
             return Ok(result.Items);

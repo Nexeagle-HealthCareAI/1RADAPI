@@ -18,8 +18,9 @@ public record GetAppointmentsQuery(
     bool IncludeDeleted = false,
     DateTime? StartDate = null,
     int PageSize = 0,
-    string? Cursor = null
-) : IRequest<PagedAppointmentResult>;
+    string? Cursor = null,
+    string? Modality = null,
+    string? Doctor = null) : IRequest<PagedAppointmentResult>;
 
 public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery, PagedAppointmentResult>
 {

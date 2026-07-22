@@ -32,6 +32,16 @@ public static class AppointmentQueryExtensions
             query = query.Where(a => a.DateTime >= request.StartDate.Value);
         }
 
+        if (!string.IsNullOrEmpty(request.Modality) && request.Modality != "ALL")
+        {
+            query = query.Where(a => a.Modality == request.Modality);
+        }
+
+        if (!string.IsNullOrEmpty(request.Doctor) && request.Doctor != "ALL")
+        {
+            query = query.Where(a => a.Doctor == request.Doctor);
+        }
+
         if (!string.IsNullOrEmpty(request.SearchQuery))
         {
             var search = request.SearchQuery.ToLower().Trim();
