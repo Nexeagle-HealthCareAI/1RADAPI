@@ -42,6 +42,7 @@ public class InvoiceDto
 {
     public Guid InvoiceId { get; set; }
     public string DisplayId { get; set; } = string.Empty;
+    public int? TokenNumber { get; set; }
     public Guid PatientId { get; set; }
     public string PatientName { get; set; } = string.Empty;
     public string? PatientIdentifier { get; set; }
@@ -220,6 +221,7 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, PagedIn
                 {
                     InvoiceId = i.Id,
                     DisplayId = i.InvoiceId,
+                    TokenNumber = i.Appointment != null ? i.Appointment.DailyTokenNumber : null,
                     PatientId = i.PatientId,
                     PatientName = i.Patient.FullName,
                     PatientIdentifier = i.Patient.PatientIdentifier,
