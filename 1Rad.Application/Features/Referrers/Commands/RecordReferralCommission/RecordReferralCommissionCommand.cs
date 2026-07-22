@@ -37,7 +37,9 @@ public class RecordReferralCommissionCommandHandler : IRequestHandler<RecordRefe
         if (hospitalId == Guid.Empty)
             throw new Exception("FISCAL ERROR: Security context failure. Hospital identity is required for commission logging.");
 
-        // Upsert Logic: If reference exists, update instead of adding
+        // Appointment-generated commission rows are reconciled exclusively by
+        // the appointment lifecycle. A manual record must never overwrite one
+        // merely because it shares an invoice/reference number.
         ReferralCommission? commission = null;
         if (!string.IsNullOrEmpty(request.ReferenceNumber))
         {
@@ -45,44 +47,41 @@ public class RecordReferralCommissionCommandHandler : IRequestHandler<RecordRefe
                 .FirstOrDefaultAsync(c => c.ReferenceNumber == request.ReferenceNumber && c.HospitalId == hospitalId, cancellationToken);
         }
 
-        // A referral commission is never negative — floor at zero.
-        var amount = Math.Max(0m, request.Amount);
-
         if (commission != null)
+            throw new InvalidOperationException("A commission already exists for this reference. Use the approved commission adjustment workflow.");
+
+        if (request.Amount <= 0)
+            throw new ArgumentException("Commission amount must be greater than zero.", nameof(request.Amount));
+
+        if (string.Equals(request.Status, "PAID", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("New commissions must start as UNPAID and be marked paid through the payout workflow.");
+
+        var amount = request.Amount;
+
+        commission = new ReferralCommission
         {
-            // Update Existing
-            commission.CommissionAmount = amount;
-            commission.Modality = request.Modality;
-            commission.PatientName = request.PatientName ?? commission.PatientName;
-            commission.Remarks = (commission.Remarks ?? "") + $" [Updated: ₹{amount}]";
-            commission.Status = request.Status ?? commission.Status;
-            commission.TransactionDate = DateTime.UtcNow;
-        }
-        else
-        {
-            commission = new ReferralCommission
-            {
-                ReferrerId = request.ReferrerId,
-                ReferrerName = referrer.Name ?? "Unknown",
-                Modality = request.Modality,
-                PatientName = request.PatientName ?? "N/A",
-                CommissionAmount = amount,
-                AccumulatedTotal = 0, // Will be calculated below
-                TransactionDate = DateTime.UtcNow,
-                Status = request.Status ?? "UNPAID",
-                ReferenceNumber = request.ReferenceNumber,
-                Remarks = request.Remarks,
-                HospitalId = hospitalId
-            };
-            _context.ReferralCommissions.Add(commission);
-        }
+            ReferrerId = request.ReferrerId,
+            ReferrerName = referrer.Name ?? "Unknown",
+            Modality = request.Modality,
+            PatientName = request.PatientName ?? "N/A",
+            CommissionAmount = amount,
+            AccumulatedTotal = 0,
+            TransactionDate = DateTime.UtcNow,
+            Status = "UNPAID",
+            ReferenceNumber = request.ReferenceNumber,
+            Remarks = request.Remarks,
+            HospitalId = hospitalId
+        };
+        _context.ReferralCommissions.Add(commission);
 
         // Save first so new/updated records are in the DB before recalculation
         await _context.SaveChangesAsync(cancellationToken);
 
         // Recalculate Accumulated Total chronologically for this referrer to prevent drift
         var allCommissions = await _context.ReferralCommissions
-            .Where(c => c.ReferrerId == request.ReferrerId && c.HospitalId == hospitalId)
+            .Where(c => c.ReferrerId == request.ReferrerId
+                     && c.HospitalId == hospitalId
+                     && c.DeletedAt == null)
             .OrderBy(c => c.TransactionDate)
             .ToListAsync(cancellationToken);
 

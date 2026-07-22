@@ -20,7 +20,7 @@ public class CreateAppointmentCommandHandlerTests : BaseHandlerTest
     }
 
     [Fact]
-    public async Task Handle_WithExistingReferrerExactMatch_AssignsReferrerAndCreatesCommission()
+    public async Task Handle_WithExistingReferrerExactMatch_AssignsReferrerAndPersistsCut()
     {
         // Arrange
         var patientId = Guid.NewGuid();
@@ -75,14 +75,14 @@ public class CreateAppointmentCommandHandlerTests : BaseHandlerTest
 
         var commission = await Context.ReferralCommissions
             .FirstOrDefaultAsync(c => c.AppointmentId == appointmentId);
-        Assert.NotNull(commission);
-        Assert.Equal(referrer.ReferrerId, commission.ReferrerId);
-        Assert.Equal("Dr. John Doe", commission.ReferrerName);
-        Assert.Equal(150m, commission.CommissionAmount);
+        var service = await Context.AppointmentServices
+            .SingleAsync(s => s.AppointmentId == appointmentId);
+        Assert.Equal(150m, service.ReferralCutValue);
+        Assert.Null(commission);
     }
 
     [Fact]
-    public async Task Handle_WithExistingReferrerCaseMismatchAndSpaces_ResolvesCorrectlyAndCreatesCommission()
+    public async Task Handle_WithExistingReferrerCaseMismatchAndSpaces_ResolvesCorrectlyAndPersistsCut()
     {
         // Arrange
         var patientId = Guid.NewGuid();
@@ -138,14 +138,14 @@ public class CreateAppointmentCommandHandlerTests : BaseHandlerTest
 
         var commission = await Context.ReferralCommissions
             .FirstOrDefaultAsync(c => c.AppointmentId == appointmentId);
-        Assert.NotNull(commission);
-        Assert.Equal(referrer.ReferrerId, commission.ReferrerId);
-        Assert.Equal("Dr. John Doe", commission.ReferrerName);
-        Assert.Equal(150m, commission.CommissionAmount);
+        var service = await Context.AppointmentServices
+            .SingleAsync(s => s.AppointmentId == appointmentId);
+        Assert.Equal(150m, service.ReferralCutValue);
+        Assert.Null(commission);
     }
 
     [Fact]
-    public async Task Handle_WithNewReferrerName_AutoCreatesReferrerAndAssignsCommission()
+    public async Task Handle_WithNewReferrerName_AutoCreatesReferrerAndPersistsCut()
     {
         // Arrange
         var patientId = Guid.NewGuid();
@@ -188,7 +188,7 @@ public class CreateAppointmentCommandHandlerTests : BaseHandlerTest
 
         // Check if Referrer was created
         var newReferrer = await Context.Referrers
-            .FirstOrDefaultAsync(r => r.Name == "Dr. New Referrer" && r.HospitalId == HospitalId);
+            .FirstOrDefaultAsync(r => r.Contact == "9988776655" && r.HospitalId == HospitalId);
         Assert.NotNull(newReferrer);
         Assert.Equal("9988776655", newReferrer.Contact); // Sanitized contact number
 
@@ -197,14 +197,14 @@ public class CreateAppointmentCommandHandlerTests : BaseHandlerTest
 
         var commission = await Context.ReferralCommissions
             .FirstOrDefaultAsync(c => c.AppointmentId == appointmentId);
-        Assert.NotNull(commission);
-        Assert.Equal(newReferrer.ReferrerId, commission.ReferrerId);
-        Assert.Equal("Dr. New Referrer", commission.ReferrerName);
-        Assert.Equal(200m, commission.CommissionAmount);
+        var service = await Context.AppointmentServices
+            .SingleAsync(s => s.AppointmentId == appointmentId);
+        Assert.Equal(200m, service.ReferralCutValue);
+        Assert.Null(commission);
     }
 
     [Fact]
-    public async Task Handle_WithAutoBillingDisabledButExplicitCut_CreatesCommission()
+    public async Task Handle_WithAutoBillingDisabledButExplicitCut_PersistsCutWithoutCreatingCommission()
     {
         // Arrange
         var patientId = Guid.NewGuid();
@@ -252,10 +252,13 @@ public class CreateAppointmentCommandHandlerTests : BaseHandlerTest
         var appointmentId = await _handler.Handle(command, CancellationToken.None);
 
         // Assert
+        var service = await Context.AppointmentServices
+            .SingleAsync(s => s.AppointmentId == appointmentId);
         var commission = await Context.ReferralCommissions
             .FirstOrDefaultAsync(c => c.AppointmentId == appointmentId);
-        Assert.NotNull(commission); // Commission should be created because ReferralCutValue > 0
-        Assert.Equal(150m, commission.CommissionAmount);
+
+        Assert.Equal(150m, service.ReferralCutValue);
+        Assert.Null(commission); // Commission is created when the patient arrives.
     }
 
     [Fact]

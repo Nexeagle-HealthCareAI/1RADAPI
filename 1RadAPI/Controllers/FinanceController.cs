@@ -46,6 +46,7 @@ public class FinanceController : ControllerBase
     }
 
     [HttpPost("registry")]
+    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator}")]
     public async Task<IActionResult> UpsertRegistry([FromBody] UpsertServiceChargeCommand command)
     {
         var result = await _mediator.Send(command);
@@ -53,6 +54,7 @@ public class FinanceController : ControllerBase
     }
 
     [HttpPut("registry/{id}")]
+    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator}")]
     public async Task<IActionResult> UpdateRegistry(Guid id, [FromBody] UpsertServiceChargeCommand command)
     {
         var updatedCommand = command with { Id = id };
@@ -92,6 +94,7 @@ public class FinanceController : ControllerBase
 
 
     [HttpDelete("registry/{id}")]
+    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator}")]
     public async Task<IActionResult> DeleteRegistry(Guid id)
     {
         await _mediator.Send(new DeleteServiceChargeCommand(id));
@@ -133,6 +136,7 @@ public class FinanceController : ControllerBase
     }
 
     [HttpPost("invoices")]
+    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Receptionist},{RoleConstants.Accountant}")]
     public async Task<IActionResult> GenerateInvoice([FromBody] GenerateInvoiceCommand command)
     {
         var result = await _mediator.Send(command);
@@ -140,6 +144,7 @@ public class FinanceController : ControllerBase
     }
 
     [HttpPost("payments")]
+    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Receptionist},{RoleConstants.Accountant}")]
     public async Task<IActionResult> CollectPayment([FromBody] CollectPaymentCommand command)
     {
         var result = await _mediator.Send(command);
@@ -165,6 +170,7 @@ public class FinanceController : ControllerBase
 
     // Carry a patient's advance forward onto a later invoice.
     [HttpPost("credit/apply")]
+    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Accountant}")]
     public async Task<IActionResult> ApplyCredit([FromBody] ApplyCreditCommand command)
     {
         var result = await _mediator.Send(command);
@@ -173,6 +179,7 @@ public class FinanceController : ControllerBase
 
     // Return a patient's advance as cash (direct — no approval).
     [HttpPost("credit/refund")]
+    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Accountant}")]
     public async Task<IActionResult> RefundCredit([FromBody] RefundCreditCommand command)
     {
         var result = await _mediator.Send(command);
@@ -244,6 +251,7 @@ public class FinanceController : ControllerBase
     }
 
     [HttpPost("expense")]
+    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Accountant}")]
     public async Task<IActionResult> RecordExpense([FromBody] RecordExpenseCommand command)
     {
         var result = await _mediator.Send(command);
@@ -251,6 +259,7 @@ public class FinanceController : ControllerBase
     }
 
     [HttpPut("expenses/{id}")]
+    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Accountant}")]
     public async Task<IActionResult> UpdateExpense(Guid id, [FromBody] UpdateExpenseCommand command)
     {
         var updated = command with { Id = id };
@@ -259,6 +268,7 @@ public class FinanceController : ControllerBase
     }
 
     [HttpDelete("invoices/{id}")]
+    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Accountant}")]
     public async Task<IActionResult> DeleteInvoice(Guid id, [FromQuery] Guid? commissionId = null)
     {
         var (success, error) = await _mediator.Send(new _1Rad.Application.Features.Finance.Commands.DeleteInvoice.DeleteInvoiceCommand(id, commissionId));
@@ -268,6 +278,7 @@ public class FinanceController : ControllerBase
     }
 
     [HttpDelete("expenses/{id}")]
+    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Accountant}")]
     public async Task<IActionResult> DeleteExpense(Guid id)
     {
         await _mediator.Send(new _1Rad.Application.Features.Finance.Commands.DeleteExpense.DeleteExpenseCommand(id));
@@ -275,6 +286,7 @@ public class FinanceController : ControllerBase
     }
 
     [HttpPost("adjust")]
+    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Accountant}")]
     public async Task<IActionResult> ApplyExtraDiscount([FromBody] ApplyExtraDiscountCommand command)
     {
         var result = await _mediator.Send(command);
@@ -282,6 +294,7 @@ public class FinanceController : ControllerBase
     }
 
     [HttpPost("invoices/{id}/discount")]
+    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Accountant}")]
 
     public async Task<IActionResult> ApplyDiscount(Guid id, [FromBody] ApplyDiscountRequest request)
     {
@@ -300,6 +313,7 @@ public class FinanceController : ControllerBase
     }
 
     [HttpPut("expenses/{id}/status")]
+    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Accountant}")]
     public async Task<IActionResult> UpdateExpenseStatus(Guid id, [FromBody] UpdateExpenseStatusRequest request)
     {
         var result = await _mediator.Send(new _1Rad.Application.Features.Finance.Commands.UpdateExpenseStatus.UpdateExpenseStatusCommand(id, request.Status));

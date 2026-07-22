@@ -16,6 +16,7 @@ using _1Rad.Application.Features.Referrers.Commands.UpdateReferralCommission;
 using _1Rad.Application.Features.Referrers.Commands.UpdateReferralCommissionStatus;
 using _1Rad.Application.Features.Referrers.Commands.MergeReferrers;
 using _1Rad.Application.Features.Referrers.Commands.UnmergeReferrer;
+using _1Rad.Domain.Constants;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -130,6 +131,7 @@ public class ReferrersController : ControllerBase
     }
 
     [HttpPost("commissions")]
+    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Accountant}")]
     public async Task<IActionResult> RecordCommission([FromBody] RecordReferralCommissionCommand command)
     {
         var result = await _mediator.Send(command);
@@ -137,6 +139,7 @@ public class ReferrersController : ControllerBase
     }
 
     [HttpPost("commissions/batch")]
+    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Accountant}")]
     public async Task<IActionResult> RecordCommissions([FromBody] RecordReferralCommissionsCommand command)
     {
         var result = await _mediator.Send(command);
@@ -163,6 +166,7 @@ public class ReferrersController : ControllerBase
     }
 
     [HttpPut("commissions/{id}")]
+    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Accountant}")]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateReferralCommissionCommand command)
     {
         if (id != command.CommissionId) return BadRequest("Identity mismatch.");
@@ -171,6 +175,7 @@ public class ReferrersController : ControllerBase
     }
 
     [HttpPatch("commissions/{id}/status")]
+    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Accountant}")]
     public async Task<IActionResult> UpdateStatus(Guid id, [FromBody] CommissionStatusUpdateDto dto)
     {
         var result = await _mediator.Send(new UpdateReferralCommissionStatusCommand(

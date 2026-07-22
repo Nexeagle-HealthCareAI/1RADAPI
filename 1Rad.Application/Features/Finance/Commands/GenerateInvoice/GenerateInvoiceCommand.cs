@@ -100,15 +100,24 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
                 {
                     throw new InvalidOperationException("Appointment does not belong to the specified patient.");
                 }
+
+                var hasLiveInvoice = await _context.Invoices
+                    .AnyAsync(i => i.AppointmentId == request.AppointmentId.Value && i.DeletedAt == null, cancellationToken);
+                if (hasLiveInvoice)
+                {
+                    throw new InvalidOperationException("This appointment already has an active invoice.");
+                }
             }
 
             var grossAmount = request.Items.Sum(x => x.Amount * x.Quantity);
             var totalDiscount = request.CentreDiscount + request.ReferrerDiscount;
             
-            // Security/Business Rule: Discount cannot exceed Gross Amount
+            // Keep the deduction vectors and the aggregate discount auditable.
+            // Silently clamping the aggregate would persist a total that no
+            // longer matches the centre/referrer amounts the caller submitted.
             if (totalDiscount > grossAmount)
             {
-                totalDiscount = grossAmount;
+                throw new ArgumentException("Total discount cannot exceed the invoice gross amount.");
             }
 
             var invoice = new Invoice

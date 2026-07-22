@@ -15,7 +15,8 @@ public record GetAppointmentsQuery(
     string? SearchQuery = null,
     string? Status = null,
     DateTime? UpdatedAfter = null,
-    bool IncludeDeleted = false
+    bool IncludeDeleted = false,
+    DateTime? StartDate = null
 ) : IRequest<List<AppointmentDto>>;
 
 public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery, List<AppointmentDto>>
@@ -69,6 +70,11 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
             {
                 var since = request.UpdatedAfter.Value;
                 query = query.Where(x => x.Appointment.UpdatedAt > since);
+            }
+
+            if (request.StartDate.HasValue)
+            {
+                query = query.Where(x => x.Appointment.DateTime >= request.StartDate.Value);
             }
 
 

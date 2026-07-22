@@ -60,6 +60,11 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
                 throw new UnauthorizedAccessException("Hospital context is required to collect payment.");
             }
 
+            if (request.Amount <= 0)
+            {
+                throw new ArgumentException("Payment amount must be greater than zero.", nameof(request.Amount));
+            }
+
             var invoice = await _context.Invoices
                 .Include(i => i.Payments)
                 .Include(i => i.Items)
@@ -76,6 +81,11 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
                 throw new InvalidOperationException($"Invoice '{invoice.InvoiceId}' is cancelled.");
             }
 
+            if (invoice.PaidAmount >= invoice.TotalAmount - 0.01m)
+            {
+                throw new InvalidOperationException($"Invoice '{invoice.InvoiceId}' is already settled.");
+            }
+
             // Record Previous State for Commission Differential
             var oldReferrerDiscount = invoice.ReferrerDiscount;
             // Capture original AdditionalCharges BEFORE we mutate it in the
@@ -88,7 +98,12 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
             invoice.InstitutionalDeduction = request.Deduction ?? invoice.InstitutionalDeduction;
             
             // Process new ExtraCharges list if provided, otherwise fallback to legacy scalars
-            if (request.ExtraCharges != null && request.ExtraCharges.Any())
+            // A non-null list is authoritative — including an EMPTY list, which
+            // means every extra charge was intentionally removed. Gating this on
+            // .Any() left old InvoiceExtraCharge rows orphaned in the DB while the
+            // reason field got blanked, so the drawer showed no charges even though
+            // stale rows still existed out of sync.
+            if (request.ExtraCharges != null)
             {
                 // Re-query by InvoiceId to avoid EF tracking mismatches that can
                 // leave stale rows when the navigation collection was populated by a
@@ -113,7 +128,6 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
                             CreatedAt = DateTime.UtcNow
                         };
                         _context.InvoiceExtraCharges.Add(newCharge);
-                        invoice.ExtraCharges.Add(newCharge);
                     }
                 }
                 

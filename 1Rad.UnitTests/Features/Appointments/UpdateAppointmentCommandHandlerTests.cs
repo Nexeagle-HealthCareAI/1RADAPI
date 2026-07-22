@@ -2,7 +2,9 @@ using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using _1Rad.Application.Features.Appointments;
 using _1Rad.Application.Features.Appointments.Commands.UpdateAppointment;
+using _1Rad.Application.Features.Finance.Queries.GetInvoices;
 using _1Rad.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
@@ -168,5 +170,256 @@ public class UpdateAppointmentCommandHandlerTests : BaseHandlerTest
         Assert.Equal(newReferrer.ReferrerId, newCommission.ReferrerId);
         Assert.Equal("Dr. Brand New", newCommission.ReferrerName);
         Assert.Equal(200m, newCommission.CommissionAmount);
+    }
+
+    [Fact]
+    public async Task Handle_ArrivedAppointmentEdit_ReconcilesPatientServicesAndRevenueInvoice()
+    {
+        var patientId = Guid.NewGuid();
+        var patient = new Patient
+        {
+            PatientId = patientId,
+            HospitalId = HospitalId,
+            FullName = "Original Patient",
+            Mobile = "9000000000",
+            Age = "35",
+            Gender = "Female",
+            SourceOfInfo = "Walk-in"
+        };
+        var appointment = new Appointment
+        {
+            AppointmentId = Guid.NewGuid(),
+            PatientId = patientId,
+            PatientName = patient.FullName,
+            Mobile = patient.Mobile,
+            HospitalId = HospitalId,
+            Service = "Chest X-Ray",
+            Modality = "XRAY",
+            DateTime = DateTime.UtcNow,
+            Doctor = "Dr. Original",
+            ReferredBy = "Self",
+            ArrivedAt = DateTime.UtcNow,
+            Status = "CONFIRMED"
+        };
+        var removedService = new AppointmentService
+        {
+            AppointmentId = appointment.AppointmentId,
+            HospitalId = HospitalId,
+            ServiceName = "Chest X-Ray",
+            Modality = "XRAY",
+            Amount = 500m
+        };
+        var retainedService = new AppointmentService
+        {
+            AppointmentId = appointment.AppointmentId,
+            HospitalId = HospitalId,
+            ServiceName = "Abdomen Ultrasound",
+            Modality = "USG",
+            Amount = 800m
+        };
+        var invoice = new Invoice
+        {
+            Id = Guid.NewGuid(),
+            AppointmentId = appointment.AppointmentId,
+            PatientId = patientId,
+            PatientName = patient.FullName,
+            HospitalId = HospitalId,
+            InvoiceId = "INV-EDIT-001",
+            GrossAmount = 1300m,
+            TotalAmount = 1300m,
+            Status = "PENDING",
+            CreatedAt = DateTime.UtcNow,
+            ServiceDate = appointment.DateTime
+        };
+        invoice.Items.Add(new InvoiceItem
+        {
+            Description = removedService.ServiceName,
+            Amount = removedService.Amount,
+            AppointmentServiceId = removedService.Id
+        });
+        invoice.Items.Add(new InvoiceItem
+        {
+            Description = retainedService.ServiceName,
+            Amount = retainedService.Amount,
+            AppointmentServiceId = retainedService.Id
+        });
+
+        Context.Patients.Add(patient);
+        Context.Appointments.Add(appointment);
+        Context.AppointmentServices.AddRange(removedService, retainedService);
+        Context.Invoices.Add(invoice);
+        await Context.SaveChangesAsync();
+
+        var result = await _handler.Handle(new UpdateAppointmentCommand(
+            appointment.AppointmentId,
+            "Renal Ultrasound",
+            "USG",
+            appointment.DateTime,
+            "Dr. Updated",
+            "Updated notes",
+            "Dr. Updated Referrer",
+            ReferredContact: "9222222222",
+            PatientName: "Updated Patient",
+            Mobile: "9111111111",
+            PatientAge: "36",
+            PatientGender: "Male",
+            Village: "Village A",
+            Block: "Block B",
+            District: "District C",
+            Address: "Updated address",
+            SourceOfInfo: "Referral",
+            ReferrerIsDoctor: true,
+            ReferrerAddress: "Referrer address",
+            Services: new[]
+            {
+                new AppointmentServiceLine("Renal Ultrasound", "USG", 900m, 0m, retainedService.Id),
+                new AppointmentServiceLine("CT Head", "CT", 1500m, 0m)
+            }),
+            CancellationToken.None);
+
+        Assert.True(result.Success);
+
+        var updatedPatient = await Context.Patients.SingleAsync(p => p.PatientId == patientId);
+        Assert.Equal("UPDATED PATIENT", updatedPatient.FullName);
+        Assert.Equal("9111111111", updatedPatient.Mobile);
+        Assert.Equal("36", updatedPatient.Age);
+        Assert.Equal("Male", updatedPatient.Gender);
+        Assert.Equal("VILLAGE A", updatedPatient.Village);
+        Assert.Equal("BLOCK B", updatedPatient.Block);
+        Assert.Equal("DISTRICT C", updatedPatient.District);
+        Assert.Equal("Updated address", updatedPatient.Address);
+        Assert.Equal("Referral", updatedPatient.SourceOfInfo);
+
+        var updatedAppointment = await Context.Appointments.SingleAsync(a => a.AppointmentId == appointment.AppointmentId);
+        Assert.Equal("Dr. Updated", updatedAppointment.Doctor);
+        Assert.Equal("Updated notes", updatedAppointment.Notes);
+        Assert.Equal("DR. UPDATED REFERRER", updatedAppointment.ReferredBy);
+
+        var updatedReferrer = await Context.Referrers.SingleAsync(r => r.Name == "Dr. Updated Referrer");
+        Assert.Equal("9222222222", updatedReferrer.Contact);
+        Assert.Equal("Referrer address", updatedReferrer.Address);
+
+        var revenueInvoice = (await new GetInvoicesQueryHandler(Context)
+            .Handle(new GetInvoicesQuery { AppointmentId = appointment.AppointmentId }, CancellationToken.None))
+            .Items.Single();
+
+        Assert.Equal(2400m, revenueInvoice.GrossAmount);
+        Assert.Equal(2400m, revenueInvoice.TotalAmount);
+        Assert.Collection(revenueInvoice.Items.OrderBy(item => item.Description),
+            item =>
+            {
+                Assert.Equal("CT Head", item.Description);
+                Assert.Equal(1500m, item.Amount);
+                Assert.Equal("CT", item.Modality);
+            },
+            item =>
+            {
+                Assert.Equal("Renal Ultrasound", item.Description);
+                Assert.Equal(900m, item.Amount);
+                Assert.Equal("USG", item.Modality);
+            });
+        Assert.DoesNotContain(revenueInvoice.Items, item => item.Description == "Chest X-Ray");
+
+        // Production data written by an earlier partial-reconciliation build can
+        // contain only the newly added line. Revenue must still expose every live
+        // appointment service until that legacy row is repaired on the next edit.
+        var retainedInvoiceItem = await Context.Set<InvoiceItem>()
+            .SingleAsync(item => item.AppointmentServiceId == retainedService.Id);
+        Context.Remove(retainedInvoiceItem);
+        await Context.SaveChangesAsync();
+
+        var repairedRevenueInvoice = (await new GetInvoicesQueryHandler(Context)
+            .Handle(new GetInvoicesQuery { AppointmentId = appointment.AppointmentId }, CancellationToken.None))
+            .Items.Single();
+
+        Assert.Equal(2, repairedRevenueInvoice.Items.Count);
+        Assert.Contains(repairedRevenueInvoice.Items, item =>
+            item.AppointmentServiceId == retainedService.Id
+            && item.Description == "Renal Ultrasound"
+            && item.Amount == 900m);
+        Assert.Contains(repairedRevenueInvoice.Items, item =>
+            item.AppointmentServiceId != retainedService.Id
+            && item.Description == "CT Head"
+            && item.Amount == 1500m);
+    }
+
+    [Fact]
+    public async Task Handle_PaidServiceEdit_DoesNotCreateAnotherCommission()
+    {
+        var patient = new Patient
+        {
+            PatientId = Guid.NewGuid(),
+            HospitalId = HospitalId,
+            FullName = "Commission Patient"
+        };
+        var appointment = new Appointment
+        {
+            AppointmentId = Guid.NewGuid(),
+            PatientId = patient.PatientId,
+            PatientName = patient.FullName,
+            HospitalId = HospitalId,
+            Service = "Initial Ultrasound",
+            Modality = "USG",
+            DateTime = DateTime.UtcNow,
+            Doctor = "Dr. Reader",
+            ReferredBy = "Dr. Referrer",
+            ArrivedAt = DateTime.UtcNow,
+            Status = "CONFIRMED"
+        };
+        var service = new AppointmentService
+        {
+            AppointmentId = appointment.AppointmentId,
+            HospitalId = HospitalId,
+            ServiceName = "Initial Ultrasound",
+            Modality = "USG",
+            Amount = 800m,
+            ReferralCutValue = 120m
+        };
+        var referrer = new Referrer
+        {
+            ReferrerId = Guid.NewGuid(),
+            HospitalId = HospitalId,
+            Name = "Dr. Referrer"
+        };
+        var paidCommission = new ReferralCommission
+        {
+            Id = Guid.NewGuid(),
+            HospitalId = HospitalId,
+            AppointmentId = appointment.AppointmentId,
+            AppointmentServiceId = service.Id,
+            ReferrerId = referrer.ReferrerId,
+            ReferrerName = referrer.Name,
+            Modality = "USG",
+            CommissionAmount = 120m,
+            Status = "PAID",
+            TransactionDate = DateTime.UtcNow,
+            PaymentDate = DateTime.UtcNow
+        };
+
+        Context.AddRange(patient, appointment, service, referrer, paidCommission);
+        await Context.SaveChangesAsync();
+
+        var result = await _handler.Handle(new UpdateAppointmentCommand(
+            appointment.AppointmentId,
+            "Updated Ultrasound",
+            "USG",
+            appointment.DateTime,
+            appointment.Doctor,
+            "Updated after payment",
+            referrer.Name,
+            Services: new[]
+            {
+                new AppointmentServiceLine("Updated Ultrasound", "USG", 900m, 120m, service.Id)
+            }),
+            CancellationToken.None);
+
+        Assert.True(result.Success);
+        var commissions = await Context.ReferralCommissions
+            .Where(c => c.AppointmentServiceId == service.Id && c.DeletedAt == null)
+            .ToListAsync();
+        var onlyCommission = Assert.Single(commissions);
+        Assert.Equal(paidCommission.Id, onlyCommission.Id);
+        Assert.Equal("PAID", onlyCommission.Status);
+        Assert.Equal(120m, onlyCommission.CommissionAmount);
     }
 }

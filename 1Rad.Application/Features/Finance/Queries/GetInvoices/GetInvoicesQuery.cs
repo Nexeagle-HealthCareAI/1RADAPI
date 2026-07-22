@@ -349,22 +349,25 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, PagedIn
                 }
             }
 
-            // Backfill display items for invoices that have NONE but are linked
-            // to an appointment — derive them from the live AppointmentService
-            // lines so the Revenue Hub shows the services even when the invoice
-            // was created without line items (or an OCC-blocked edit never
-            // rebuilt them). Read-only — nothing is persisted.
-            var itemlessApptIds = result
-                .Where(inv => inv.Items.Count == 0 && inv.AppointmentId.HasValue)
+            // Repair display items for appointment-linked invoices from the live
+            // AppointmentService rows. Older partial writes can leave just the
+            // newly-added service in InvoiceItems after an edit; showing that
+            // incomplete list makes Revenue and its drawer look as though the
+            // other services disappeared. We append only missing service-linked
+            // lines, retaining the invoice items as the source for prices and
+            // any legacy/manual line that has no service link.
+            var appointmentInvoiceIds = result
+                .Where(inv => inv.AppointmentId.HasValue
+                    && (inv.Items.Count == 0 || inv.Items.Any(item => item.AppointmentServiceId.HasValue)))
                 .Select(inv => inv.AppointmentId!.Value)
                 .Distinct()
                 .ToList();
 
-            if (itemlessApptIds.Count > 0)
+            if (appointmentInvoiceIds.Count > 0)
             {
                 var svcByAppt = (await _context.AppointmentServices
                     .AsNoTracking()
-                    .Where(s => itemlessApptIds.Contains(s.AppointmentId) && s.DeletedAt == null)
+                    .Where(s => appointmentInvoiceIds.Contains(s.AppointmentId) && s.DeletedAt == null)
                     .Select(s => new { s.AppointmentId, s.Id, s.ServiceName, s.Modality, s.Amount })
                     .ToListAsync(cancellationToken))
                     .GroupBy(s => s.AppointmentId)
@@ -372,17 +375,25 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, PagedIn
 
                 foreach (var inv in result)
                 {
-                    if (inv.Items.Count == 0 && inv.AppointmentId.HasValue
-                        && svcByAppt.TryGetValue(inv.AppointmentId.Value, out var svcs))
+                    if (!inv.AppointmentId.HasValue
+                        || !svcByAppt.TryGetValue(inv.AppointmentId.Value, out var svcs))
+                        continue;
+
+                    var itemServiceIds = inv.Items
+                        .Where(item => item.AppointmentServiceId.HasValue)
+                        .Select(item => item.AppointmentServiceId!.Value)
+                        .ToHashSet();
+
+                    foreach (var svc in svcs.Where(service => !itemServiceIds.Contains(service.Id)))
                     {
-                        inv.Items = svcs.Select(s => new InvoiceItemDto
+                        inv.Items.Add(new InvoiceItemDto
                         {
-                            Description          = s.ServiceName,
-                            Amount               = s.Amount,
+                            Description          = svc.ServiceName,
+                            Amount               = svc.Amount,
                             Quantity             = 1,
-                            AppointmentServiceId = s.Id,
-                            Modality             = s.Modality,
-                        }).ToList();
+                            AppointmentServiceId = svc.Id,
+                            Modality             = svc.Modality,
+                        });
                     }
                 }
             }

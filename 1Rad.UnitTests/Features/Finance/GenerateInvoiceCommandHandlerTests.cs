@@ -316,6 +316,50 @@ public class GenerateInvoiceCommandHandlerTests : BaseHandlerTest
     }
 
     [Fact]
+    public async Task Handle_AppointmentWithLiveInvoice_ThrowsInvalidOperationException()
+    {
+        // Arrange
+        var patientId = Guid.NewGuid();
+        var appointmentId = Guid.NewGuid();
+        Context.Patients.Add(new Patient
+        {
+            PatientId = patientId,
+            FullName = "John Doe",
+            HospitalId = HospitalId
+        });
+        Context.Appointments.Add(new Appointment
+        {
+            AppointmentId = appointmentId,
+            PatientId = patientId,
+            PatientName = "John Doe",
+            HospitalId = HospitalId
+        });
+        Context.Invoices.Add(new Invoice
+        {
+            AppointmentId = appointmentId,
+            PatientId = patientId,
+            PatientName = "John Doe",
+            HospitalId = HospitalId,
+            InvoiceId = "INV-EXISTING",
+            Status = "PENDING",
+            TotalAmount = 500m
+        });
+        await Context.SaveChangesAsync();
+
+        var command = new GenerateInvoiceCommand
+        {
+            AppointmentId = appointmentId,
+            PatientId = patientId,
+            Items = new List<InvoiceItemDto> { new("X-Ray", 500m, 1) }
+        };
+
+        // Act & Assert
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => _handler.Handle(command, CancellationToken.None));
+        Assert.Contains("already has an active invoice", exception.Message);
+    }
+
+    [Fact]
     public async Task Handle_MultipleItems_CalculatesTotalCorrectly()
     {
         // Arrange
@@ -349,6 +393,33 @@ public class GenerateInvoiceCommandHandlerTests : BaseHandlerTest
         Assert.NotNull(invoice);
         Assert.Equal(4900m, invoice.TotalAmount);
         Assert.Equal(3, invoice.Items.Count);
+    }
+
+    [Fact]
+    public async Task Handle_DiscountExceedsGross_ThrowsArgumentException()
+    {
+        // Arrange
+        var patientId = Guid.NewGuid();
+        Context.Patients.Add(new Patient
+        {
+            PatientId = patientId,
+            FullName = "John Doe",
+            HospitalId = HospitalId
+        });
+        await Context.SaveChangesAsync();
+
+        var command = new GenerateInvoiceCommand
+        {
+            PatientId = patientId,
+            CentreDiscount = 600m,
+            ReferrerDiscount = 500m,
+            Items = new List<InvoiceItemDto> { new("X-Ray", 1000m, 1) }
+        };
+
+        // Act & Assert
+        var exception = await Assert.ThrowsAsync<ArgumentException>(
+            () => _handler.Handle(command, CancellationToken.None));
+        Assert.Contains("discount cannot exceed", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

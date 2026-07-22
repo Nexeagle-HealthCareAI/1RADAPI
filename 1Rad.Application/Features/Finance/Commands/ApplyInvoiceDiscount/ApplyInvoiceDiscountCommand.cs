@@ -70,8 +70,15 @@ public class ApplyInvoiceDiscountCommandHandler : IRequestHandler<ApplyInvoiceDi
             invoice.ReferrerDiscount       = request.ReferrerDiscount       ?? invoice.ReferrerDiscount;
             invoice.InstitutionalDeduction = request.InstitutionalDeduction ?? invoice.InstitutionalDeduction;
             
-            if (request.ExtraCharges != null && request.ExtraCharges.Any())
+            if (request.ExtraCharges != null)
             {
+                // A non-null list is authoritative — including an EMPTY list, which
+                // means the caller (e.g. the settlement drawer's "Save as draft")
+                // intentionally removed every extra charge. Previously an empty list
+                // fell through to the scalar branch below, which left the old
+                // InvoiceExtraCharge rows orphaned in the DB while blanking the
+                // AdditionalChargesReason field the drawer reads from — making the
+                // charges appear to vanish while stale rows lingered out of sync.
                 // Re-query by InvoiceId to avoid EF tracking mismatches (same
                 // fix as CollectPaymentCommand — navigation collection state can
                 // diverge from what's in the DB after a prior draft cycle).
@@ -94,7 +101,6 @@ public class ApplyInvoiceDiscountCommandHandler : IRequestHandler<ApplyInvoiceDi
                             CreatedAt = DateTime.UtcNow
                         };
                         _context.InvoiceExtraCharges.Add(newCharge);
-                        invoice.ExtraCharges.Add(newCharge);
                     }
                 }
                 

@@ -26,6 +26,25 @@ public class UpdateAppointmentStatusCommandHandler : IRequestHandler<UpdateAppoi
 {
     private readonly IApplicationDbContext _context;
 
+    private static readonly HashSet<string> ValidStatuses = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "BOOKED", "CONFIRMED", "IN_PROGRESS", "SCANNED", "COMPLETED",
+        "REPORTING", "REPORTED", "DELIVERED", "CANCELLED"
+    };
+
+    private static readonly Dictionary<string, HashSet<string>> AllowedTransitions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["BOOKED"] = new(StringComparer.OrdinalIgnoreCase) { "CONFIRMED", "CANCELLED" },
+        ["CONFIRMED"] = new(StringComparer.OrdinalIgnoreCase) { "IN_PROGRESS", "SCANNED", "COMPLETED", "REPORTING", "REPORTED", "DELIVERED", "CANCELLED" },
+        ["IN_PROGRESS"] = new(StringComparer.OrdinalIgnoreCase) { "SCANNED", "COMPLETED", "REPORTING", "REPORTED", "DELIVERED", "CANCELLED" },
+        ["SCANNED"] = new(StringComparer.OrdinalIgnoreCase) { "COMPLETED", "REPORTING", "REPORTED", "DELIVERED", "CANCELLED" },
+        ["COMPLETED"] = new(StringComparer.OrdinalIgnoreCase) { "REPORTING", "REPORTED", "DELIVERED", "CANCELLED" },
+        ["REPORTING"] = new(StringComparer.OrdinalIgnoreCase) { "REPORTED", "DELIVERED" },
+        ["REPORTED"] = new(StringComparer.OrdinalIgnoreCase) { "DELIVERED" },
+        ["DELIVERED"] = new(StringComparer.OrdinalIgnoreCase),
+        ["CANCELLED"] = new(StringComparer.OrdinalIgnoreCase),
+    };
+
     public UpdateAppointmentStatusCommandHandler(IApplicationDbContext context)
     {
         _context = context;
@@ -41,7 +60,28 @@ public class UpdateAppointmentStatusCommandHandler : IRequestHandler<UpdateAppoi
             return new UpdateAppointmentStatusResult { Success = false, Message = "Appointment not found." };
         }
 
-        var newStatus = request.Status.ToUpperInvariant();
+        var newStatus = CanonicalStatus(request.Status);
+        if (!ValidStatuses.Contains(newStatus))
+        {
+            return new UpdateAppointmentStatusResult
+            {
+                Success = false,
+                NotAllowed = true,
+                Message = $"Unknown appointment status '{request.Status}'."
+            };
+        }
+
+        var currentStatus = CanonicalStatus(appointment.Status);
+        if (!string.Equals(currentStatus, newStatus, StringComparison.OrdinalIgnoreCase)
+            && (!AllowedTransitions.TryGetValue(currentStatus, out var allowed) || !allowed.Contains(newStatus)))
+        {
+            return new UpdateAppointmentStatusResult
+            {
+                Success = true,
+                NotAllowed = true,
+                Message = $"Cannot change an appointment from {currentStatus} to {newStatus}."
+            };
+        }
 
         // Arrival gate: a study can't be advanced (scanning, reporting, etc.)
         // until the patient has actually arrived. Only marking the patient
@@ -201,6 +241,16 @@ public class UpdateAppointmentStatusCommandHandler : IRequestHandler<UpdateAppoi
         await _context.SaveChangesAsync(cancellationToken);
 
         return new UpdateAppointmentStatusResult { Success = true, DailyTokenNumber = appointment.DailyTokenNumber };
+    }
+
+    private static string CanonicalStatus(string? status)
+    {
+        var normalized = (status ?? string.Empty).Trim().ToUpperInvariant();
+        return normalized switch
+        {
+            "" or "SCHEDULED" or "FUTURE" or "NOT_STARTED" => "BOOKED",
+            _ => normalized,
+        };
     }
 
     // Generate the visit's Invoice (when auto-billing is on) and the per-service

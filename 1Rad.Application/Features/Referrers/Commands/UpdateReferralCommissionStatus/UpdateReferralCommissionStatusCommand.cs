@@ -32,8 +32,22 @@ public class UpdateReferralCommissionStatusCommandHandler : IRequestHandler<Upda
         if (commission == null)
             throw new Exception($"FISCAL ERROR: Commission record [{request.CommissionId}] not found in strategic ledger.");
 
-        commission.Status = request.Status;
-        if (request.Status == "PAID")
+        var requestedStatus = (request.Status ?? string.Empty).Trim().ToUpperInvariant();
+        if (requestedStatus is not "UNPAID" and not "PAID" and not "CANCELLED")
+            throw new ArgumentException("Commission status must be UNPAID, PAID, or CANCELLED.", nameof(request.Status));
+
+        var currentStatus = (commission.Status ?? string.Empty).Trim().ToUpperInvariant();
+        if (currentStatus == "PAID" && requestedStatus != "PAID")
+            throw new InvalidOperationException("A paid commission cannot be reversed directly. Submit an approval request to unpay or adjust it.");
+        if (requestedStatus == "CANCELLED" && (commission.AppointmentId.HasValue || commission.AppointmentServiceId.HasValue))
+            throw new InvalidOperationException("Appointment-generated commissions can only be cancelled through the appointment cancellation workflow.");
+        if (requestedStatus == "PAID" && currentStatus != "UNPAID")
+            throw new InvalidOperationException("Only an unpaid commission can be marked paid.");
+        if (requestedStatus == "PAID" && commission.CommissionAmount <= 0)
+            throw new InvalidOperationException("Only a positive commission amount can be paid.");
+
+        commission.Status = requestedStatus;
+        if (requestedStatus == "PAID")
         {
             commission.PaymentDate = DateTime.UtcNow;
             // Persist mandatory disbursement details when marking as PAID.

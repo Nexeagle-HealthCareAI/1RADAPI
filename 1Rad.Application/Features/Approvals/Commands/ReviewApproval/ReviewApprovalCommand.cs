@@ -190,7 +190,6 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
                         CreatedAt = DateTime.UtcNow
                     };
                     _context.InvoiceExtraCharges.Add(newCharge);
-                    invoice.ExtraCharges.Add(newCharge);
                 }
             }
             
@@ -687,17 +686,38 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
             .FirstOrDefaultAsync(c => c.Id == commissionId && c.HospitalId == req.HospitalId && c.DeletedAt == null, ct);
         if (commission == null) return;
 
+        // A zero correction is valid (for example, an over-calculated cut), but
+        // a negative payout must be represented by the dedicated clawback/
+        // deficit workflows rather than rewriting this commission row.
+        if (amount is < 0)
+            throw new InvalidOperationException("A payout revision cannot set a negative commission amount.");
         if (amount.HasValue) commission.CommissionAmount = amount.Value;
         if (!string.IsNullOrWhiteSpace(modality)) commission.Modality = modality;
         if (remarks != null) commission.Remarks = remarks;
         if (!string.IsNullOrWhiteSpace(status))
         {
             var s = status.ToUpperInvariant();
-            commission.Status = s;
-            commission.PaymentDate = s == "PAID" ? (commission.PaymentDate ?? DateTime.UtcNow) : null;
+            if (s is "UNPAID" or "PAID" or "CANCELLED")
+            {
+                commission.Status = s;
+                commission.PaymentDate = s == "PAID" ? (commission.PaymentDate ?? DateTime.UtcNow) : null;
+            }
         }
         commission.Remarks = (commission.Remarks ?? "") + $" [Edited via approval {req.Id} — {req.Reason}]";
         commission.UpdatedAt = DateTime.UtcNow;
+
+        var rows = await _context.ReferralCommissions
+            .Where(c => c.ReferrerId == commission.ReferrerId
+                     && c.HospitalId == req.HospitalId
+                     && c.DeletedAt == null)
+            .OrderBy(c => c.TransactionDate)
+            .ToListAsync(ct);
+        decimal running = 0;
+        foreach (var row in rows)
+        {
+            running += row.CommissionAmount;
+            row.AccumulatedTotal = running;
+        }
     }
 
     /// <summary>

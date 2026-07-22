@@ -66,6 +66,7 @@ public record UpdateAppointmentCommand(
     string? ReferrerEmail = null,
     string? ReferrerSpecialty = null,
     string? ReferrerDegree = null,
+    string? ReferrerAddress = null,
     // Reschedule-to-future refund choice. When a PAID visit is moved to a future
     // date its bill is voided and any money collected is returned: "WALLET" parks
     // it as a patient credit (carry-forward / refundable), "CASH" books an
@@ -193,16 +194,17 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         // Update the underlying Patient entity as well
         if (appointment.Patient != null)
         {
-            appointment.Patient.FullName = NameNormalizer.Upper(request.PatientName ?? string.Empty);
-            appointment.Patient.Mobile = request.Mobile;
-            appointment.Patient.Age = request.PatientAge;
-            appointment.Patient.Gender = request.PatientGender;
-            
-            appointment.Patient.Address = request.Address;
-            appointment.Patient.Village = NameNormalizer.Upper(request.Village);
-            appointment.Patient.Block = NameNormalizer.Upper(request.Block);
-            appointment.Patient.District = NameNormalizer.Upper(request.District);
-            appointment.Patient.SourceOfInfo = request.SourceOfInfo;
+            // Null means the caller did not edit this field; an empty string is
+            // still an explicit request to clear it.
+            if (request.PatientName is not null) appointment.Patient.FullName = NameNormalizer.Upper(request.PatientName);
+            if (request.Mobile is not null) appointment.Patient.Mobile = request.Mobile;
+            if (request.PatientAge is not null) appointment.Patient.Age = request.PatientAge;
+            if (request.PatientGender is not null) appointment.Patient.Gender = request.PatientGender;
+            if (request.Address is not null) appointment.Patient.Address = request.Address;
+            if (request.Village is not null) appointment.Patient.Village = NameNormalizer.Upper(request.Village);
+            if (request.Block is not null) appointment.Patient.Block = NameNormalizer.Upper(request.Block);
+            if (request.District is not null) appointment.Patient.District = NameNormalizer.Upper(request.District);
+            if (request.SourceOfInfo is not null) appointment.Patient.SourceOfInfo = request.SourceOfInfo;
         }
 
         // Load every live AppointmentService row on this visit. We reconcile
@@ -211,6 +213,47 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             .Where(s => s.AppointmentId == appointment.AppointmentId && s.DeletedAt == null)
             .OrderBy(s => s.UpdatedAt)
             .ToListAsync(cancellationToken);
+
+        // A disbursed commission is settled ledger history. The service can stay
+        // on the appointment, but its economic basis and payee cannot be changed
+        // through an ordinary edit; doing so would either rewrite money already
+        // paid or create a second commission for the same service.
+        var paidCommissions = await _context.ReferralCommissions
+            .Where(c => c.AppointmentId == appointment.AppointmentId
+                     && c.DeletedAt == null
+                     && c.Status == "PAID")
+            .ToListAsync(cancellationToken);
+
+        if (paidCommissions.Count > 0 && referrerChanged)
+        {
+            throw new InvalidOperationException(
+                "The referring party cannot be changed because this appointment has a paid referral commission. Use the approved referrer-change workflow.");
+        }
+
+        if (request.Services is { Count: > 0 })
+        {
+            var paidByServiceId = paidCommissions
+                .Where(c => c.AppointmentServiceId.HasValue)
+                .GroupBy(c => c.AppointmentServiceId!.Value)
+                .ToDictionary(g => g.Key, g => g.First());
+
+            foreach (var line in request.Services.Where(l => l.Id.HasValue))
+            {
+                if (!paidByServiceId.TryGetValue(line.Id!.Value, out var paid)) continue;
+
+                var original = existingServices.First(s => s.Id == line.Id.Value);
+                if (line.ReferralCutValue != original.ReferralCutValue)
+                {
+                    throw new InvalidOperationException(
+                        "The referral cut cannot be changed after it has been paid. Create an approved commission adjustment instead.");
+                }
+
+                // Keep the paid row associated with the same clinical service.
+                // Renaming, repricing, or changing modality remains allowed, but
+                // must never create another commission for this service.
+                _ = paid;
+            }
+        }
 
         // ── Paid-commission gate (decision: route to admin approval) ──────────
         // If this edit REMOVES a service whose referral commission has already been
@@ -363,6 +406,7 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             if (invoice.DiscountAmount > invoice.GrossAmount) invoice.DiscountAmount = invoice.GrossAmount;
             invoice.TotalAmount = invoice.GrossAmount - invoice.DiscountAmount;
             invoice.ReferralCutValue = liveServices.Sum(s => s.ReferralCutValue);
+            invoice.PatientName = appointment.PatientName ?? invoice.PatientName;
             // Keep the free rollup honest: only a bill whose every surviving line
             // is free is still a "free test".
             invoice.IsFree = invoice.Items.Count > 0 && invoice.Items.All(i => i.IsFree);
@@ -800,6 +844,12 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             || (c.Remarks != null && c.Remarks.Contains("Clawback", StringComparison.OrdinalIgnoreCase))
             || (c.Remarks != null && c.Remarks.Contains("service removed after payment", StringComparison.OrdinalIgnoreCase));
         var commissions = allCommissions.Where(c => !IsSettledHistory(c)).ToList();
+        var paidServiceIds = allCommissions
+            .Where(c => string.Equals(c.Status, "PAID", StringComparison.OrdinalIgnoreCase)
+                     && c.AppointmentServiceId.HasValue
+                     && c.DeletedAt == null)
+            .Select(c => c.AppointmentServiceId!.Value)
+            .ToHashSet();
 
         // No referrer (or a "Self" / walk-in referral) ⇒ wipe any existing
         // commissions to zero (preserves audit trail) and we're done — Self pays
@@ -861,6 +911,7 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         referrer.Email     = Clean(request.ReferrerEmail)     ?? referrer.Email;
         referrer.Specialty = Clean(request.ReferrerSpecialty) ?? referrer.Specialty;
         referrer.Degree    = Clean(request.ReferrerDegree)    ?? referrer.Degree;
+        referrer.Address   = Clean(request.ReferrerAddress)   ?? referrer.Address;
 
         // Keep the payee's contact fresh too (doctor or agent). Normalise to a
         // 10-digit local number the same way booking does; only overwrite when
@@ -956,6 +1007,11 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
 
         foreach (var svc in liveServices)
         {
+            // Paid commissions are immutable settlement history. They must not
+            // be reconsidered as "missing" rows or an edit would append a second
+            // unpaid commission for the same service.
+            if (paidServiceIds.Contains(svc.Id)) continue;
+
             // A row should exist when the line earns a cut, OR auto-billing keeps
             // a ₹0 row (mirrors arrival in UpdateAppointmentStatus so an edited /
             // added service behaves identically to one present at arrival).

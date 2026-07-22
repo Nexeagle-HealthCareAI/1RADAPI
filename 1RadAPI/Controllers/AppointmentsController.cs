@@ -39,9 +39,10 @@ public class AppointmentsController : ControllerBase
         [FromQuery] string? search,
         [FromQuery] string? status,
         [FromQuery] DateTime? updatedAfter,
-        [FromQuery] bool includeDeleted = false)
+        [FromQuery] bool includeDeleted = false,
+        [FromQuery] DateTime? startDate = null)
     {
-        var result = await _mediator.Send(new GetAppointmentsQuery(search, status, updatedAfter, includeDeleted));
+        var result = await _mediator.Send(new GetAppointmentsQuery(search, status, updatedAfter, includeDeleted, startDate));
         return Ok(result);
     }
 
