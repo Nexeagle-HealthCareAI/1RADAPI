@@ -119,7 +119,7 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
                 
                 // Aggregate into the main fields for fast reading/backward compatibility
                 invoice.AdditionalCharges = invoice.ExtraCharges.Sum(x => x.Amount);
-                invoice.AdditionalChargesReason = string.Join(" | ", invoice.ExtraCharges.Select(x => $"{x.Reason}: {x.Amount}"));
+                invoice.AdditionalChargesReason = request.AdditionalChargesReason ?? "[]";
             }
             else
             {

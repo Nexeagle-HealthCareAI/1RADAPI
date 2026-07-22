@@ -52,8 +52,9 @@ public class ApplyInvoiceDiscountCommandHandler : IRequestHandler<ApplyInvoiceDi
             throw new InvalidOperationException("Cannot apply discount to an already paid invoice.");
         }
 
-        // Recalculate Gross if needed, though it should be stable
-        var grossAmount = invoice.Items.Sum(x => x.Amount * x.Quantity);
+        // Recalculate Gross if needed, though it should be stable.
+        // If Items is empty (e.g. pre-arrival), preserve the existing GrossAmount which was based on AppointmentServices.
+        var grossAmount = invoice.Items.Any() ? invoice.Items.Sum(x => x.Amount * x.Quantity) : invoice.GrossAmount;
         invoice.GrossAmount = grossAmount;
         
         // When the settlement drawer saves a DRAFT it sends the discount
@@ -98,7 +99,7 @@ public class ApplyInvoiceDiscountCommandHandler : IRequestHandler<ApplyInvoiceDi
                 }
                 
                 invoice.AdditionalCharges = invoice.ExtraCharges.Sum(x => x.Amount);
-                invoice.AdditionalChargesReason = string.Join(" | ", invoice.ExtraCharges.Select(x => $"{x.Reason}: {x.Amount}"));
+                invoice.AdditionalChargesReason = request.AdditionalChargesReason ?? "[]";
             }
             else
             {
