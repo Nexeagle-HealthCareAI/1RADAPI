@@ -760,6 +760,9 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         {
             if (s.IsFree) removedFreeTotal += s.Amount * s.Quantity;
             invoice.Items.Remove(s);
+            // Explicitly mark for deletion to avoid orphans or EF tracking bugs
+            // since InvoiceItem is a standard HasOne/WithMany entity.
+            _context.Entry(s).State = Microsoft.EntityFrameworkCore.EntityState.Deleted;
         }
         return removedFreeTotal;
     }
