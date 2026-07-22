@@ -11,6 +11,7 @@ public static class DependencyInjection
         services.AddMediatR(cfg => cfg.RegisterServicesFromAssembly(Assembly.GetExecutingAssembly()));
         services.AddValidatorsFromAssembly(Assembly.GetExecutingAssembly());
         services.AddAutoMapper(Assembly.GetExecutingAssembly());
+        services.AddScoped<_1Rad.Application.Features.Finance.Queries.GetInvoices.IInvoiceEnrichmentService, _1Rad.Application.Features.Finance.Queries.GetInvoices.InvoiceEnrichmentService>();
         
         return services;
     }

@@ -1,5 +1,44 @@
 namespace _1Rad.Application.Features.Appointments.Queries.GetAppointments;
 
+public class PagedAppointmentResult
+{
+    public List<AppointmentSummaryDto> Items { get; set; } = new();
+    public string? NextCursor { get; set; }
+    public int TotalCount { get; set; }
+    public bool IsPaged { get; set; }
+}
+
+public record AppointmentSummaryDto(
+    Guid AppointmentId,
+    string? DisplayId,
+    Guid PatientId,
+    string? PatientName,
+    string? Mobile,
+    string? PatientAge,
+    string? PatientGender,
+    string? PatientIdentifier,
+    string? Service,
+    string? Modality,
+    DateTime DateTime,
+    string? Type,
+    string? Doctor,
+    string? Status,
+    string? ReferredBy,
+    string? ReferredContact,
+    int? DailyTokenNumber = null,
+    string? DelayReason = null,
+    string ReportProgressStatus = "NOT_STARTED",
+    string Priority = "ROUTINE",
+    DateTime? ArrivedAt = null,
+    DateTime? ScanStartedAt = null,
+    DateTime? DeliveredAt = null,
+    DateTime? UpdatedAt = null,
+    DateTime? DeletedAt = null,
+    decimal Amount = 0,
+    decimal ReferralCutValue = 0,
+    int AssetCount = 0
+);
+
 public record AppointmentDto(
     Guid AppointmentId,
     string? DisplayId,

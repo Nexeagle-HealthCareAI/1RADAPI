@@ -128,6 +128,7 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
                             CreatedAt = DateTime.UtcNow
                         };
                         _context.InvoiceExtraCharges.Add(newCharge);
+                        invoice.ExtraCharges.Add(newCharge); // Added to in-memory collection so Sum() works below
                     }
                 }
                 
@@ -148,13 +149,24 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
             // in the fallback formula, not invoice.AdditionalCharges which was
             // already updated above. This prevents extra charges from vanishing or
             // inflating when there are no Items rows to sum directly.
-            var gross = invoice.Items.Any() 
-                ? invoice.Items.Sum(x => x.Amount * x.Quantity)
-                : (invoice.GrossAmount > 0 ? invoice.GrossAmount : invoice.TotalAmount + invoice.DiscountAmount - originalAdditionalCharges);
+            var itemsSubtotal = invoice.Items?.Sum(i => i.Quantity * i.Amount) ?? 0;
+            if (itemsSubtotal > 0)
+            {
+                // Source of truth: line items + the new additional charges
+                invoice.GrossAmount = itemsSubtotal + invoice.AdditionalCharges;
+            }
+            else
+            {
+                // Fallback: strip the OLD additional charges from the old gross,
+                // then add the NEW additional charges. This prevents double-counting
+                // across successive payment/discount edits.
+                var baseGross = (invoice.GrossAmount > 0 ? invoice.GrossAmount : invoice.TotalAmount + invoice.DiscountAmount) - originalAdditionalCharges;
+                invoice.GrossAmount = baseGross + invoice.AdditionalCharges;
+            }
             
-            invoice.GrossAmount = gross;
             invoice.DiscountAmount = totalDiscount;
-            invoice.TotalAmount = gross + invoice.AdditionalCharges - totalDiscount;
+            // GrossAmount ALREADY includes AdditionalCharges, so TotalAmount is simply Gross - Discount
+            invoice.TotalAmount = invoice.GrossAmount - totalDiscount;
 
             // Handle Referrer-side adjustment (Differential logic)
             if (invoice.ReferrerDiscount != oldReferrerDiscount)
@@ -178,7 +190,7 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
                     invoice.CentreDiscount += excess;
                     invoice.ReferrerDiscount = baseCommission;
                     invoice.DiscountAmount = invoice.CentreDiscount + invoice.ReferrerDiscount + invoice.InstitutionalDeduction;
-                    invoice.TotalAmount = gross - invoice.DiscountAmount;
+                    invoice.TotalAmount = invoice.GrossAmount - invoice.DiscountAmount;
                     if (commission != null)
                         commission.Remarks = (commission.Remarks ?? "") + $" [Excess ₹{excess:0.##} absorbed by centre]";
                 }

@@ -52,11 +52,8 @@ public class ApplyInvoiceDiscountCommandHandler : IRequestHandler<ApplyInvoiceDi
             throw new InvalidOperationException("Cannot apply discount to an already paid invoice.");
         }
 
-        // Recalculate Gross if needed, though it should be stable.
-        // If Items is empty (e.g. pre-arrival), preserve the existing GrossAmount which was based on AppointmentServices.
-        var grossAmount = invoice.Items.Any() ? invoice.Items.Sum(x => x.Amount * x.Quantity) : invoice.GrossAmount;
-        invoice.GrossAmount = grossAmount;
-        
+        var originalAdditionalCharges = invoice.AdditionalCharges;
+
         // When the settlement drawer saves a DRAFT it sends the discount
         // breakdown; persist it and derive the total from it so reopening the
         // invoice restores the partial edits (centre / referrer / deduction).
@@ -72,16 +69,6 @@ public class ApplyInvoiceDiscountCommandHandler : IRequestHandler<ApplyInvoiceDi
             
             if (request.ExtraCharges != null)
             {
-                // A non-null list is authoritative — including an EMPTY list, which
-                // means the caller (e.g. the settlement drawer's "Save as draft")
-                // intentionally removed every extra charge. Previously an empty list
-                // fell through to the scalar branch below, which left the old
-                // InvoiceExtraCharge rows orphaned in the DB while blanking the
-                // AdditionalChargesReason field the drawer reads from — making the
-                // charges appear to vanish while stale rows lingered out of sync.
-                // Re-query by InvoiceId to avoid EF tracking mismatches (same
-                // fix as CollectPaymentCommand — navigation collection state can
-                // diverge from what's in the DB after a prior draft cycle).
                 var existingCharges = await _context.InvoiceExtraCharges
                     .Where(ec => ec.InvoiceId == invoice.Id)
                     .ToListAsync(cancellationToken);
@@ -101,6 +88,7 @@ public class ApplyInvoiceDiscountCommandHandler : IRequestHandler<ApplyInvoiceDi
                             CreatedAt = DateTime.UtcNow
                         };
                         _context.InvoiceExtraCharges.Add(newCharge);
+                        invoice.ExtraCharges.Add(newCharge); // Added to in-memory collection so Sum() works below
                     }
                 }
                 
@@ -117,13 +105,27 @@ public class ApplyInvoiceDiscountCommandHandler : IRequestHandler<ApplyInvoiceDi
         var discount = hasBreakdown
             ? invoice.CentreDiscount + invoice.ReferrerDiscount + invoice.InstitutionalDeduction
             : request.DiscountAmount;
-        if (discount > grossAmount + invoice.AdditionalCharges)
+
+        // Unified GrossAmount logic
+        var itemsSubtotal = invoice.Items?.Sum(i => i.Quantity * i.Amount) ?? 0;
+        if (itemsSubtotal > 0)
         {
-            discount = grossAmount + invoice.AdditionalCharges;
+            invoice.GrossAmount = itemsSubtotal + invoice.AdditionalCharges;
+        }
+        else
+        {
+            var baseGross = (invoice.GrossAmount > 0 ? invoice.GrossAmount : invoice.TotalAmount + invoice.DiscountAmount) - originalAdditionalCharges;
+            invoice.GrossAmount = baseGross + invoice.AdditionalCharges;
+        }
+
+        if (discount > invoice.GrossAmount)
+        {
+            discount = invoice.GrossAmount;
         }
 
         invoice.DiscountAmount = discount;
-        invoice.TotalAmount = grossAmount + invoice.AdditionalCharges - discount;
+        // GrossAmount ALREADY includes AdditionalCharges, so TotalAmount is simply Gross - Discount
+        invoice.TotalAmount = invoice.GrossAmount - discount;
 
         await _context.SaveChangesAsync(cancellationToken);
         return true;

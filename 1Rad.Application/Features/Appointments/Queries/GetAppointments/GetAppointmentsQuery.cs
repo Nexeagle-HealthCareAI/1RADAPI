@@ -16,10 +16,12 @@ public record GetAppointmentsQuery(
     string? Status = null,
     DateTime? UpdatedAfter = null,
     bool IncludeDeleted = false,
-    DateTime? StartDate = null
-) : IRequest<List<AppointmentDto>>;
+    DateTime? StartDate = null,
+    int PageSize = 0,
+    string? Cursor = null
+) : IRequest<PagedAppointmentResult>;
 
-public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery, List<AppointmentDto>>
+public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery, PagedAppointmentResult>
 {
     private readonly IApplicationDbContext _context;
 
@@ -28,237 +30,126 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
         _context = context;
     }
 
-    public async Task<List<AppointmentDto>> Handle(GetAppointmentsQuery request, CancellationToken cancellationToken)
+    public async Task<PagedAppointmentResult> Handle(GetAppointmentsQuery request, CancellationToken cancellationToken)
     {
         try
         {
-            // Validate hospital context
             if (_context.UserContext.HospitalId == Guid.Empty)
             {
-                return new List<AppointmentDto>();
+                return new PagedAppointmentResult();
             }
 
             var query = _context.Appointments
-                .Include(a => a.Patient)
-                .GroupJoin(_context.Invoices,
-                    a => a.AppointmentId,
-                    i => i.AppointmentId,
-                    (a, invoices) => new { Appointment = a, Invoices = invoices })
-                .SelectMany(x => x.Invoices.DefaultIfEmpty(),
-                    (x, invoice) => new { x.Appointment, Invoice = invoice })
-                .Where(x => x.Appointment.HospitalId == _context.UserContext.HospitalId)
-                .AsNoTracking();
+                .AsNoTracking()
+                .ApplyWorklistFilters(request, _context.UserContext.HospitalId);
 
-            if (!string.IsNullOrEmpty(request.Status) && request.Status != "ALL")
+            // ── Keyset cursor decode ─────────────────────────────────────────
+            bool usePaging = request.PageSize > 0 && !request.IncludeDeleted && !request.UpdatedAfter.HasValue;
+            DateTime? cursorDate = null;
+            Guid? cursorId = null;
+            if (usePaging && !string.IsNullOrEmpty(request.Cursor))
             {
-                query = query.Where(x => x.Appointment.Status == request.Status);
-            }
-
-            // Tombstone filter: hide soft-deleted rows from the everyday
-            // worklist UI, surface them to the sync engine when it asks.
-            if (!request.IncludeDeleted)
-            {
-                query = query.Where(x => x.Appointment.DeletedAt == null);
-            }
-
-            // Delta-fetch — runs against IX_Appointments_Hospital_UpdatedAt
-            // (migration 47) so this is a small index range scan even at
-            // worklists with years of history. The frontend Sync Engine
-            // sends the value it received as the highest UpdatedAt from
-            // the previous pull, NOT its local clock.
-            if (request.UpdatedAfter.HasValue)
-            {
-                var since = request.UpdatedAfter.Value;
-                query = query.Where(x => x.Appointment.UpdatedAt > since);
-            }
-
-            if (request.StartDate.HasValue)
-            {
-                query = query.Where(x => x.Appointment.DateTime >= request.StartDate.Value);
-            }
-
-
-            if (!string.IsNullOrEmpty(request.SearchQuery))
-            {
-                var search = request.SearchQuery.ToLower().Trim();
-                
-                if (Guid.TryParse(search, out Guid parsedGuid))
+                try
                 {
-                    query = query.Where(x => x.Appointment.PatientId == parsedGuid || x.Appointment.AppointmentId == parsedGuid);
+                    var decoded = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(request.Cursor));
+                    var parts = decoded.Split('|');
+                    if (parts.Length == 2)
+                    {
+                        cursorDate = new DateTime(long.Parse(parts[0]), DateTimeKind.Utc);
+                        cursorId = Guid.Parse(parts[1]);
+                    }
                 }
-                else
-                {
-                    query = query.Where(x => 
-                        (x.Appointment.Patient != null && x.Appointment.Patient.FullName != null && x.Appointment.Patient.FullName.ToLower().Contains(search)) || 
-                        (x.Appointment.Mobile != null && x.Appointment.Mobile.Contains(search)) || 
-                        (x.Appointment.DisplayId != null && x.Appointment.DisplayId.ToLower().Contains(search)) ||
-                        (x.Appointment.Patient != null && x.Appointment.Patient.PatientIdentifier != null && x.Appointment.Patient.PatientIdentifier.ToLower().Contains(search)));
-                }
+                catch { /* malformed cursor — treat as first page */ }
             }
 
-            // Project to DTO directly in the query to avoid entity materialization issues.
-            // Worklist sort: STAT (0) → URGENT (1) → ROUTINE (2), then DateTime
-            // ASC. Translated to a CASE in SQL via the IX_Appointments_HospitalId_
-            // Priority_DateTime index so STATs float to the top regardless of
-            // their scheduled time.
-            // Capture the (filtered, sorted) appointment IDs so we can run
-            // a single batched second query for services that scopes the
-            // sync delta / search / hospital constraints the same way the
-            // main projection does. Keeping it as a subquery instead of a
-            // separate .Select() means EF emits one round trip for the
-            // service fetch regardless of page size.
-            var appointmentIds = query.Select(x => x.Appointment.AppointmentId);
-
-            var appointments = await query
-                .OrderBy(x =>
-                    x.Appointment.Priority == "STAT"   ? 0 :
-                    x.Appointment.Priority == "URGENT" ? 1 : 2)
-                .ThenBy(x => x.Appointment.DateTime)
-                .Select(x => new AppointmentDto(
-                    x.Appointment.AppointmentId,
-                    x.Appointment.DisplayId ?? string.Empty,
-                    x.Appointment.PatientId,
-                    x.Appointment.Patient != null ? (x.Appointment.Patient.FullName ?? "Unknown") : "Unknown",
-                    x.Appointment.Mobile ?? string.Empty,
-                    x.Appointment.Patient != null ? (x.Appointment.Patient.Age != null ? x.Appointment.Patient.Age.ToString() : "0") : "0",
-                    x.Appointment.Patient != null ? (x.Appointment.Patient.Gender ?? "Unknown") : "Unknown",
-                    x.Appointment.Patient != null ? (x.Appointment.Patient.PatientIdentifier ?? string.Empty) : string.Empty,
-                    x.Appointment.Service ?? string.Empty,
-                    x.Appointment.Modality ?? string.Empty,
-                    x.Appointment.DateTime,
-                    x.Appointment.Type ?? "BOOKED",
-                    x.Appointment.Doctor ?? string.Empty,
-                    x.Appointment.Status ?? "BOOKED",
-                    x.Appointment.ReferredBy ?? string.Empty,
-                    x.Appointment.ReferredContact ?? string.Empty,
-                    x.Appointment.Notes ?? string.Empty,
-                    x.Appointment.TechnicianComments ?? string.Empty,
-                    x.Appointment.TechnicianId,
-                    x.Appointment.ScannedAt,
-                    x.Invoice != null ? x.Invoice.TotalAmount : 0,
-                    x.Invoice != null ? x.Invoice.ReferralCutValue : 0,
-                    // AssetCount + ReportImpression are filled by batched second
-                    // queries below (one GROUP BY + one fetch) instead of a
-                    // correlated subquery PER ROW — the worklist N+1 fix.
-                    0,
-                    (string?)null,
-                    x.Appointment.DailyTokenNumber,
-                    x.Appointment.DelayReason,
-                    x.Appointment.ReportProgressStatus ?? "NOT_STARTED",
-                    x.Appointment.Priority ?? "ROUTINE",
-                    x.Appointment.ArrivedAt,
-                    x.Appointment.ScanStartedAt,
-                    x.Appointment.DeliveredAt,
-                    x.Appointment.LatestCommentAuthorName,
-                    x.Appointment.LatestCommentAt,
-                    x.Appointment.UpdatedAt,
-                    x.Appointment.DeletedAt,
-                    // Services is materialised separately below (a single
-                    // batched second query) — projecting a typed null
-                    // here keeps EF happy (it can't translate optional
-                    // ctor args otherwise) and reserves the slot.
-                    (IReadOnlyList<AppointmentServiceDto>?)null,
-                    // ReferringDoctorName — only resolved on the single-record
-                    // (reporting) fetch; the worklist doesn't need it.
-                    (string?)null,
-                    x.Appointment.SupportedByDoctor,
-                    x.Appointment.Patient != null ? (x.Appointment.Patient.Village ?? string.Empty) : string.Empty,
-                    x.Appointment.Patient != null ? (x.Appointment.Patient.Block ?? string.Empty) : string.Empty,
-                    x.Appointment.Patient != null ? (x.Appointment.Patient.District ?? string.Empty) : string.Empty,
-                    x.Appointment.Patient != null ? (x.Appointment.Patient.Address ?? string.Empty) : string.Empty,
-                    x.Appointment.Patient != null ? (x.Appointment.Patient.SourceOfInfo ?? string.Empty) : string.Empty,
-                    (string?)null, // ReferrerDegree
-                    (string?)null  // ReferrerSpecialty
-                ))
-                .ToListAsync(cancellationToken);
-
-            // ── Batched service fetch ─────────────────────────────────
-            // Second round trip: pull every AppointmentService row whose
-            // parent is in the result set. Soft-deleted rows are excluded
-            // unless the caller asked for tombstones too. Group by
-            // AppointmentId so we can rewrite each DTO with its lines.
-            var serviceQuery = _context.AppointmentServices
-                .AsNoTracking()
-                .Where(s => appointmentIds.Contains(s.AppointmentId));
-
-            // Soft-deleted SERVICE lines are ALWAYS excluded. `IncludeDeleted`
-            // exists for APPOINTMENT-level tombstones (so the sync can drop
-            // deleted visits from the local cache) — it must NOT resurrect
-            // removed services inside a visit that is still live, or a service
-            // the user removed keeps coming back on the board.
-            serviceQuery = serviceQuery.Where(s => s.DeletedAt == null);
-
-            var services = await serviceQuery
-                .OrderBy(s => s.UpdatedAt)
-                .Select(s => new
-                {
-                    s.AppointmentId,
-                    Dto = new AppointmentServiceDto(
-                        s.Id,
-                        s.ServiceName,
-                        s.Modality,
-                        s.Amount,
-                        s.ReferralCutValue,
-                        s.Status,
-                        s.ScanStartedAt,
-                        s.ScanCompletedAt,
-                        s.ReportedAt,
-                        s.DeliveredAt,
-                        s.CancelledAt,
-                        s.TechnicianId,
-                        s.ServiceChargeId,
-                        s.UpdatedAt,
-                        s.TechnicianComments
-                    )
-                })
-                .ToListAsync(cancellationToken);
-
-            var servicesByAppointment = services
-                .GroupBy(s => s.AppointmentId)
-                .ToDictionary(g => g.Key, g => (IReadOnlyList<AppointmentServiceDto>)g.Select(x => x.Dto).ToList());
-
-            // ── Batched StudyAsset counts — one GROUP BY instead of a COUNT
-            // subquery per appointment row. ───────────────────────────────
-            var assetCountByAppointment = (await _context.StudyAssets
-                .AsNoTracking()
-                // AppointmentId is nullable since the RIS/PACS split — but every
-                // asset on this board belongs to a visit, so filter the nulls.
-                .Where(sa => sa.AppointmentId != null && appointmentIds.Contains(sa.AppointmentId.Value))
-                .GroupBy(sa => sa.AppointmentId!.Value)
-                .Select(g => new { AppointmentId = g.Key, Count = g.Count() })
-                .ToListAsync(cancellationToken))
-                .ToDictionary(x => x.AppointmentId, x => x.Count);
-
-            // ── Batched report impressions — one fetch + first-per-appointment
-            // in memory (mirrors the old per-row FirstOrDefault). ──────────
-            var impressionByAppointment = (await _context.DiagnosticReports
-                .AsNoTracking()
-                // AppointmentId is nullable since the PACS-only split (study-based
-                // reports have none) — filter those out of the visit join.
-                .Where(dr => dr.AppointmentId != null && appointmentIds.Contains(dr.AppointmentId.Value))
-                .Select(dr => new { AppointmentId = dr.AppointmentId!.Value, dr.Impression })
-                .ToListAsync(cancellationToken))
-                .GroupBy(r => r.AppointmentId)
-                .ToDictionary(g => g.Key, g => g.Select(r => r.Impression).FirstOrDefault());
-
-            // Reattach to each DTO. Records are immutable so we `with`-clone
-            // — cheap because the underlying string/scalar fields are
-            // pass-through references.
-            for (int i = 0; i < appointments.Count; i++)
+            if (usePaging && cursorDate.HasValue && cursorId.HasValue)
             {
-                var apptId = appointments[i].AppointmentId;
-                appointments[i] = appointments[i] with
-                {
-                    // Visit with no service rows surfaces an empty (non-null) list.
-                    Services = servicesByAppointment.TryGetValue(apptId, out var lines)
-                        ? lines
-                        : System.Array.Empty<AppointmentServiceDto>(),
-                    AssetCount = assetCountByAppointment.TryGetValue(apptId, out var ac) ? ac : 0,
-                    ReportImpression = impressionByAppointment.TryGetValue(apptId, out var imp) ? imp : null,
-                };
+                query = query.Where(a =>
+                    a.DateTime < cursorDate.Value ||
+                    (a.DateTime == cursorDate.Value && a.AppointmentId < cursorId.Value));
             }
 
-            return appointments;
+            int totalCount = 0;
+            if (usePaging)
+            {
+                totalCount = await query.CountAsync(cancellationToken);
+            }
+
+            int takeCount = usePaging ? request.PageSize + 1 : (request.IncludeDeleted ? 100_000 : 200);
+
+            var appointmentQuery = query
+                .OrderByDescending(a => a.DateTime)
+                .ThenByDescending(a => a.AppointmentId)
+                .Take(takeCount)
+                .Select(a => new {
+                    Appointment = a,
+                    Invoice = _context.Invoices.FirstOrDefault(i => i.AppointmentId == a.AppointmentId)
+                });
+
+            var rawResults = await appointmentQuery.ToListAsync(cancellationToken);
+
+            var appointmentIds = rawResults.Select(x => x.Appointment.AppointmentId).ToList();
+
+            // Batched StudyAsset counts
+            var assetCountByAppointment = new Dictionary<Guid, int>();
+            if (appointmentIds.Any())
+            {
+                assetCountByAppointment = (await _context.StudyAssets
+                    .AsNoTracking()
+                    .Where(sa => sa.AppointmentId != null && appointmentIds.Contains(sa.AppointmentId.Value))
+                    .GroupBy(sa => sa.AppointmentId!.Value)
+                    .Select(g => new { AppointmentId = g.Key, Count = g.Count() })
+                    .ToListAsync(cancellationToken))
+                    .ToDictionary(x => x.AppointmentId, x => x.Count);
+            }
+
+            var summaryList = rawResults.Select(x => new AppointmentSummaryDto(
+                x.Appointment.AppointmentId,
+                x.Appointment.DisplayId ?? string.Empty,
+                x.Appointment.PatientId,
+                x.Appointment.Patient?.FullName ?? "Unknown",
+                x.Appointment.Mobile ?? string.Empty,
+                x.Appointment.Patient?.Age?.ToString() ?? "0",
+                x.Appointment.Patient?.Gender ?? "Unknown",
+                x.Appointment.Patient?.PatientIdentifier ?? string.Empty,
+                x.Appointment.Service ?? string.Empty,
+                x.Appointment.Modality ?? string.Empty,
+                x.Appointment.DateTime,
+                x.Appointment.Type ?? "BOOKED",
+                x.Appointment.Doctor ?? string.Empty,
+                x.Appointment.Status ?? "BOOKED",
+                x.Appointment.ReferredBy ?? string.Empty,
+                x.Appointment.ReferredContact ?? string.Empty,
+                x.Appointment.DailyTokenNumber,
+                x.Appointment.DelayReason,
+                x.Appointment.ReportProgressStatus ?? "NOT_STARTED",
+                x.Appointment.Priority ?? "ROUTINE",
+                x.Appointment.ArrivedAt,
+                x.Appointment.ScanStartedAt,
+                x.Appointment.DeliveredAt,
+                x.Appointment.UpdatedAt,
+                x.Appointment.DeletedAt,
+                x.Invoice?.TotalAmount ?? 0,
+                x.Invoice?.ReferralCutValue ?? 0,
+                assetCountByAppointment.GetValueOrDefault(x.Appointment.AppointmentId, 0)
+            )).ToList();
+
+            string? nextCursor = null;
+            if (usePaging && summaryList.Count() > request.PageSize)
+            {
+                summaryList.RemoveAt(summaryList.Count() - 1);
+                var last = rawResults[summaryList.Count()].Appointment;
+                var raw = $"{last.DateTime.Ticks}|{last.AppointmentId}";
+                nextCursor = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(raw));
+            }
+
+            return new PagedAppointmentResult
+            {
+                Items = summaryList,
+                NextCursor = nextCursor,
+                TotalCount = usePaging ? totalCount : summaryList.Count(),
+                IsPaged = usePaging
+            };
         }
         catch (Exception ex)
         {

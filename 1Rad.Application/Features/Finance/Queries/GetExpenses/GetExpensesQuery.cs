@@ -65,43 +65,7 @@ public class GetExpensesQueryHandler : IRequestHandler<GetExpensesQuery, PagedEx
 
             var query = _context.Expenses
                 .AsNoTracking()
-                .Where(e => e.HospitalId == _context.UserContext.HospitalId)
-                .AsQueryable();
-
-            if (!request.IncludeDeleted)
-            {
-                query = query.Where(e => e.DeletedAt == null);
-            }
-            if (request.UpdatedAfter.HasValue)
-            {
-                var since = request.UpdatedAfter.Value;
-                query = query.Where(e => e.UpdatedAt > since);
-            }
-
-            // Category Filtering
-            if (!string.IsNullOrEmpty(request.Category) && request.Category != "ALL")
-            {
-                query = query.Where(e => e.Category == request.Category);
-            }
-
-            // Search Filtering
-            if (!string.IsNullOrEmpty(request.Search))
-            {
-                query = query.Where(e => e.Description.Contains(request.Search) || 
-                                         e.VendorName.Contains(request.Search) || 
-                                         e.ReferenceNumber.Contains(request.Search));
-            }
-
-            // Temporal Filtering
-            if (request.StartDate.HasValue)
-            {
-                query = query.Where(e => e.TransactionDate >= request.StartDate.Value);
-            }
-
-            if (request.EndDate.HasValue)
-            {
-                query = query.Where(e => e.TransactionDate <= request.EndDate.Value);
-            }
+                .ApplyExpenseFilters(request, _context.UserContext.HospitalId);
 
             // ── Keyset cursor decode ──────────────────────────────────────
             bool usePaging = request.PageSize > 0 && !request.IncludeDeleted && !request.UpdatedAfter.HasValue;

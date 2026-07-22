@@ -91,18 +91,31 @@ public class GetPendingBillablesQueryHandler : IRequestHandler<GetPendingBillabl
                 .OrderBy(s => s.UpdatedAt)
                 .ToListAsync(cancellationToken);
 
-            // Map and try to find prices from Service Registry
-            var registry = await _context.ServiceCharges.AsNoTracking().ToListAsync(cancellationToken);
+            // Extract unique modalities and service names required for pricing
+            var requiredModalities = lines.Select(l => l.Modality).Distinct().ToList();
+            var requiredServices = lines.Select(l => l.ServiceName).Distinct().ToList();
+            
+            // Add fallback parameters
+            foreach (var a in unbilledAppointments)
+            {
+                if (!string.IsNullOrEmpty(a.Modality) && !requiredModalities.Contains(a.Modality)) requiredModalities.Add(a.Modality);
+                if (!string.IsNullOrEmpty(a.Service) && !requiredServices.Contains(a.Service)) requiredServices.Add(a.Service);
+            }
+
+            // Map and try to find prices from Service Registry, scoped to tenant and required services
+            var registry = await _context.ServiceCharges
+                .AsNoTracking()
+                .Where(r => r.HospitalId == _context.UserContext.HospitalId && 
+                            requiredModalities.Contains(r.Modality) && 
+                            requiredServices.Contains(r.ServiceName))
+                .ToListAsync(cancellationToken);
 
             decimal? ResolvePrice(string modality, string serviceName, decimal? fallback)
             {
-                // First honour the per-line price the appointment was
-                // booked with — that's what the patient was quoted.
                 if (fallback.HasValue && fallback.Value > 0) return fallback.Value;
-                // Otherwise fall back to the catalogue.
                 var price = registry.FirstOrDefault(r =>
-                    r.Modality.Equals(modality ?? string.Empty, StringComparison.OrdinalIgnoreCase) &&
-                    r.ServiceName.Equals(serviceName ?? string.Empty, StringComparison.OrdinalIgnoreCase));
+                    string.Equals(r.Modality, modality, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(r.ServiceName, serviceName, StringComparison.OrdinalIgnoreCase));
                 return price?.Amount;
             }
 
