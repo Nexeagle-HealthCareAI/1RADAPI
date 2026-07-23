@@ -88,11 +88,19 @@ public class ApplyInvoiceDiscountCommandHandler : IRequestHandler<ApplyInvoiceDi
                             CreatedAt = DateTime.UtcNow
                         };
                         _context.InvoiceExtraCharges.Add(newCharge);
-                        invoice.ExtraCharges.Add(newCharge); // Added to in-memory collection so Sum() works below
                     }
                 }
-                
-                invoice.AdditionalCharges = invoice.ExtraCharges.Sum(x => x.Amount);
+
+                // Sum the validated INPUT, not invoice.ExtraCharges — EF's relationship
+                // fixup (triggered by the _context.InvoiceExtraCharges.Add above) already
+                // attaches each newCharge into invoice.ExtraCharges on its own, so also
+                // calling invoice.ExtraCharges.Add(newCharge) here left every charge
+                // counted twice in that in-memory collection (same object reference added
+                // twice) — the DB got one row each, but Sum() over the doubled collection
+                // silently doubled AdditionalCharges/GrossAmount/TotalAmount. Deriving the
+                // total straight from request.ExtraCharges (the same filter used above)
+                // is unambiguous and independent of EF's fixup timing.
+                invoice.AdditionalCharges = request.ExtraCharges.Where(x => x.Amount > 0).Sum(x => x.Amount);
                 invoice.AdditionalChargesReason = request.AdditionalChargesReason ?? "[]";
             }
             else

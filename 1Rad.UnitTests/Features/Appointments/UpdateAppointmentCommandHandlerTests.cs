@@ -299,7 +299,7 @@ public class UpdateAppointmentCommandHandlerTests : BaseHandlerTest
         Assert.Equal("9222222222", updatedReferrer.Contact);
         Assert.Equal("Referrer address", updatedReferrer.Address);
 
-        var revenueInvoice = (await new GetInvoicesQueryHandler(Context)
+        var revenueInvoice = (await new GetInvoicesQueryHandler(Context, new InvoiceEnrichmentService(Context))
             .Handle(new GetInvoicesQuery { AppointmentId = appointment.AppointmentId }, CancellationToken.None))
             .Items.Single();
 
@@ -328,7 +328,7 @@ public class UpdateAppointmentCommandHandlerTests : BaseHandlerTest
         Context.Remove(retainedInvoiceItem);
         await Context.SaveChangesAsync();
 
-        var repairedRevenueInvoice = (await new GetInvoicesQueryHandler(Context)
+        var repairedRevenueInvoice = (await new GetInvoicesQueryHandler(Context, new InvoiceEnrichmentService(Context))
             .Handle(new GetInvoicesQuery { AppointmentId = appointment.AppointmentId }, CancellationToken.None))
             .Items.Single();
 

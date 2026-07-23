@@ -43,7 +43,7 @@ public class GetAppointmentsQueryHandlerTests : BaseHandlerTest
             new GetAppointmentsQuery(StartDate: cutoff),
             CancellationToken.None);
 
-        var appointment = Assert.Single(result);
+        var appointment = Assert.Single(result.Items);
         Assert.Equal(upcomingAppointment.AppointmentId, appointment.AppointmentId);
     }
 }
