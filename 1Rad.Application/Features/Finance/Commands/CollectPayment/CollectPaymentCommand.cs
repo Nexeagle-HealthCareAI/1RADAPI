@@ -81,6 +81,40 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
                 throw new InvalidOperationException($"Invoice '{invoice.InvoiceId}' is cancelled.");
             }
 
+            // Self-heal against the live service list BEFORE recomputing totals below.
+            // Recomputing Gross/TotalAmount from invoice.Items (further down) only helps
+            // if Items itself is complete — but the thing responsible for keeping Items in
+            // sync with AppointmentServices is a completely separate code path (an
+            // appointment edit's reconciler, arrival billing, etc.), and if THAT path ever
+            // fails to run, skips a line, or predates a fix to it, this invoice is left
+            // permanently missing a paid-for service with no way to notice. Payment
+            // collection is the last gate before money changes hands, so it must never
+            // just trust whatever Items happen to be persisted — pull in any live,
+            // un-invoiced service itself. Mirrors ReconcileInvoiceItemsAsync's "add
+            // missing" branch; deliberately ADD-ONLY (never remove/alter an existing
+            // line here — that's the edit flow's decision, not payment's).
+            if (invoice.AppointmentId.HasValue)
+            {
+                var liveServices = await _context.AppointmentServices
+                    .Where(s => s.AppointmentId == invoice.AppointmentId.Value && s.DeletedAt == null)
+                    .ToListAsync(cancellationToken);
+                var invoicedServiceIds = invoice.Items
+                    .Where(i => i.AppointmentServiceId.HasValue)
+                    .Select(i => i.AppointmentServiceId!.Value)
+                    .ToHashSet();
+                foreach (var svc in liveServices.Where(s => !invoicedServiceIds.Contains(s.Id)))
+                {
+                    invoice.Items.Add(new InvoiceItem
+                    {
+                        InvoiceId = invoice.Id,
+                        Description = svc.ServiceName,
+                        Amount = svc.Amount,
+                        Quantity = 1,
+                        AppointmentServiceId = svc.Id,
+                    });
+                }
+            }
+
             // NOTE: the "already settled" check used to live here, evaluated against
             // whatever TotalAmount/PaidAmount happened to be persisted at the moment
             // this row was loaded. That's stale the instant a service was added to
@@ -88,7 +122,8 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
             // — TotalAmount hadn't caught up yet, so a genuinely-owed top-up payment
             // got rejected outright as "already settled" instead of being applied.
             // Moved below, after Gross/TotalAmount are re-derived from the live
-            // line items, so the check reflects the real current balance.
+            // line items (now self-healed above), so the check reflects the real
+            // current balance.
 
             // Record Previous State for Commission Differential
             var oldReferrerDiscount = invoice.ReferrerDiscount;
