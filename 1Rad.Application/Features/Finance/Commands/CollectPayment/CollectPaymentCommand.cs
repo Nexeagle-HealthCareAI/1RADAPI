@@ -81,10 +81,14 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
                 throw new InvalidOperationException($"Invoice '{invoice.InvoiceId}' is cancelled.");
             }
 
-            if (invoice.PaidAmount >= invoice.TotalAmount - 0.01m)
-            {
-                throw new InvalidOperationException($"Invoice '{invoice.InvoiceId}' is already settled.");
-            }
+            // NOTE: the "already settled" check used to live here, evaluated against
+            // whatever TotalAmount/PaidAmount happened to be persisted at the moment
+            // this row was loaded. That's stale the instant a service was added to
+            // the visit since this row was last saved (e.g. via an appointment edit)
+            // — TotalAmount hadn't caught up yet, so a genuinely-owed top-up payment
+            // got rejected outright as "already settled" instead of being applied.
+            // Moved below, after Gross/TotalAmount are re-derived from the live
+            // line items, so the check reflects the real current balance.
 
             // Record Previous State for Commission Differential
             var oldReferrerDiscount = invoice.ReferrerDiscount;
@@ -174,6 +178,12 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
             invoice.DiscountAmount = totalDiscount;
             // GrossAmount ALREADY includes AdditionalCharges, so TotalAmount is simply Gross - Discount
             invoice.TotalAmount = invoice.GrossAmount - totalDiscount;
+
+            // Already-settled check, against the FRESH balance (see note above).
+            if (invoice.PaidAmount >= invoice.TotalAmount - 0.01m)
+            {
+                throw new InvalidOperationException($"Invoice '{invoice.InvoiceId}' is already settled.");
+            }
 
             // Handle Referrer-side adjustment (Differential logic)
             if (invoice.ReferrerDiscount != oldReferrerDiscount)

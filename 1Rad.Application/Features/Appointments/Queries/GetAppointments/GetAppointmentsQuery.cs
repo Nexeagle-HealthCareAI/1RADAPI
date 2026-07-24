@@ -42,6 +42,7 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
 
             var query = _context.Appointments
                 .AsNoTracking()
+                .Include(a => a.Patient)
                 .ApplyWorklistFilters(request, _context.UserContext.HospitalId);
 
             // ── Keyset cursor decode ─────────────────────────────────────────

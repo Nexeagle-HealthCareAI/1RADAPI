@@ -374,16 +374,33 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             return new UpdateAppointmentResult { Success = true };
         }
 
-        // ── Invoice reconciliation (arrival-gated) ────────────────────────
-        // One Invoice per visit; one InvoiceItem per live service line. A bill is
-        // only created OR modified once the patient has ARRIVED — a not-yet-arrived
-        // edit must touch no bill (no-show protection). After arrival: reconcile the
-        // existing LIVE invoice, or create one when there isn't one yet.
+        // ── Invoice reconciliation ─────────────────────────────────────────
+        // One Invoice per visit; one InvoiceItem per live service line.
+        //
+        // CREATING a bill is arrival-gated (see the `else if (appointment.ArrivedAt
+        // != null)` branch below) — a not-yet-arrived edit must not spontaneously
+        // bill a potential no-show. But reconciling an invoice that ALREADY EXISTS
+        // is NOT gated on arrival: existence of the invoice means billing is
+        // already active for this visit (e.g. GenerateInvoiceCommand can create one
+        // without the appointment ever passing through the arrival status
+        // transition), and GenerateInvoiceCommand's own contract assumes THIS
+        // reconciler folds in any service added afterwards "the next time the
+        // appointment is edited for any reason" — not conditionally on arrival.
+        // Gating this on ArrivedAt left an already-billed visit's invoice frozen
+        // at its old total when a service was added post-hoc, so the next payment
+        // collected against the (stale, too-low) TotalAmount got misclassified as
+        // an overpayment/advance instead of being applied to the real balance.
+        //
+        // Exception: a CANCELLED invoice (ReviewApprovalCommand.
+        // ApplyCancelAppointmentAsync deliberately keeps a refunded invoice VISIBLE
+        // at net ₹0 for audit — DeletedAt stays null, only Status flips) is a closed
+        // record and must never be reconciled back to a live-looking total by a
+        // later edit. See the `invoice.Status != "CANCELLED"` guard below.
         var invoice = await _context.Invoices
             .Include(i => i.Items)
             .FirstOrDefaultAsync(i => i.AppointmentId == request.AppointmentId && i.DeletedAt == null, cancellationToken);
 
-        if (invoice != null && appointment.ArrivedAt != null)
+        if (invoice != null && invoice.Status != "CANCELLED")
         {
             if (dateChanged)
             {
@@ -421,7 +438,6 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             // with an outstanding balance (and removing a service flips a
             // part-paid bill to PAID when it's now fully covered). Mirrors the
             // canonical rule in CollectPaymentCommand.
-            if (invoice.Status != "CANCELLED")
             {
                 // Gap 1 — removing/shrinking a paid service can leave the bill
                 // OVERPAID (PaidAmount > TotalAmount). That excess is the patient's
@@ -477,7 +493,7 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
                     invoice.PaidAt = DateTime.UtcNow;
             }
         }
-        else if (appointment.ArrivedAt != null)
+        else if (invoice == null && appointment.ArrivedAt != null)
         {
             // No live invoice yet, but the patient has ARRIVED — e.g. auto-billing
             // was off at arrival, or billable services were only added now via this
@@ -485,6 +501,12 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             // arrival so a not-yet-arrived (potential no-show) edit still produces
             // no bill here — that case is billed on arrival as usual. Commissions
             // are handled by the arrival-gated reconciliation below.
+            //
+            // `invoice == null` here specifically (not just "falls through from
+            // above") — a CANCELLED invoice (ReviewApprovalCommand.
+            // ApplyCancelAppointmentAsync keeps it VISIBLE at net ₹0, DeletedAt
+            // still null) must NOT trigger a second bill for the same visit; it
+            // stays a closed, refunded record.
             decimal gross = liveServices.Sum(s => s.Amount);
             if (gross > 0)
             {
@@ -524,13 +546,17 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         // shape. v2 fans out one commission per service line. We keep both
         // working by reconciling against the live service list.
         //
-        // Billing-on-arrival: commissions only exist once the patient has
-        // arrived (UpdateAppointmentStatus generates them then). Editing a
-        // not-yet-arrived appointment must NOT create commissions — otherwise
-        // a no-show that was edited would still produce a referral payout.
-        // After arrival we reconcile normally so service add/remove/price
-        // edits flow through to the existing commission rows.
-        if (appointment.ArrivedAt != null)
+        // Billing-on-arrival: commissions normally only exist once the patient
+        // has arrived (UpdateAppointmentStatus generates them then). Editing a
+        // not-yet-arrived, not-yet-invoiced appointment must NOT create
+        // commissions — otherwise a no-show that was edited would still
+        // produce a referral payout. But `invoice != null` also reconciles:
+        // GenerateInvoiceCommand can create a real invoice (and its commission
+        // row) without the appointment ever passing through arrival, and once
+        // that invoice exists a later service edit must keep its commission in
+        // sync too — mirrors the same reasoning as the invoice reconciliation
+        // gate above.
+        if (appointment.ArrivedAt != null || invoice != null)
         {
             // Auto-billing parity: arrival keeps a ₹0 commission row per service
             // when auto-billing is on. The edit reconcile must mirror that so a
