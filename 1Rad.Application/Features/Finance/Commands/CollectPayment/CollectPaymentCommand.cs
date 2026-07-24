@@ -60,9 +60,9 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
                 throw new UnauthorizedAccessException("Hospital context is required to collect payment.");
             }
 
-            if (request.Amount <= 0)
+            if (request.Amount < 0)
             {
-                throw new ArgumentException("Payment amount must be greater than zero.", nameof(request.Amount));
+                throw new ArgumentException("Payment amount cannot be negative.", nameof(request.Amount));
             }
 
             var invoice = await _context.Invoices
