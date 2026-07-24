@@ -163,10 +163,7 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         var referrerLocked = false;
         if (referrerChanged)
         {
-            referrerLocked = await _context.Invoices
-                .AnyAsync(i => i.AppointmentId == request.AppointmentId && (i.PaidAmount > 0 || i.Status == "PAID" || i.Status == "PARTIAL"), cancellationToken)
-                || await _context.Payments
-                .AnyAsync(p => p.Invoice.AppointmentId == request.AppointmentId, cancellationToken);
+            referrerLocked = await AppointmentPaymentGuard.HasCollectedPayment(_context, request.AppointmentId, cancellationToken);
         }
         var effectiveReferredBy = referrerLocked ? (prevReferredBy ?? string.Empty) : (request.ReferredBy ?? string.Empty);
 
@@ -422,11 +419,16 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             }
 
             // Total gets recomputed from the line items so the invoice stays
-            // consistent with the per-service amounts.
-            invoice.GrossAmount = invoice.Items.Sum(i => i.Amount * i.Quantity);
-            // Discount can't exceed the (possibly reduced) gross.
-            if (invoice.DiscountAmount > invoice.GrossAmount) invoice.DiscountAmount = invoice.GrossAmount;
-            invoice.TotalAmount = invoice.GrossAmount - invoice.DiscountAmount;
+            // consistent with the per-service amounts. Canonical recompute
+            // (Common/InvoiceTotals.cs) — this handler never touches
+            // AdditionalCharges itself, so pass it through unchanged; the shared
+            // helper still folds it into Gross, closing a gap the old inline
+            // version here had: an appointment edit used to silently drop any
+            // AdditionalCharges already on the invoice (e.g. a night charge added
+            // at collection) out of GrossAmount/TotalAmount until the next
+            // payment/discount action re-added them.
+            InvoiceTotals.RecomputeGross(invoice, invoice.AdditionalCharges);
+            InvoiceTotals.ApplyDiscountAndFinalize(invoice, invoice.DiscountAmount);
             invoice.ReferralCutValue = liveServices.Sum(s => s.ReferralCutValue);
             invoice.PatientName = appointment.PatientName ?? invoice.PatientName;
             // Keep the free rollup honest: only a bill whose every surviving line
@@ -517,9 +519,6 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
                     PatientName = appointment.PatientName ?? "Unknown",
                     HospitalId = appointment.HospitalId,
                     InvoiceId = $"INV-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString().Substring(0, 8).ToUpper()}",
-                    GrossAmount = gross,
-                    DiscountAmount = 0,
-                    TotalAmount = gross,
                     PaidAmount = 0,
                     Status = "PENDING",
                     ReferralCutValue = liveServices.Sum(s => s.ReferralCutValue),
@@ -536,6 +535,11 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
                         AppointmentServiceId = s.Id,
                     });
                 }
+                // Canonical recompute (Common/InvoiceTotals.cs) — a brand-new
+                // invoice has no additional charges/discount yet, so Gross ends up
+                // exactly the items sum and Total equals Gross, same as before.
+                InvoiceTotals.RecomputeGross(newInvoice, 0);
+                InvoiceTotals.ApplyDiscountAndFinalize(newInvoice, 0);
                 _context.Invoices.Add(newInvoice);
                 invoice = newInvoice; // let the commission reconciliation below reference it
             }

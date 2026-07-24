@@ -1,3 +1,4 @@
+using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Entities;
 using MediatR;
@@ -119,10 +120,7 @@ public class UpdateAppointmentStatusCommandHandler : IRequestHandler<UpdateAppoi
             }
 
             // Enforce validation: Enforce that an appointment can ONLY be cancelled if no payments have been collected
-            var hasPayments = await _context.Invoices
-                .AnyAsync(i => i.AppointmentId == request.AppointmentId && (i.PaidAmount > 0 || i.Status == "PAID" || i.Status == "PARTIAL"), cancellationToken)
-                || await _context.Payments
-                .AnyAsync(p => p.Invoice.AppointmentId == request.AppointmentId, cancellationToken);
+            var hasPayments = await AppointmentPaymentGuard.HasCollectedPayment(_context, request.AppointmentId, cancellationToken);
 
             if (hasPayments)
             {
@@ -179,17 +177,7 @@ public class UpdateAppointmentStatusCommandHandler : IRequestHandler<UpdateAppoi
             //    LIVE (non-deleted) commissions so the ledger doesn't drift.
             foreach (var referrerId in referrersToRecalculate)
             {
-                var allRemainingCommissions = await _context.ReferralCommissions
-                    .Where(c => c.ReferrerId == referrerId && c.HospitalId == hospitalId && c.DeletedAt == null)
-                    .OrderBy(c => c.TransactionDate)
-                    .ToListAsync(cancellationToken);
-
-                decimal runningTotal = 0;
-                foreach (var c in allRemainingCommissions)
-                {
-                    runningTotal += c.CommissionAmount;
-                    c.AccumulatedTotal = runningTotal;
-                }
+                await ReferralLedger.RecomputeAccumulatedTotal(_context, referrerId, hospitalId, cancellationToken);
             }
 
             if (referrersToRecalculate.Any())

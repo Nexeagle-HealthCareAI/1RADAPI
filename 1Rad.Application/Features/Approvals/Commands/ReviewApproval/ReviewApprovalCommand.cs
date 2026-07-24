@@ -1,6 +1,7 @@
 using System.Text.Json;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
+using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using _1Rad.Application.Features.Appointments.Commands.UpdateAppointment;
 using _1Rad.Domain.Entities;
@@ -168,6 +169,9 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
         } catch { }
 
         var oldReferrerDiscount = invoice.ReferrerDiscount;
+        // Capture BEFORE the extraCharges block below can mutate it — needed by
+        // InvoiceTotals.RecomputeGross's fallback branch.
+        var originalAdditionalCharges = invoice.AdditionalCharges;
 
         invoice.CentreDiscount = centre ?? invoice.CentreDiscount;
         invoice.ReferrerDiscount = referrer ?? invoice.ReferrerDiscount;
@@ -216,12 +220,10 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
             invoice.ReferrerDiscount = baseCommission;
         }
 
+        // Canonical recompute (Common/InvoiceTotals.cs).
         var totalDiscount = invoice.CentreDiscount + invoice.ReferrerDiscount + invoice.InstitutionalDeduction;
-        var gross = (invoice.Items?.Sum(i => i.Amount * i.Quantity) ?? 0) + (invoice.AdditionalCharges);
-        if (gross <= 0) gross = invoice.GrossAmount > 0 ? invoice.GrossAmount : invoice.TotalAmount + invoice.DiscountAmount;
-        invoice.GrossAmount = gross;
-        invoice.DiscountAmount = totalDiscount;
-        invoice.TotalAmount = gross - totalDiscount;
+        InvoiceTotals.RecomputeGross(invoice, originalAdditionalCharges);
+        InvoiceTotals.ApplyDiscountAndFinalize(invoice, totalDiscount);
 
         // Referrer-side commission differential (revert old, apply new).
         if (commission != null)
@@ -391,12 +393,7 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
         // they don't change anyone's running total.
         foreach (var referrerId in referrersToRecalculate)
         {
-            var remaining = await _context.ReferralCommissions
-                .Where(c => c.ReferrerId == referrerId && c.HospitalId == hospitalId && c.DeletedAt == null)
-                .OrderBy(c => c.TransactionDate)
-                .ToListAsync(ct);
-            decimal running = 0;
-            foreach (var c in remaining) { running += c.CommissionAmount; c.AccumulatedTotal = running; }
+            await ReferralLedger.RecomputeAccumulatedTotal(_context, referrerId, hospitalId, ct);
         }
     }
 
@@ -444,13 +441,16 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
 
         if (invoice != null && invoice.Status != "CANCELLED")
         {
-            var gross = invoice.GrossAmount > 0 ? invoice.GrossAmount : invoice.TotalAmount + invoice.DiscountAmount;
-            invoice.GrossAmount = gross;
-            invoice.CentreDiscount = gross;   // 100% concession → free test
+            // Canonical recompute (Common/InvoiceTotals.cs) — prefers the live
+            // items sum over the previously-persisted GrossAmount where the old
+            // inline fallback here didn't even try. 100% concession (discount ==
+            // gross) drives Total to exactly 0 via the same clamp+finalize step
+            // every other invoice-total site uses.
+            InvoiceTotals.RecomputeGross(invoice, invoice.AdditionalCharges);
+            invoice.CentreDiscount = invoice.GrossAmount;   // 100% concession → free test
             invoice.ReferrerDiscount = 0;
             invoice.InstitutionalDeduction = 0;
-            invoice.DiscountAmount = gross;
-            invoice.TotalAmount = 0;
+            InvoiceTotals.ApplyDiscountAndFinalize(invoice, invoice.CentreDiscount);
             invoice.IsFree = true; // distinguishes a free test from a 100% discount in reports
             // Mark every line free too, so the per-service FREE badges stay
             // consistent whether the user frees all-at-once or one-by-one.
@@ -523,12 +523,7 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
                 await _context.SaveChangesAsync(ct);
                 foreach (var rid in affected)
                 {
-                    var rows = await _context.ReferralCommissions
-                        .Where(c => c.ReferrerId == rid && c.HospitalId == req.HospitalId && c.DeletedAt == null)
-                        .OrderBy(c => c.TransactionDate)
-                        .ToListAsync(ct);
-                    decimal running = 0;
-                    foreach (var c in rows) { running += c.CommissionAmount; c.AccumulatedTotal = running; }
+                    await ReferralLedger.RecomputeAccumulatedTotal(_context, rid, req.HospitalId, ct);
                 }
             }
         }
@@ -577,17 +572,17 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
         // 2) Recompute the invoice from its lines. The centre absorbs every freed
         //    line (folded into CentreDiscount), so payable = gross − discounts.
         //    Recomputing from scratch (not adding) keeps a re-run idempotent.
-        var gross = invoice.Items.Sum(it => it.Amount * it.Quantity);
-        if (gross <= 0) gross = invoice.GrossAmount; // legacy invoices with no item rows
+        // Canonical gross recompute (Common/InvoiceTotals.cs) — note this
+        // command's discount is deliberately CentreDiscount + ReferrerDiscount
+        // only (no InstitutionalDeduction), matching the bearer rule above; that
+        // business rule is preserved as-is, only the gross/clamp/total mechanics
+        // are shared.
+        InvoiceTotals.RecomputeGross(invoice, invoice.AdditionalCharges);
         var freeTotal = invoice.Items.Where(it => it.IsFree).Sum(it => it.Amount * it.Quantity);
 
-        invoice.GrossAmount = gross;
         invoice.CentreDiscount = freeTotal;
         var discount = invoice.CentreDiscount + invoice.ReferrerDiscount;
-        if (discount > gross) discount = gross;
-        invoice.DiscountAmount = discount;
-        invoice.TotalAmount = gross - discount;
-        if (invoice.TotalAmount < 0) invoice.TotalAmount = 0;
+        InvoiceTotals.ApplyDiscountAndFinalize(invoice, discount);
 
         // Every line free → the whole bill is a free test (back-compat rollup so
         // existing "free test" reports still recognise it).
@@ -625,12 +620,7 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
 
             // Rebuild the referrer's running accumulated total (the modified row is
             // the tracked instance, so its new amount is reflected here).
-            var rows = await _context.ReferralCommissions
-                .Where(c => c.ReferrerId == comm.ReferrerId && c.HospitalId == req.HospitalId && c.DeletedAt == null)
-                .OrderBy(c => c.TransactionDate)
-                .ToListAsync(ct);
-            decimal running = 0;
-            foreach (var c in rows) { running += c.CommissionAmount; c.AccumulatedTotal = running; }
+            await ReferralLedger.RecomputeAccumulatedTotal(_context, comm.ReferrerId, req.HospitalId, ct);
         }
     }
 
@@ -706,18 +696,7 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
         commission.Remarks = (commission.Remarks ?? "") + $" [Edited via approval {req.Id} — {req.Reason}]";
         commission.UpdatedAt = DateTime.UtcNow;
 
-        var rows = await _context.ReferralCommissions
-            .Where(c => c.ReferrerId == commission.ReferrerId
-                     && c.HospitalId == req.HospitalId
-                     && c.DeletedAt == null)
-            .OrderBy(c => c.TransactionDate)
-            .ToListAsync(ct);
-        decimal running = 0;
-        foreach (var row in rows)
-        {
-            running += row.CommissionAmount;
-            row.AccumulatedTotal = running;
-        }
+        await ReferralLedger.RecomputeAccumulatedTotal(_context, commission.ReferrerId, req.HospitalId, ct);
     }
 
     /// <summary>

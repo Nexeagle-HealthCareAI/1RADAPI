@@ -254,12 +254,7 @@ internal static class ReferrerReassign
         // Re-base accumulated totals for every affected referrer over live rows.
         foreach (var rid in affected)
         {
-            var rows = await ctx.ReferralCommissions
-                .Where(c => c.ReferrerId == rid && c.HospitalId == hospitalId && c.DeletedAt == null)
-                .OrderBy(c => c.TransactionDate)
-                .ToListAsync(ct);
-            decimal running = 0;
-            foreach (var c in rows) { running += c.CommissionAmount; c.AccumulatedTotal = running; }
+            await ReferralLedger.RecomputeAccumulatedTotal(ctx, rid, hospitalId, ct);
         }
     }
 }

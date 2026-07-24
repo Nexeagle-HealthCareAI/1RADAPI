@@ -1,4 +1,5 @@
 using MediatR;
+using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using _1Rad.Domain.Entities;
@@ -114,26 +115,9 @@ public class ApplyInvoiceDiscountCommandHandler : IRequestHandler<ApplyInvoiceDi
             ? invoice.CentreDiscount + invoice.ReferrerDiscount + invoice.InstitutionalDeduction
             : request.DiscountAmount;
 
-        // Unified GrossAmount logic
-        var itemsSubtotal = invoice.Items?.Sum(i => i.Quantity * i.Amount) ?? 0;
-        if (itemsSubtotal > 0)
-        {
-            invoice.GrossAmount = itemsSubtotal + invoice.AdditionalCharges;
-        }
-        else
-        {
-            var baseGross = (invoice.GrossAmount > 0 ? invoice.GrossAmount : invoice.TotalAmount + invoice.DiscountAmount) - originalAdditionalCharges;
-            invoice.GrossAmount = baseGross + invoice.AdditionalCharges;
-        }
-
-        if (discount > invoice.GrossAmount)
-        {
-            discount = invoice.GrossAmount;
-        }
-
-        invoice.DiscountAmount = discount;
-        // GrossAmount ALREADY includes AdditionalCharges, so TotalAmount is simply Gross - Discount
-        invoice.TotalAmount = invoice.GrossAmount - discount;
+        // Canonical recompute (Common/InvoiceTotals.cs).
+        InvoiceTotals.RecomputeGross(invoice, originalAdditionalCharges);
+        InvoiceTotals.ApplyDiscountAndFinalize(invoice, discount);
 
         await _context.SaveChangesAsync(cancellationToken);
         return true;

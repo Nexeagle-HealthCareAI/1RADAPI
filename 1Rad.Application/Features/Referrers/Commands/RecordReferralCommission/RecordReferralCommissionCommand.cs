@@ -1,3 +1,4 @@
+using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Entities;
 using MediatR;
@@ -78,20 +79,7 @@ public class RecordReferralCommissionCommandHandler : IRequestHandler<RecordRefe
         await _context.SaveChangesAsync(cancellationToken);
 
         // Recalculate Accumulated Total chronologically for this referrer to prevent drift
-        var allCommissions = await _context.ReferralCommissions
-            .Where(c => c.ReferrerId == request.ReferrerId
-                     && c.HospitalId == hospitalId
-                     && c.DeletedAt == null)
-            .OrderBy(c => c.TransactionDate)
-            .ToListAsync(cancellationToken);
-
-        decimal runningTotal = 0;
-        foreach (var c in allCommissions)
-        {
-            runningTotal += c.CommissionAmount;
-            c.AccumulatedTotal = runningTotal;
-        }
-
+        await ReferralLedger.RecomputeAccumulatedTotal(_context, request.ReferrerId, hospitalId, cancellationToken);
 
         await _context.SaveChangesAsync(cancellationToken);
 

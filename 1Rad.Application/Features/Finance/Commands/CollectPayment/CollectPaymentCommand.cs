@@ -1,4 +1,5 @@
 using MediatR;
+using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -189,30 +190,13 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
             }
 
             var totalDiscount = invoice.CentreDiscount + invoice.ReferrerDiscount + invoice.InstitutionalDeduction;
-            
-            // Re-anchor Gross to prevent drift.
-            // IMPORTANT: use originalAdditionalCharges (captured before mutation)
-            // in the fallback formula, not invoice.AdditionalCharges which was
-            // already updated above. This prevents extra charges from vanishing or
-            // inflating when there are no Items rows to sum directly.
-            var itemsSubtotal = invoice.Items?.Sum(i => i.Quantity * i.Amount) ?? 0;
-            if (itemsSubtotal > 0)
-            {
-                // Source of truth: line items + the new additional charges
-                invoice.GrossAmount = itemsSubtotal + invoice.AdditionalCharges;
-            }
-            else
-            {
-                // Fallback: strip the OLD additional charges from the old gross,
-                // then add the NEW additional charges. This prevents double-counting
-                // across successive payment/discount edits.
-                var baseGross = (invoice.GrossAmount > 0 ? invoice.GrossAmount : invoice.TotalAmount + invoice.DiscountAmount) - originalAdditionalCharges;
-                invoice.GrossAmount = baseGross + invoice.AdditionalCharges;
-            }
-            
-            invoice.DiscountAmount = totalDiscount;
-            // GrossAmount ALREADY includes AdditionalCharges, so TotalAmount is simply Gross - Discount
-            invoice.TotalAmount = invoice.GrossAmount - totalDiscount;
+
+            // Canonical recompute (Common/InvoiceTotals.cs) — see that file for why
+            // this is two calls, not one: RecomputeGross must run before the new
+            // discount is assigned, since its fallback branch needs the invoice's
+            // still-old Discount/Total to reconstruct the previously-persisted gross.
+            InvoiceTotals.RecomputeGross(invoice, originalAdditionalCharges);
+            InvoiceTotals.ApplyDiscountAndFinalize(invoice, totalDiscount);
 
             // Already-settled check, against the FRESH balance (see note above).
             if (invoice.PaidAmount >= invoice.TotalAmount - 0.01m)

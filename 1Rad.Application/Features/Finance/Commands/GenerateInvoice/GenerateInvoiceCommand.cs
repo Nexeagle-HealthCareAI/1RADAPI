@@ -1,4 +1,5 @@
 using MediatR;
+using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Entities;
 using _1Rad.Domain.Exceptions;
@@ -158,11 +159,8 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
                 PatientName = patient.FullName ?? "UNKNOWN PATIENT",
                 HospitalId = hospitalId,
                 InvoiceId = $"INV-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString().Substring(0, 8).ToUpper()}",
-                GrossAmount = grossAmount,
-                DiscountAmount = totalDiscount,
                 CentreDiscount = request.CentreDiscount,
                 ReferrerDiscount = request.ReferrerDiscount,
-                TotalAmount = grossAmount - totalDiscount,
                 PaidAmount = 0,
                 ReferralCutValue = request.CommissionAmount ?? 0,
                 Status = "PENDING",
@@ -179,6 +177,13 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
                     AppointmentServiceId = item.AppointmentServiceId,
                 });
             }
+
+            // Canonical recompute (Common/InvoiceTotals.cs). The explicit throw
+            // above already guarantees totalDiscount <= grossAmount, so
+            // ApplyDiscountAndFinalize's clamp is a no-op on this path — kept
+            // anyway so every invoice-total site goes through the one formula.
+            InvoiceTotals.RecomputeGross(invoice, 0);
+            InvoiceTotals.ApplyDiscountAndFinalize(invoice, totalDiscount);
 
             _context.Invoices.Add(invoice);
 

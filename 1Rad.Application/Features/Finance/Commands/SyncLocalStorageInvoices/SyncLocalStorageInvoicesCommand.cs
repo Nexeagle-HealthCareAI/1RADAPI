@@ -55,9 +55,22 @@ public class SyncLocalStorageInvoicesCommandHandler : IRequestHandler<SyncLocalS
             // Skip if patient not found - don't create orphaned invoices
             if (patient == null) continue;
 
+            // legacy.TotalAmount is the one trustworthy figure here (it's the
+            // actual historical bill) — the old localStorage shape carries no
+            // discount breakdown, so we can't derive Total the normal way
+            // (Common/InvoiceTotals.cs) without discarding it. Instead, back-fill
+            // Gross/Discount so all three stay mutually consistent: previously
+            // this left GrossAmount/DiscountAmount at 0, silently understating
+            // this invoice everywhere GrossAmount is read (e.g. the Analytics
+            // tab's revenue totals).
+            var itemsSubtotal = legacy.Items.Sum(i => i.Amount * i.Quantity);
+            var grossAmount = itemsSubtotal > 0 ? itemsSubtotal : legacy.TotalAmount;
+
             var invoice = new Invoice
             {
                 InvoiceId = legacy.InvoiceId,
+                GrossAmount = grossAmount,
+                DiscountAmount = Math.Max(0, grossAmount - legacy.TotalAmount),
                 TotalAmount = legacy.TotalAmount,
                 PaidAmount = legacy.Status == "PAID" ? legacy.TotalAmount : 0,
                 Status = legacy.Status,
