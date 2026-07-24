@@ -302,6 +302,73 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
             var activeInvoices = invoiceData.Where(i => i.Status != "CANCELLED").ToList();
             var totalLifeTimeInvoiced = activeInvoices.Sum(i => i.TotalAmount);
 
+            // Per-service-line data for modality/service breakdowns (Service Performance
+            // tab). Invoice.Modality/Service above are denormalised from the appointment's
+            // FIRST/primary service only (UpdateAppointmentCommand re-stamps them from
+            // liveServices.FirstOrDefault() on every edit) — grouping by those fields
+            // silently folds every ADDITIONAL service on a multi-service visit into the
+            // primary service's bucket, so a 2nd/3rd scan never shows up as its own row.
+            // Group by the real per-line AppointmentService instead so every booked
+            // service is counted under its own name. PaidAmount/TotalAmount are only
+            // stored at the invoice level, so they're allocated to each line in
+            // proportion to that line's share of the invoice's GrossAmount — the same
+            // approach the offline client-side aggregator already uses.
+            var activeInvoiceIds = activeInvoices.Select(i => i.Id).ToHashSet();
+            var invoiceItemsRaw = await _context.Invoices.AsNoTracking()
+                .Where(inv => activeInvoiceIds.Contains(inv.Id))
+                .SelectMany(inv => inv.Items,
+                            (inv, it) => new { it.InvoiceId, it.AppointmentServiceId, it.Amount, it.Quantity, it.Description })
+                .ToListAsync(cancellationToken);
+
+            var lineServiceIds = invoiceItemsRaw
+                .Where(it => it.AppointmentServiceId.HasValue)
+                .Select(it => it.AppointmentServiceId!.Value)
+                .Distinct()
+                .ToList();
+            var svcLookup = await _context.AppointmentServices.AsNoTracking()
+                .Where(s => lineServiceIds.Contains(s.Id))
+                .Select(s => new { s.Id, s.Modality, s.ServiceName, s.ReferralCutValue })
+                .ToDictionaryAsync(s => s.Id, cancellationToken);
+
+            var invoiceById = activeInvoices.ToDictionary(i => i.Id);
+
+            var serviceLines = invoiceItemsRaw.Select(it =>
+            {
+                var inv = invoiceById[it.InvoiceId];
+                string modality;
+                string serviceName;
+                decimal referralCut;
+
+                if (it.AppointmentServiceId.HasValue && svcLookup.TryGetValue(it.AppointmentServiceId.Value, out var svc))
+                {
+                    modality = string.IsNullOrWhiteSpace(svc.Modality) ? "GENERAL" : svc.Modality;
+                    serviceName = string.IsNullOrWhiteSpace(svc.ServiceName) ? (string.IsNullOrWhiteSpace(it.Description) ? "OTHER" : it.Description) : svc.ServiceName;
+                    referralCut = svc.ReferralCutValue;
+                }
+                else
+                {
+                    // Legacy/manual line with no linked AppointmentService (pre-migration
+                    // invoice, or a manually added line) — fall back to the invoice's own
+                    // denormalised modality, same as the old behaviour for this case.
+                    modality = string.IsNullOrWhiteSpace(inv.Modality) ? "GENERAL" : inv.Modality;
+                    serviceName = string.IsNullOrWhiteSpace(it.Description) ? (string.IsNullOrWhiteSpace(inv.Service) ? "OTHER" : inv.Service) : it.Description;
+                    referralCut = 0m; // no per-line cut to attribute without the service link
+                }
+
+                var lineGross = it.Amount * it.Quantity;
+                var share = inv.GrossAmount > 0 ? lineGross / inv.GrossAmount : 0m;
+
+                return new
+                {
+                    Modality = modality.ToUpper(),
+                    ServiceName = serviceName.ToUpper(),
+                    Gross = lineGross,
+                    Total = inv.GrossAmount > 0 ? lineGross * (inv.TotalAmount / inv.GrossAmount) : lineGross,
+                    Paid = inv.GrossAmount > 0 ? inv.PaidAmount * share : 0m,
+                    ReferralCut = referralCut
+                };
+            }).ToList();
+
             // 1. Temporal Aggregations (Daily) — bucketed by ServiceDate.
             var daily = activeInvoices
                 .GroupBy(i => i.ServiceDate.Date)
@@ -374,15 +441,15 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                         : 0
                 }).ToList();
 
-            // Modalities breakdown (net revenue)
-            var modalityBreakdown = activeInvoices
-                .GroupBy(i => i.Modality)
+            // Modalities breakdown (net revenue) — per service line, see serviceLines above.
+            var modalityBreakdown = serviceLines
+                .GroupBy(x => x.Modality)
                 .Select(g => new ModalityRevenueDto
                 {
-                    Modality = (g.Key ?? "GENERAL").ToUpper(),
-                    RangeRevenue = g.Sum(i => i.TotalAmount),
+                    Modality = g.Key,
+                    RangeRevenue = g.Sum(x => x.Total),
                     ContributionPercentage = totalLifeTimeInvoiced > 0
-                        ? (int)(g.Sum(i => i.TotalAmount) / totalLifeTimeInvoiced * 100)
+                        ? (int)(g.Sum(x => x.Total) / totalLifeTimeInvoiced * 100)
                         : 0
                 })
                 .OrderByDescending(x => x.RangeRevenue)
@@ -437,8 +504,10 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 .OrderByDescending(x => x.TotalDiscountApproved)
                 .ToList();
 
-            // Calculate total scan counts for proportional distribution of general Radiology expenses
-            var totalScans = activeInvoices.Count();
+            // Calculate total scan counts for proportional distribution of general Radiology expenses.
+            // Counted per SERVICE LINE (not per invoice) so a multi-service visit counts as
+            // multiple scans, matching the per-line modality/service breakdown below.
+            var totalScans = serviceLines.Count;
             
             // Map expenses to modalities
             var modalityExpenses = new Dictionary<string, decimal>();
@@ -474,17 +543,17 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 }
             }
 
-            // 5. Service Profitability Matrix with Collection Efficiency
-            var modalityProfitability = activeInvoices
-                .GroupBy(i => i.Modality)
+            // 5. Service Profitability Matrix with Collection Efficiency — per service line.
+            var modalityProfitability = serviceLines
+                .GroupBy(x => x.Modality)
                 .Select(g =>
                 {
-                    var mod = (g.Key ?? "GENERAL").ToUpper();
+                    var mod = g.Key;
                     var count = g.Count();
-                    var gross = g.Sum(x => x.GrossAmount);
-                    var cut = g.Sum(x => x.ReferralCutValue);
-                    var net = g.Sum(x => x.GrossAmount) - cut;
-                    var paid = g.Sum(x => x.PaidAmount);
+                    var gross = g.Sum(x => x.Gross);
+                    var cut = g.Sum(x => x.ReferralCut);
+                    var net = gross - cut;
+                    var paid = g.Sum(x => x.Paid);
 
                     // Allocate operating costs
                     var directCost = modalityExpenses.GetValueOrDefault(mod, 0m);
@@ -501,18 +570,18 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                     var breakEven = avgNetYield > 0 ? Math.Round(operatingCost / avgNetYield, 1) : 0m;
 
                     // Calculate Service Breakdown
-                    var services = g.GroupBy(x => x.Service)
+                    var services = g.GroupBy(x => x.ServiceName)
                         .Select(sg =>
                         {
                             var svcCount = sg.Count();
-                            var svcGross = sg.Sum(x => x.GrossAmount);
-                            var svcCut = sg.Sum(x => x.ReferralCutValue);
+                            var svcGross = sg.Sum(x => x.Gross);
+                            var svcCut = sg.Sum(x => x.ReferralCut);
                             var svcNet = svcGross - svcCut;
-                            var svcPaid = sg.Sum(x => x.PaidAmount);
+                            var svcPaid = sg.Sum(x => x.Paid);
 
                             return new ServiceProfitabilityDto
                             {
-                                ServiceName = (sg.Key ?? "OTHER").ToUpper(),
+                                ServiceName = sg.Key,
                                 ScanCount = svcCount,
                                 GrossRevenue = svcGross,
                                 ReferralCut = svcCut,
