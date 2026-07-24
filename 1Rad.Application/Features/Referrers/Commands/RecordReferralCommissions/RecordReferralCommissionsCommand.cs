@@ -84,6 +84,15 @@ public class RecordReferralCommissionsCommandHandler : IRequestHandler<RecordRef
 
             if (commission != null)
             {
+                // Real money has already been disbursed for this line — a stale
+                // client cache (e.g. a payout drawer that didn't know this
+                // modality was already settled) must not silently overwrite or
+                // erase that history. Mirrors the same guard UpdateReferralCommissionCommand
+                // already enforces for the single-row edit path.
+                if (string.Equals(commission.Status, "PAID", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException(
+                        $"The commission for modality '{modality}' on this invoice is already paid and cannot be modified. Submit an approval request for an adjustment.");
+
                 matched.Add(commission.Id);
                 commission.CommissionAmount = lineAmount;
                 commission.Status = line.Status ?? commission.Status;
@@ -119,7 +128,11 @@ public class RecordReferralCommissionsCommandHandler : IRequestHandler<RecordRef
         }
 
         // Lines removed from the payout — soft-delete so reporting/sync stay consistent.
-        foreach (var stale in existing.Where(c => !matched.Contains(c.Id)))
+        // A PAID row is settlement history, not a draft line the client can drop —
+        // an incoming payload that simply omits it (stale cache, edited elsewhere)
+        // must never make it disappear from the ledger.
+        foreach (var stale in existing.Where(c => !matched.Contains(c.Id)
+                                                   && !string.Equals(c.Status, "PAID", StringComparison.OrdinalIgnoreCase)))
         {
             stale.DeletedAt = now;
             stale.UpdatedAt = now;
