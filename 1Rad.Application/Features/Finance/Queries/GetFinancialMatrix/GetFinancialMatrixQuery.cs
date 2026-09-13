@@ -262,21 +262,29 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
             var expenseQuery = _context.Expenses.AsNoTracking().Where(e => e.HospitalId == hospitalId);
             var commissionQuery = _context.ReferralCommissions.AsNoTracking().Where(c => c.HospitalId == hospitalId);
 
-            // Canonical date basis (agreed 2026-06-14): invoices are bucketed by
-            // ServiceDate (when the scan happened), not CreatedAt. Expenses and
-            // commissions keep their own TransactionDate.
+            // Canonical date basis (agreed 2026-06-14, revised — commissions
+            // moved off TransactionDate): invoices AND commissions are bucketed
+            // by ServiceDate (when the scan happened); expenses keep their own
+            // TransactionDate since a standalone expense has no analogous visit
+            // date. Commissions used to filter by TransactionDate (when the
+            // commission row was recorded, essentially "now" at creation) —
+            // that let the same visit's invoice and referral commission land in
+            // different day/range buckets on this exact query whenever billing
+            // happened on a different calendar day than the visit itself (late
+            // billing, backdated entry), the same class of bug already fixed for
+            // the Referral Hub's own date filtering (useBillingData.js).
             if (request.StartDate.HasValue)
             {
                 invoiceQuery = invoiceQuery.Where(i => i.ServiceDate >= request.StartDate.Value);
                 expenseQuery = expenseQuery.Where(e => e.TransactionDate >= request.StartDate.Value);
-                commissionQuery = commissionQuery.Where(c => c.TransactionDate >= request.StartDate.Value);
+                commissionQuery = commissionQuery.Where(c => c.ServiceDate >= request.StartDate.Value);
             }
             if (request.EndDate.HasValue)
             {
                 var end = request.EndDate.Value.Date.AddDays(1).AddTicks(-1);
                 invoiceQuery = invoiceQuery.Where(i => i.ServiceDate <= end);
                 expenseQuery = expenseQuery.Where(e => e.TransactionDate <= end);
-                commissionQuery = commissionQuery.Where(c => c.TransactionDate <= end);
+                commissionQuery = commissionQuery.Where(c => c.ServiceDate <= end);
             }
 
             var invoiceData = await invoiceQuery
