@@ -184,12 +184,23 @@ internal static class ReferrerReassign
                 baseCut = svc.ReferralCutValue;
             }
 
-            // Paid path (preserveHistory) → true double-entry: the old referrer's
-            // original row is KEPT, a reversal (−amount) is booked against them, and
-            // a fresh entry is credited to the new referrer. History is never lost,
-            // and a clawback shows if the old cut was already paid. The simple move
-            // (unpaid edit, Self, or a zero cut) just re-points the row.
-            if (preserveHistory && oldReferrerId != referrer.ReferrerId && c.CommissionAmount != 0)
+            // Paid path (preserveHistory + actually PAID) → true double-entry: the
+            // old referrer's original row is KEPT, a reversal (−amount) is booked
+            // against them, and a fresh entry is credited to the new referrer.
+            // History is never lost, and a clawback shows if the old cut was
+            // already paid. The simple move (unpaid edit, Self, or a zero cut)
+            // just re-points the row. "Payment collected" (which gates whether
+            // this reassignment needed approval at all) is about the PATIENT'S
+            // invoice, not the commission payout — a fully-paid invoice's
+            // commission is routinely still UNPAID (payouts lag), so this must
+            // check the commission's own Status, not just preserveHistory. Without
+            // it, an unpaid commission took the reversal path too: the original
+            // row was left untouched (still positive, still UNPAID, still owned by
+            // the old referrer) instead of being re-pointed — a stale, live,
+            // still-payable duplicate of the fresh credit given to the new
+            // referrer, undetectable except by reading its remarks text.
+            if (preserveHistory && oldReferrerId != referrer.ReferrerId && c.CommissionAmount != 0
+                && string.Equals(c.Status, "PAID", StringComparison.OrdinalIgnoreCase))
             {
                 var amount = c.CommissionAmount;
 

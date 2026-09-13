@@ -206,38 +206,67 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
                 // for it (mirrors the arrival-billing path). (#19)
                 if (referrer != null && !_1Rad.Application.Common.NameNormalizer.SameName(referrer.Name, "Self"))
                 {
-                    var currentTotal = await _context.ReferralCommissions
-                        .Where(c => c.ReferrerId == request.ReferrerId.Value && c.HospitalId == hospitalId)
-                        .SumAsync(c => (decimal?)c.CommissionAmount, cancellationToken) ?? 0;
+                    // Guard against a duplicate payout: GenerateBillingOnArrivalAsync
+                    // creates per-service commissions on arrival whenever a service
+                    // carries a referral cut, EVEN WHEN auto-billing is off (it only
+                    // gates invoice creation, not commission creation) — leaving live
+                    // commissions with no invoice behind them yet. This command IS
+                    // that invoice arriving after the fact for an auto-billing-off
+                    // hospital; without this check it would add a second, duplicate
+                    // aggregate commission on top of the arrival rows. Not caught by
+                    // the DB's UX_ReferralCommissions_Live_AppointmentService unique
+                    // index, since this aggregate commission carries no
+                    // AppointmentServiceId. If arrival rows already exist, backfill
+                    // their reference now that a real invoice exists instead of
+                    // creating a second commission.
+                    var existingCommissions = request.AppointmentId.HasValue
+                        ? await _context.ReferralCommissions
+                            .Where(c => c.AppointmentId == request.AppointmentId.Value && c.DeletedAt == null)
+                            .ToListAsync(cancellationToken)
+                        : new List<ReferralCommission>();
 
-                    var netCommission = (request.CommissionAmount ?? 0) - request.ReferrerDiscount;
-                    if (netCommission < 0) netCommission = 0;
-
-                    var commission = new ReferralCommission
+                    if (existingCommissions.Count > 0)
                     {
-                        ReferrerId = request.ReferrerId.Value,
-                        ReferrerName = referrer.Name ?? "Unknown",
-                        Modality = invoice.Items.FirstOrDefault()?.Description ?? "GENERAL",
-                        PatientName = patient.FullName ?? "N/A",
-                        CommissionAmount = netCommission,
-                        AccumulatedTotal = currentTotal + netCommission,
-                        TransactionDate = DateTime.UtcNow,
-                        // The visit's actual date, when this invoice is tied to one —
-                        // left unset (defaults) for a freeform/manual invoice, matching
-                        // every other commission-creation site. Without this, Revenue
-                        // Hub (which filters by appointment date) and the Referral Hub
-                        // (which filters by ServiceDate, falling back to TransactionDate)
-                        // could disagree on which day's view an incentive belongs to —
-                        // the same commission showing on Revenue's "Today" but silently
-                        // missing from the Referral Hub's "Today", or vice versa.
-                        ServiceDate = appointmentDateTime ?? default,
-                        Status = "UNPAID",
-                        ReferenceNumber = invoice.InvoiceId,
-                        AppointmentId = invoice.AppointmentId,
-                        Remarks = $"Manual Invoice Generation for {patient.FullName}" + (request.ReferrerDiscount > 0 ? $" (Ref. Discount: ₹{request.ReferrerDiscount})" : ""),
-                        HospitalId = hospitalId
-                    };
-                    _context.ReferralCommissions.Add(commission);
+                        foreach (var c in existingCommissions.Where(c => string.IsNullOrEmpty(c.ReferenceNumber)))
+                        {
+                            c.ReferenceNumber = invoice.InvoiceId;
+                        }
+                    }
+                    else
+                    {
+                        var currentTotal = await _context.ReferralCommissions
+                            .Where(c => c.ReferrerId == request.ReferrerId.Value && c.HospitalId == hospitalId)
+                            .SumAsync(c => (decimal?)c.CommissionAmount, cancellationToken) ?? 0;
+
+                        var netCommission = (request.CommissionAmount ?? 0) - request.ReferrerDiscount;
+                        if (netCommission < 0) netCommission = 0;
+
+                        var commission = new ReferralCommission
+                        {
+                            ReferrerId = request.ReferrerId.Value,
+                            ReferrerName = referrer.Name ?? "Unknown",
+                            Modality = invoice.Items.FirstOrDefault()?.Description ?? "GENERAL",
+                            PatientName = patient.FullName ?? "N/A",
+                            CommissionAmount = netCommission,
+                            AccumulatedTotal = currentTotal + netCommission,
+                            TransactionDate = DateTime.UtcNow,
+                            // The visit's actual date, when this invoice is tied to one —
+                            // left unset (defaults) for a freeform/manual invoice, matching
+                            // every other commission-creation site. Without this, Revenue
+                            // Hub (which filters by appointment date) and the Referral Hub
+                            // (which filters by ServiceDate, falling back to TransactionDate)
+                            // could disagree on which day's view an incentive belongs to —
+                            // the same commission showing on Revenue's "Today" but silently
+                            // missing from the Referral Hub's "Today", or vice versa.
+                            ServiceDate = appointmentDateTime ?? default,
+                            Status = "UNPAID",
+                            ReferenceNumber = invoice.InvoiceId,
+                            AppointmentId = invoice.AppointmentId,
+                            Remarks = $"Manual Invoice Generation for {patient.FullName}" + (request.ReferrerDiscount > 0 ? $" (Ref. Discount: ₹{request.ReferrerDiscount})" : ""),
+                            HospitalId = hospitalId
+                        };
+                        _context.ReferralCommissions.Add(commission);
+                    }
                 }
             }
 
