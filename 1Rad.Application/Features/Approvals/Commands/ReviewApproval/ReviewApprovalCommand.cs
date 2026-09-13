@@ -177,11 +177,21 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
         invoice.ReferrerDiscount = referrer ?? invoice.ReferrerDiscount;
         invoice.InstitutionalDeduction = deduction ?? invoice.InstitutionalDeduction;
 
-        if (extraCharges != null && extraCharges.Any())
+        if (extraCharges != null)
         {
-            _context.InvoiceExtraCharges.RemoveRange(invoice.ExtraCharges);
+            // A non-null list is authoritative — including an EMPTY list, which
+            // means every extra charge was intentionally removed via the edit
+            // modal. Gating this on .Any() (as this handler previously did) left
+            // old InvoiceExtraCharge rows orphaned in the DB when a user cleared
+            // them — the identical bug CollectPaymentCommand/
+            // ApplyInvoiceDiscountCommand already fixed; ported here to match.
+            var existingCharges = await _context.InvoiceExtraCharges
+                .Where(ec => ec.InvoiceId == invoice.Id)
+                .ToListAsync(ct);
+            if (existingCharges.Count > 0)
+                _context.InvoiceExtraCharges.RemoveRange(existingCharges);
             invoice.ExtraCharges.Clear();
-            
+
             foreach (var ec in extraCharges)
             {
                 if (ec.Amount > 0)
@@ -196,23 +206,42 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
                     _context.InvoiceExtraCharges.Add(newCharge);
                 }
             }
-            
-            invoice.AdditionalCharges = invoice.ExtraCharges.Sum(x => x.Amount);
-            invoice.AdditionalChargesReason = string.Join(" | ", invoice.ExtraCharges.Select(x => $"{x.Reason}: {x.Amount}"));
+
+            // Sum the validated INPUT, not invoice.ExtraCharges (see the identical
+            // comment in CollectPaymentCommand), and serialize it in the same JSON
+            // shape the frontend itself writes to this field — the previous
+            // pipe-joined human string ("Name: 200 | Other: 50") was a THIRD,
+            // incompatible format for a column the drawer otherwise treats as JSON.
+            var kept = extraCharges.Where(x => x.Amount > 0).ToList();
+            invoice.AdditionalCharges = kept.Sum(x => x.Amount);
+            invoice.AdditionalChargesReason = JsonSerializer.Serialize(kept,
+                new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
         }
 
-        // Resolve the commission up-front (needed for both the absorb math and the
-        // differential below).
-        var commission = invoice.ReferrerDiscount != oldReferrerDiscount
-            ? await _context.ReferralCommissions.FirstOrDefaultAsync(c =>
+        // Resolve ALL commission rows for this visit up-front (needed for both the
+        // absorb math and the differential below). A multi-service appointment
+        // carries ONE ReferralCommission row PER SERVICE, all sharing this
+        // invoice's AppointmentId/ReferenceNumber — the invoice-level
+        // ReferrerDiscount is a single aggregate figure, so the differential must
+        // be spread across the WHOLE group. Picking just one row (as this handler
+        // previously did via FirstOrDefaultAsync) silently corrupted sibling
+        // services' commissions on multi-service visits — the identical bug
+        // CollectPaymentCommand already fixed; ported here to match.
+        var commissions = invoice.ReferrerDiscount != oldReferrerDiscount
+            ? await _context.ReferralCommissions.Where(c =>
                 (c.AppointmentId == invoice.AppointmentId || (c.ReferenceNumber == invoice.InvoiceId && c.ReferenceNumber != null)) &&
-                c.HospitalId == req.HospitalId, ct)
-            : null;
-        var baseCommission = (commission?.CommissionAmount ?? 0) + oldReferrerDiscount;
+                c.HospitalId == req.HospitalId && c.DeletedAt == null)
+                .ToListAsync(ct)
+            : new List<ReferralCommission>();
 
-        // Centre absorbs the over-commission excess → floor the commission at its
-        // eligible base and shift the surplus into the centre discount. The patient's
-        // total is unchanged (the excess only moves between the two discount buckets).
+        // Eligible commission pool before any referral concession this cycle.
+        var currentTotal = commissions.Sum(c => c.CommissionAmount);
+        var baseCommission = currentTotal + oldReferrerDiscount;
+
+        // Centre absorbs the over-commission excess → floor the commission pool at
+        // its eligible base and shift the surplus into the centre discount. The
+        // patient's total is unchanged (the excess only moves between the two
+        // discount buckets).
         if (absorbToCentre && invoice.ReferrerDiscount > baseCommission)
         {
             var excess = invoice.ReferrerDiscount - baseCommission;
@@ -225,20 +254,41 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
         InvoiceTotals.RecomputeGross(invoice, originalAdditionalCharges);
         InvoiceTotals.ApplyDiscountAndFinalize(invoice, totalDiscount);
 
-        // Referrer-side commission differential (revert old, apply new).
-        if (commission != null)
+        // Spread the new pool across the group proportionally to each row's
+        // current share, so no single service silently absorbs the whole
+        // invoice-level concession. The last row takes the rounding remainder so
+        // the group sum lands exactly on (baseCommission - ReferrerDiscount).
+        if (commissions.Count > 0)
         {
-            commission.CommissionAmount += oldReferrerDiscount; // Revert
-            commission.CommissionAmount -= invoice.ReferrerDiscount; // Apply New
-            commission.Remarks = (commission.Remarks ?? "") + $" [Edit-approved: ₹{oldReferrerDiscount} -> ₹{invoice.ReferrerDiscount}]";
-
-            // Over-commission concession kept as a deficit → carried as a negative
-            // (recovered from the doctor's future referrals). Audit the approval.
-            // (If the centre absorbed the excess above, the commission is now 0.)
-            if (commission.CommissionAmount < 0)
+            var newTotal = baseCommission - invoice.ReferrerDiscount;
+            var allocated = 0m;
+            for (var i = 0; i < commissions.Count; i++)
             {
-                var deficit = Math.Abs(commission.CommissionAmount);
-                commission.Remarks += $" [DEFICIT ₹{deficit:0.##} via approval {req.Id} — {req.Reason}]";
+                var c = commissions[i];
+                decimal rowNew;
+                if (i == commissions.Count - 1)
+                {
+                    rowNew = newTotal - allocated;
+                }
+                else
+                {
+                    var share = currentTotal != 0 ? c.CommissionAmount / currentTotal : 1m / commissions.Count;
+                    rowNew = Math.Round(newTotal * share, 2);
+                    allocated += rowNew;
+                }
+
+                var oldRowAmount = c.CommissionAmount;
+                c.CommissionAmount = rowNew;
+                c.Remarks = (c.Remarks ?? "") + $" [Edit-approved: ₹{oldRowAmount:0.##} -> ₹{rowNew:0.##} (referrer discount ₹{oldReferrerDiscount:0.##} -> ₹{invoice.ReferrerDiscount:0.##})]";
+
+                // Over-commission concession kept as a deficit → carried as a negative
+                // (recovered from the doctor's future referrals). Audit the approval.
+                // (If the centre absorbed the excess above, this lands at/above 0.)
+                if (c.CommissionAmount < 0)
+                {
+                    var deficit = Math.Abs(c.CommissionAmount);
+                    c.Remarks += $" [DEFICIT ₹{deficit:0.##} via approval {req.Id} — {req.Reason}]";
+                }
             }
         }
 

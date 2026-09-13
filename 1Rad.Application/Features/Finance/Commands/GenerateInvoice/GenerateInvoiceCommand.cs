@@ -86,16 +86,22 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
             }
 
             // Verify appointment if provided
+            // Captured here (outside the block below) so the referral commission
+            // created further down can stamp ServiceDate from the actual visit
+            // date instead of leaving it unset — see the comment at its creation.
+            DateTime? appointmentDateTime = null;
             if (request.AppointmentId.HasValue)
             {
                 var appointment = await _context.Appointments
                     .IgnoreQueryFilters()
                     .FirstOrDefaultAsync(a => a.AppointmentId == request.AppointmentId.Value, cancellationToken);
-                
+
                 if (appointment == null)
                 {
                     throw new KeyNotFoundException($"Appointment with ID '{request.AppointmentId}' not found in global registry.");
                 }
+
+                appointmentDateTime = appointment.DateTime;
 
                 if (appointment.PatientId != request.PatientId)
                 {
@@ -216,6 +222,15 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
                         CommissionAmount = netCommission,
                         AccumulatedTotal = currentTotal + netCommission,
                         TransactionDate = DateTime.UtcNow,
+                        // The visit's actual date, when this invoice is tied to one —
+                        // left unset (defaults) for a freeform/manual invoice, matching
+                        // every other commission-creation site. Without this, Revenue
+                        // Hub (which filters by appointment date) and the Referral Hub
+                        // (which filters by ServiceDate, falling back to TransactionDate)
+                        // could disagree on which day's view an incentive belongs to —
+                        // the same commission showing on Revenue's "Today" but silently
+                        // missing from the Referral Hub's "Today", or vice versa.
+                        ServiceDate = appointmentDateTime ?? default,
                         Status = "UNPAID",
                         ReferenceNumber = invoice.InvoiceId,
                         AppointmentId = invoice.AppointmentId,

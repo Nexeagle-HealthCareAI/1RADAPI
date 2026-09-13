@@ -53,6 +53,34 @@ public class ApplyInvoiceDiscountCommandHandler : IRequestHandler<ApplyInvoiceDi
             throw new InvalidOperationException("Cannot apply discount to an already paid invoice.");
         }
 
+        // Self-heal against the live service list BEFORE recomputing totals below —
+        // mirrors CollectPaymentCommand's identical block (see there for the full
+        // rationale). A draft save recomputes Gross from invoice.Items same as a
+        // payment does, so it's exposed to the same staleness if a service was
+        // added to the appointment since Items was last synced. Deliberately
+        // ADD-ONLY: never remove/alter an existing line here.
+        if (invoice.AppointmentId.HasValue)
+        {
+            var liveServices = await _context.AppointmentServices
+                .Where(s => s.AppointmentId == invoice.AppointmentId.Value && s.DeletedAt == null)
+                .ToListAsync(cancellationToken);
+            var invoicedServiceIds = invoice.Items
+                .Where(i => i.AppointmentServiceId.HasValue)
+                .Select(i => i.AppointmentServiceId!.Value)
+                .ToHashSet();
+            foreach (var svc in liveServices.Where(s => !invoicedServiceIds.Contains(s.Id)))
+            {
+                invoice.Items.Add(new InvoiceItem
+                {
+                    InvoiceId = invoice.Id,
+                    Description = svc.ServiceName,
+                    Amount = svc.Amount,
+                    Quantity = 1,
+                    AppointmentServiceId = svc.Id,
+                });
+            }
+        }
+
         var originalAdditionalCharges = invoice.AdditionalCharges;
 
         // When the settlement drawer saves a DRAFT it sends the discount
