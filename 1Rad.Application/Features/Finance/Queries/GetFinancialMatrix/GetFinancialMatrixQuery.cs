@@ -1,6 +1,7 @@
 using MediatR;
 using Microsoft.EntityFrameworkCore;
 using _1Rad.Application.Interfaces;
+using _1Rad.Application.Features.Finance.Queries.GetFinancialMatrix.Calculators;
 
 namespace _1Rad.Application.Features.Finance.Queries.GetFinancialMatrix;
 
@@ -189,20 +190,67 @@ public class PatientChurnAlertDto
     public string RiskLevel { get; set; } = string.Empty;
 }
 
+// The handler's ONLY job now is I/O orchestration: fetch rows from the
+// DbContext, hydrate them into the plain calculator-facing row shapes
+// (Calculators/FinancialMatrixModels.cs), then hand off to one
+// single-purpose, independently unit-testable calculator per report card.
+// It composes; it doesn't compute. Every calculation this used to inline
+// (temporal rollups, aging, discount allocation, leakage audits, modality
+// profitability, patient acquisition, physician ROI, clinic performance,
+// referral contribution, patient LTV/retention/churn, payment channels) now
+// lives in its own class under Calculators/, injected via its interface —
+// swapping an implementation, or adding a new report card, never requires
+// touching this method.
 public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrixQuery, FinancialMatrixDto>
 {
     private readonly IApplicationDbContext _context;
+    private readonly ITemporalAggregationCalculator _temporalCalculator;
+    private readonly IModalityRevenueCalculator _modalityRevenueCalculator;
+    private readonly IAgingAnalysisCalculator _agingCalculator;
+    private readonly IDiscountAllocationCalculator _discountCalculator;
+    private readonly ILeakageAuditCalculator _leakageCalculator;
+    private readonly IModalityProfitabilityCalculator _profitabilityCalculator;
+    private readonly IPatientAcquisitionCalculator _patientAcquisitionCalculator;
+    private readonly IPhysicianRoiCalculator _physicianRoiCalculator;
+    private readonly IClinicPerformanceCalculator _clinicPerformanceCalculator;
+    private readonly IReferralContributionCalculator _referralContributionCalculator;
+    private readonly IPatientLtvCalculator _patientLtvCalculator;
+    private readonly IPaymentChannelCalculator _paymentChannelCalculator;
 
-    public GetFinancialMatrixQueryHandler(IApplicationDbContext context)
+    public GetFinancialMatrixQueryHandler(
+        IApplicationDbContext context,
+        ITemporalAggregationCalculator temporalCalculator,
+        IModalityRevenueCalculator modalityRevenueCalculator,
+        IAgingAnalysisCalculator agingCalculator,
+        IDiscountAllocationCalculator discountCalculator,
+        ILeakageAuditCalculator leakageCalculator,
+        IModalityProfitabilityCalculator profitabilityCalculator,
+        IPatientAcquisitionCalculator patientAcquisitionCalculator,
+        IPhysicianRoiCalculator physicianRoiCalculator,
+        IClinicPerformanceCalculator clinicPerformanceCalculator,
+        IReferralContributionCalculator referralContributionCalculator,
+        IPatientLtvCalculator patientLtvCalculator,
+        IPaymentChannelCalculator paymentChannelCalculator)
     {
         _context = context;
+        _temporalCalculator = temporalCalculator;
+        _modalityRevenueCalculator = modalityRevenueCalculator;
+        _agingCalculator = agingCalculator;
+        _discountCalculator = discountCalculator;
+        _leakageCalculator = leakageCalculator;
+        _profitabilityCalculator = profitabilityCalculator;
+        _patientAcquisitionCalculator = patientAcquisitionCalculator;
+        _physicianRoiCalculator = physicianRoiCalculator;
+        _clinicPerformanceCalculator = clinicPerformanceCalculator;
+        _referralContributionCalculator = referralContributionCalculator;
+        _patientLtvCalculator = patientLtvCalculator;
+        _paymentChannelCalculator = paymentChannelCalculator;
     }
 
     public async Task<FinancialMatrixDto> Handle(GetFinancialMatrixQuery request, CancellationToken cancellationToken)
     {
         try
         {
-            // Validate hospital context
             if (_context.UserContext.HospitalId == Guid.Empty)
             {
                 return new FinancialMatrixDto();
@@ -210,37 +258,43 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
 
             var hospitalId = _context.UserContext.HospitalId;
 
-            // Base queries with hospital filter
             var invoiceQuery = _context.Invoices.AsNoTracking().Where(i => i.HospitalId == hospitalId);
             var expenseQuery = _context.Expenses.AsNoTracking().Where(e => e.HospitalId == hospitalId);
             var commissionQuery = _context.ReferralCommissions.AsNoTracking().Where(c => c.HospitalId == hospitalId);
 
-            // Canonical date basis (agreed 2026-06-14): invoices are bucketed by
-            // ServiceDate (when the scan happened), not CreatedAt. Expenses and
-            // commissions keep their own TransactionDate.
+            // Canonical date basis (agreed 2026-06-14, revised — commissions
+            // moved off TransactionDate): invoices AND commissions are bucketed
+            // by ServiceDate (when the scan happened); expenses keep their own
+            // TransactionDate since a standalone expense has no analogous visit
+            // date. Commissions used to filter by TransactionDate (when the
+            // commission row was recorded, essentially "now" at creation) —
+            // that let the same visit's invoice and referral commission land in
+            // different day/range buckets on this exact query whenever billing
+            // happened on a different calendar day than the visit itself (late
+            // billing, backdated entry), the same class of bug already fixed for
+            // the Referral Hub's own date filtering (useBillingData.js).
             if (request.StartDate.HasValue)
             {
                 invoiceQuery = invoiceQuery.Where(i => i.ServiceDate >= request.StartDate.Value);
                 expenseQuery = expenseQuery.Where(e => e.TransactionDate >= request.StartDate.Value);
-                commissionQuery = commissionQuery.Where(c => c.TransactionDate >= request.StartDate.Value);
+                commissionQuery = commissionQuery.Where(c => c.ServiceDate >= request.StartDate.Value);
             }
             if (request.EndDate.HasValue)
             {
                 var end = request.EndDate.Value.Date.AddDays(1).AddTicks(-1);
                 invoiceQuery = invoiceQuery.Where(i => i.ServiceDate <= end);
                 expenseQuery = expenseQuery.Where(e => e.TransactionDate <= end);
-                commissionQuery = commissionQuery.Where(c => c.TransactionDate <= end);
+                commissionQuery = commissionQuery.Where(c => c.ServiceDate <= end);
             }
 
-            // Hydrate detailed invoice list joining Modalities and Referrer details
             var invoiceData = await invoiceQuery
-                .GroupJoin(_context.Appointments.AsNoTracking(), 
-                           i => i.AppointmentId, 
-                           a => a.AppointmentId, 
+                .GroupJoin(_context.Appointments.AsNoTracking(),
+                           i => i.AppointmentId,
+                           a => a.AppointmentId,
                            (i, appointments) => new { i, appointments })
                 .SelectMany(x => x.appointments.DefaultIfEmpty(),
-                            (x, a) => new 
-                            { 
+                            (x, a) => new
+                            {
                                 x.i.Id,
                                 x.i.InvoiceId,
                                 x.i.PatientId,
@@ -262,7 +316,7 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                                 ReferredBy = a != null ? a.ReferredBy : null
                             })
                 .ToListAsync(cancellationToken);
-            
+
             var expenseData = await expenseQuery
                 .Select(e => new { e.Amount, e.TaxAmount, e.TransactionDate, e.Category, e.CostCenter, e.Description })
                 .ToListAsync(cancellationToken);
@@ -285,507 +339,147 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 .Select(p => new { p.Amount, p.PaymentMethod })
                 .ToListAsync(cancellationToken);
 
-            var collectionChannels = new PaymentChannelBreakdownDto
-            {
-                // Only true cash channels count toward collected cash. ADVANCE-tagged
-                // payments (an invoice paid from a held advance) are EXCLUDED here —
-                // no new money moved — and surfaced separately as AdvanceAmount.
-                CashAmount = paymentData.Where(p => p.PaymentMethod != null && p.PaymentMethod.Equals("CASH", StringComparison.OrdinalIgnoreCase)).Sum(p => p.Amount),
-                UpiAmount = paymentData.Where(p => p.PaymentMethod != null && p.PaymentMethod.Equals("UPI", StringComparison.OrdinalIgnoreCase)).Sum(p => p.Amount),
-                CardAmount = paymentData.Where(p => p.PaymentMethod != null && p.PaymentMethod.Equals("CARD", StringComparison.OrdinalIgnoreCase)).Sum(p => p.Amount),
-                AdvanceAmount = paymentData.Where(p => p.PaymentMethod != null && p.PaymentMethod.Equals("ADVANCE", StringComparison.OrdinalIgnoreCase)).Sum(p => p.Amount)
-            };
-            
             if (!invoiceData.Any() && !expenseData.Any() && !paymentData.Any()) return new FinancialMatrixDto();
 
             // Canonical: "Invoiced" = NET billed (TotalAmount, post-discount); CANCELLED excluded.
-            var activeInvoices = invoiceData.Where(i => i.Status != "CANCELLED").ToList();
-            var totalLifeTimeInvoiced = activeInvoices.Sum(i => i.TotalAmount);
+            var activeInvoicesRaw = invoiceData.Where(i => i.Status != "CANCELLED").ToList();
+            var totalLifeTimeInvoiced = activeInvoicesRaw.Sum(i => i.TotalAmount);
 
-            // 1. Temporal Aggregations (Daily) — bucketed by ServiceDate.
-            var daily = activeInvoices
-                .GroupBy(i => i.ServiceDate.Date)
-                .Select(g => new
-                {
-                    Date = g.Key,
-                    Invoiced = g.Sum(i => i.TotalAmount),
-                    Collected = g.Sum(i => i.PaidAmount)
-                })
-                .Concat(expenseData.GroupBy(e => e.TransactionDate.Date).Select(g => new { Date = g.Key, Invoiced = 0m, Collected = 0m }))
-                .GroupBy(x => x.Date)
-                .OrderByDescending(g => g.Key)
-                .Select(g => new MatrixItemDto
-                {
-                    Label = g.Key.ToString("dd-MMM-yyyy"),
-                    Invoiced = g.Sum(x => x.Invoiced),
-                    Collected = g.Sum(x => x.Collected),
-                    Expenses = expenseData.Where(e => e.TransactionDate.Date == g.Key).Sum(e => e.Amount + e.TaxAmount),
-                    Pending = g.Sum(x => x.Invoiced - x.Collected),
-                    RealizationRate = g.Sum(x => x.Invoiced) > 0
-                        ? Math.Min(100, (int)(g.Sum(x => x.Collected) / g.Sum(x => x.Invoiced) * 100))
-                        : 0
-                }).Take(30).ToList();
-            
-            // Weekly
-            var weekly = activeInvoices
-                .GroupBy(i => System.Globalization.ISOWeek.GetWeekOfYear(i.ServiceDate))
-                .OrderByDescending(g => g.Key)
-                .Select(g => new MatrixItemDto
-                {
-                    Label = $"Week {g.Key}",
-                    Invoiced = g.Sum(i => i.TotalAmount),
-                    Collected = g.Sum(i => i.PaidAmount),
-                    Expenses = expenseData.Where(e => System.Globalization.ISOWeek.GetWeekOfYear(e.TransactionDate) == g.Key).Sum(e => e.Amount + e.TaxAmount),
-                    Pending = g.Sum(i => i.TotalAmount - i.PaidAmount),
-                    RealizationRate = g.Sum(i => i.TotalAmount) > 0
-                        ? Math.Min(100, (int)(g.Sum(i => i.PaidAmount) / g.Sum(i => i.TotalAmount) * 100))
-                        : 0
-                }).Take(8).ToList();
+            // Per-service-line data for modality/service breakdowns (Service Performance
+            // tab). Invoice.Modality/Service above are denormalised from the appointment's
+            // FIRST/primary service only — grouping by those fields silently folds every
+            // ADDITIONAL service on a multi-service visit into the primary service's
+            // bucket. Group by the real per-line AppointmentService instead so every
+            // booked service is counted under its own name. PaidAmount/TotalAmount are
+            // only stored at the invoice level, so they're allocated to each line in
+            // proportion to that line's share of the invoice's GrossAmount.
+            var activeInvoiceIds = activeInvoicesRaw.Select(i => i.Id).ToHashSet();
+            var invoiceItemsRaw = await _context.Invoices.AsNoTracking()
+                .Where(inv => activeInvoiceIds.Contains(inv.Id))
+                .SelectMany(inv => inv.Items,
+                            (inv, it) => new { it.InvoiceId, it.AppointmentServiceId, it.Amount, it.Quantity, it.Description })
+                .ToListAsync(cancellationToken);
 
-            // Monthly
-            var monthly = activeInvoices
-                .GroupBy(i => new { i.ServiceDate.Year, i.ServiceDate.Month })
-                .OrderByDescending(g => g.Key.Year).ThenByDescending(g => g.Key.Month)
-                .Select(g => new MatrixItemDto
-                {
-                    Label = new DateTime(g.Key.Year, g.Key.Month, 1).ToString("MMMM yyyy"),
-                    Invoiced = g.Sum(i => i.TotalAmount),
-                    Collected = g.Sum(i => i.PaidAmount),
-                    Expenses = expenseData.Where(e => e.TransactionDate.Year == g.Key.Year && e.TransactionDate.Month == g.Key.Month).Sum(e => e.Amount + e.TaxAmount),
-                    Pending = g.Sum(i => i.TotalAmount - i.PaidAmount),
-                    RealizationRate = g.Sum(i => i.TotalAmount) > 0
-                        ? Math.Min(100, (int)(g.Sum(i => i.PaidAmount) / g.Sum(i => i.TotalAmount) * 100))
-                        : 0
-                }).Take(12).ToList();
-
-            // Yearly
-            var yearly = activeInvoices
-                .GroupBy(i => i.ServiceDate.Year)
-                .OrderByDescending(g => g.Key)
-                .Select(g => new MatrixItemDto
-                {
-                    Label = g.Key.ToString(),
-                    Invoiced = g.Sum(i => i.TotalAmount),
-                    Collected = g.Sum(i => i.PaidAmount),
-                    Expenses = expenseData.Where(e => e.TransactionDate.Year == g.Key).Sum(e => e.Amount + e.TaxAmount),
-                    Pending = g.Sum(i => i.TotalAmount - i.PaidAmount),
-                    RealizationRate = g.Sum(i => i.TotalAmount) > 0
-                        ? Math.Min(100, (int)(g.Sum(i => i.PaidAmount) / g.Sum(i => i.TotalAmount) * 100))
-                        : 0
-                }).ToList();
-
-            // Modalities breakdown (net revenue)
-            var modalityBreakdown = activeInvoices
-                .GroupBy(i => i.Modality)
-                .Select(g => new ModalityRevenueDto
-                {
-                    Modality = (g.Key ?? "GENERAL").ToUpper(),
-                    RangeRevenue = g.Sum(i => i.TotalAmount),
-                    ContributionPercentage = totalLifeTimeInvoiced > 0
-                        ? (int)(g.Sum(i => i.TotalAmount) / totalLifeTimeInvoiced * 100)
-                        : 0
-                })
-                .OrderByDescending(x => x.RangeRevenue)
+            var lineServiceIds = invoiceItemsRaw
+                .Where(it => it.AppointmentServiceId.HasValue)
+                .Select(it => it.AppointmentServiceId!.Value)
+                .Distinct()
                 .ToList();
+            var svcLookup = await _context.AppointmentServices.AsNoTracking()
+                .Where(s => lineServiceIds.Contains(s.Id))
+                .Select(s => new { s.Id, s.Modality, s.ServiceName, s.ReferralCutValue })
+                .ToDictionaryAsync(s => s.Id, cancellationToken);
 
-            // 2. Outstanding AR Aging Buckets — aged from ServiceDate.
-            var referenceDate = DateTime.UtcNow;
-            var outstandingInvoices = activeInvoices
-                .Where(i => i.PaidAmount < i.TotalAmount)
-                .Select(i => new
-                {
-                    Outstanding = i.TotalAmount - i.PaidAmount,
-                    AgeInDays = (referenceDate - i.ServiceDate).Days
-                })
-                .ToList();
+            var invoiceById = activeInvoicesRaw.ToDictionary(i => i.Id);
 
-            var agingDues = new AgingAnalysisDto
+            var serviceLines = invoiceItemsRaw.Select(it =>
             {
-                Bucket0To30 = outstandingInvoices.Where(x => x.AgeInDays <= 30).Sum(x => x.Outstanding),
-                Bucket31To60 = outstandingInvoices.Where(x => x.AgeInDays > 30 && x.AgeInDays <= 60).Sum(x => x.Outstanding),
-                Bucket61To90 = outstandingInvoices.Where(x => x.AgeInDays > 60 && x.AgeInDays <= 90).Sum(x => x.Outstanding),
-                Bucket91Plus = outstandingInvoices.Where(x => x.AgeInDays > 90).Sum(x => x.Outstanding)
-            };
+                var inv = invoiceById[it.InvoiceId];
+                string modality;
+                string serviceName;
+                decimal referralCut;
 
-            // 3. Discount allocations — sum the real deduction vectors recorded on
-            //    each invoice. No more inferring "senior" from the patient's name or
-            //    "promotional" from a 15%-of-gross threshold.
-            var centreDisc = activeInvoices.Sum(i => i.CentreDiscount);
-            var referrerDisc = activeInvoices.Sum(i => i.ReferrerDiscount);
-            var institutionalDisc = activeInvoices.Sum(i => i.InstitutionalDeduction);
-            var totalDisc = activeInvoices.Sum(i => i.DiscountAmount);
-            var otherDisc = Math.Max(0m, totalDisc - (centreDisc + referrerDisc + institutionalDisc));
-
-            var discountAllocations = new DiscountDistributionDto
-            {
-                Centre = centreDisc,
-                Referrer = referrerDisc,
-                Institutional = institutionalDisc,
-                Other = otherDisc
-            };
-
-            // 4. Concession leakages
-            var leakageAudits = activeInvoices
-                .Where(i => i.HasReferrer && !string.IsNullOrEmpty(i.ReferredBy))
-                .GroupBy(i => i.ReferredBy!)
-                .Select(g => new DiscountLeakageAuditorDto
+                if (it.AppointmentServiceId.HasValue && svcLookup.TryGetValue(it.AppointmentServiceId.Value, out var svc))
                 {
-                    DoctorName = g.Key,
-                    TotalDiscountApproved = g.Sum(x => x.DiscountAmount),
-                    TotalBilledRevenue = g.Sum(x => x.GrossAmount)
-                })
-                .OrderByDescending(x => x.TotalDiscountApproved)
-                .ToList();
-
-            // Calculate total scan counts for proportional distribution of general Radiology expenses
-            var totalScans = activeInvoices.Count();
-            
-            // Map expenses to modalities
-            var modalityExpenses = new Dictionary<string, decimal>();
-            var generalRadiologyExpenses = 0m;
-
-            foreach (var exp in expenseData)
-            {
-                var desc = exp.Description ?? "";
-                var cc = exp.CostCenter ?? "";
-                var cat = exp.Category ?? "";
-
-                // 1. Direct allocation by Description/CostCenter keywords
-                if (desc.Contains("MRI", StringComparison.OrdinalIgnoreCase) || cc.Equals("MRI", StringComparison.OrdinalIgnoreCase))
-                {
-                    modalityExpenses["MRI"] = modalityExpenses.GetValueOrDefault("MRI") + (exp.Amount + exp.TaxAmount);
-                }
-                else if (desc.Contains("CT", StringComparison.OrdinalIgnoreCase) || cc.Equals("CT", StringComparison.OrdinalIgnoreCase))
-                {
-                    modalityExpenses["CT"] = modalityExpenses.GetValueOrDefault("CT") + (exp.Amount + exp.TaxAmount);
-                }
-                else if (desc.Contains("X-RAY", StringComparison.OrdinalIgnoreCase) || desc.Contains("XRAY", StringComparison.OrdinalIgnoreCase) || cc.Equals("X-RAY", StringComparison.OrdinalIgnoreCase) || cc.Equals("XRAY", StringComparison.OrdinalIgnoreCase))
-                {
-                    modalityExpenses["X-RAY"] = modalityExpenses.GetValueOrDefault("X-RAY") + (exp.Amount + exp.TaxAmount);
-                }
-                else if (desc.Contains("USG", StringComparison.OrdinalIgnoreCase) || desc.Contains("ULTRASOUND", StringComparison.OrdinalIgnoreCase) || cc.Equals("USG", StringComparison.OrdinalIgnoreCase))
-                {
-                    modalityExpenses["USG"] = modalityExpenses.GetValueOrDefault("USG") + (exp.Amount + exp.TaxAmount);
-                }
-                // 2. Department-level allocation (Radiology general overhead)
-                else if (cc.Equals("Radiology", StringComparison.OrdinalIgnoreCase) || cat.Equals("Maintenance", StringComparison.OrdinalIgnoreCase))
-                {
-                    generalRadiologyExpenses += (exp.Amount + exp.TaxAmount);
-                }
-            }
-
-            // 5. Service Profitability Matrix with Collection Efficiency
-            var modalityProfitability = activeInvoices
-                .GroupBy(i => i.Modality)
-                .Select(g =>
-                {
-                    var mod = (g.Key ?? "GENERAL").ToUpper();
-                    var count = g.Count();
-                    var gross = g.Sum(x => x.GrossAmount);
-                    var cut = g.Sum(x => x.ReferralCutValue);
-                    var net = g.Sum(x => x.GrossAmount) - cut;
-                    var paid = g.Sum(x => x.PaidAmount);
-
-                    // Allocate operating costs
-                    var directCost = modalityExpenses.GetValueOrDefault(mod, 0m);
-                    var proportionalShare = totalScans > 0 ? (decimal)count / totalScans * generalRadiologyExpenses : 0m;
-                    var operatingCost = directCost + proportionalShare;
-
-                    // Net operating profit
-                    var netOpProfit = net - operatingCost;
-                    var opMarginPct = net > 0 ? (double)Math.Round((netOpProfit / net) * 100, 1) : 0;
-                    var roi = operatingCost > 0 ? (double)Math.Round(gross / operatingCost, 1) : 0;
-
-                    // Break-even scans needed: operating cost divided by average net yield per scan
-                    var avgNetYield = count > 0 ? net / count : 0m;
-                    var breakEven = avgNetYield > 0 ? Math.Round(operatingCost / avgNetYield, 1) : 0m;
-
-                    // Calculate Service Breakdown
-                    var services = g.GroupBy(x => x.Service)
-                        .Select(sg =>
-                        {
-                            var svcCount = sg.Count();
-                            var svcGross = sg.Sum(x => x.GrossAmount);
-                            var svcCut = sg.Sum(x => x.ReferralCutValue);
-                            var svcNet = svcGross - svcCut;
-                            var svcPaid = sg.Sum(x => x.PaidAmount);
-
-                            return new ServiceProfitabilityDto
-                            {
-                                ServiceName = (sg.Key ?? "OTHER").ToUpper(),
-                                ScanCount = svcCount,
-                                GrossRevenue = svcGross,
-                                ReferralCut = svcCut,
-                                NetRevenue = svcNet,
-                                MarginPercentage = svcGross > 0 ? (double)Math.Round((svcNet / svcGross) * 100, 1) : 0,
-                                CollectionEfficiency = svcGross > 0 ? (double)Math.Round((svcPaid / svcGross) * 100, 1) : 0
-                            };
-                        })
-                        .OrderByDescending(s => s.GrossRevenue)
-                        .ToList();
-
-                    return new ModalityProfitabilityDto
-                    {
-                        Modality = mod,
-                        ScanCount = count,
-                        GrossRevenue = gross,
-                        ReferralCut = cut,
-                        NetRevenue = net,
-                        MarginPercentage = gross > 0 ? (double)Math.Round((net / gross) * 100, 1) : 0,
-                        CollectionEfficiency = gross > 0 ? (double)Math.Round((paid / gross) * 100, 1) : 0,
-                        OperatingCost = operatingCost,
-                        NetOperatingProfit = netOpProfit,
-                        OperatingMarginPercentage = opMarginPct,
-                        EquipmentRoiRatio = roi,
-                        BreakEvenScansNeeded = breakEven,
-                        Services = services
-                    };
-                })
-                .OrderByDescending(m => m.GrossRevenue)
-                .ToList();
-
-            // 6. Monthly patient acquisition cohorts (New vs Returning), by ServiceDate.
-            // A patient is "new" in the month of their first-ever service and
-            // "returning" in any later month (distinct patients per month). No
-            // synthetic fallback — an empty practice returns an empty list.
-            var firstServiceMonth = activeInvoices
-                .GroupBy(i => i.PatientId)
-                .ToDictionary(
-                    g => g.Key,
-                    g => { var f = g.Min(x => x.ServiceDate); return (f.Year, f.Month); });
-
-            var monthlyCohorts = activeInvoices
-                .GroupBy(i => new { i.ServiceDate.Year, i.ServiceDate.Month })
-                .OrderByDescending(g => g.Key.Year).ThenByDescending(g => g.Key.Month)
-                .Take(6)
-                .OrderBy(g => g.Key.Year).ThenBy(g => g.Key.Month)
-                .ToList();
-
-            var patientAcquisitionBreakdown = new List<PatientAcquisitionCohortDto>();
-            foreach (var monthGroup in monthlyCohorts)
-            {
-                var label = new DateTime(monthGroup.Key.Year, monthGroup.Key.Month, 1).ToString("MMM");
-                int newCount = 0;
-                int retCount = 0;
-                foreach (var patientId in monthGroup.Select(i => i.PatientId).Distinct())
-                {
-                    var fm = firstServiceMonth[patientId];
-                    if (fm.Year == monthGroup.Key.Year && fm.Month == monthGroup.Key.Month) newCount++;
-                    else retCount++;
-                }
-                patientAcquisitionBreakdown.Add(new PatientAcquisitionCohortDto
-                {
-                    MonthLabel = label,
-                    NewPatientsCount = newCount,
-                    ReturningPatientsCount = retCount
-                });
-            }
-
-            // 7. Physician ROI ledger (net revenue per referrer)
-            var doctorRevenue = activeInvoices
-                .Where(i => i.HasReferrer && !string.IsNullOrEmpty(i.ReferredBy))
-                .GroupBy(i => i.ReferredBy!)
-                .ToDictionary(g => g.Key, g => g.Sum(x => x.TotalAmount));
-
-            var doctorCommissions = commissionData
-                .Where(c => !string.IsNullOrEmpty(c.ReferrerName))
-                .GroupBy(c => c.ReferrerName)
-                .ToDictionary(g => g.Key, g => g.Sum(x => x.CommissionAmount));
-
-            var physicianRoiLedger = new List<PhysicianRoiDto>();
-            foreach (var doc in doctorRevenue)
-            {
-                doctorCommissions.TryGetValue(doc.Key, out var comm);
-                physicianRoiLedger.Add(new PhysicianRoiDto
-                {
-                    DoctorName = doc.Key,
-                    BilledRevenue = doc.Value,
-                    CommissionPaid = comm
-                });
-            }
-            physicianRoiLedger = physicianRoiLedger.OrderByDescending(r => r.BilledRevenue).ToList();
-
-            // 8. Base Clinical Performance Stats
-            var totalGross = activeInvoices.Sum(i => i.GrossAmount);   // list value (pre-discount)
-            var totalNet = activeInvoices.Sum(i => i.TotalAmount);     // net revenue (post-discount)
-            var totalPaid = activeInvoices.Sum(i => i.PaidAmount);
-            var totalDiscount = activeInvoices.Sum(i => i.DiscountAmount);
-            var totalExpenses = expenseData.Sum(e => e.Amount + e.TaxAmount);
-
-            var performance = new ClinicPerformanceDto
-            {
-                GrossRevenue = totalGross,
-                CashCollected = totalPaid,
-                ConcessionLeakage = totalDiscount,
-                LeakagePercentage = totalGross > 0 ? (double)Math.Round((totalDiscount / totalGross) * 100, 1) : 0,
-                OutstandingAR = activeInvoices.Sum(i => i.TotalAmount - i.PaidAmount),
-                ExpenseRatio = totalPaid > 0 ? (double)Math.Round((totalExpenses / totalPaid) * 100, 1) : 0,
-                AverageRevenuePerScan = activeInvoices.Any() ? Math.Round(totalNet / activeInvoices.Count(), 2) : 0,
-                TotalScansCount = activeInvoices.Count()
-            };
-
-            // Referral split summary (net revenue)
-            var referredInvoices = activeInvoices.Where(i => i.HasReferrer).ToList();
-            var directInvoices = activeInvoices.Where(i => !i.HasReferrer).ToList();
-
-            var referralContribution = new ReferralContributionDto
-            {
-                ReferredRevenue = referredInvoices.Sum(i => i.TotalAmount),
-                DirectRevenue = directInvoices.Sum(i => i.TotalAmount),
-                ReferralRatio = totalNet > 0 ? (double)Math.Round((referredInvoices.Sum(i => i.TotalAmount) / totalNet) * 100, 1) : 0,
-                ReferredScansCount = referredInvoices.Count(),
-                DirectScansCount = directInvoices.Count()
-            };
-
-            // 6. Patient Lifetime Value (LTV) & Cohort Retention Calculations
-            var patientInvoicesGrouped = activeInvoices
-                .GroupBy(i => i.PatientId)
-                .Select(g => new
-                {
-                    PatientId = g.Key,
-                    PatientName = g.First().PatientName,
-                    FirstVisit = g.Min(x => x.ServiceDate),
-                    Visits = g.Select(x => x.ServiceDate).ToList(),
-                    TotalRevenue = g.Sum(x => x.TotalAmount)
-                })
-                .ToList();
-
-            var totalInvoicesCount = activeInvoices.Count;
-            var totalGrossRevenue = activeInvoices.Sum(i => i.TotalAmount);
-            var uniquePatientCount = patientInvoicesGrouped.Count;
-
-            var aov = totalInvoicesCount > 0 ? totalGrossRevenue / totalInvoicesCount : 0m;
-            var pf = uniquePatientCount > 0 ? (double)totalInvoicesCount / uniquePatientCount : 0;
-            var pv = aov * (decimal)pf;
-            var estimatedLtv = pv * 3.0m; // 3-year projected lifespan
-
-            var highValueCount = 0;
-            var highValueRev = 0m;
-            var midValueCount = 0;
-            var midValueRev = 0m;
-            var lowValueCount = 0;
-            var lowValueRev = 0m;
-
-            foreach (var p in patientInvoicesGrouped)
-            {
-                if (p.TotalRevenue >= 15000m)
-                {
-                    highValueCount++;
-                    highValueRev += p.TotalRevenue;
-                }
-                else if (p.TotalRevenue >= 5000m)
-                {
-                    midValueCount++;
-                    midValueRev += p.TotalRevenue;
+                    modality = string.IsNullOrWhiteSpace(svc.Modality) ? "GENERAL" : svc.Modality;
+                    serviceName = string.IsNullOrWhiteSpace(svc.ServiceName) ? (string.IsNullOrWhiteSpace(it.Description) ? "OTHER" : it.Description) : svc.ServiceName;
+                    referralCut = svc.ReferralCutValue;
                 }
                 else
                 {
-                    lowValueCount++;
-                    lowValueRev += p.TotalRevenue;
-                }
-            }
-
-            var ltvSegments = new List<LtvSegmentDto>
-            {
-                new LtvSegmentDto { Tier = "High Value", PatientCount = highValueCount, TotalRevenue = highValueRev, Percentage = uniquePatientCount > 0 ? Math.Round((double)highValueCount / uniquePatientCount * 100, 1) : 0 },
-                new LtvSegmentDto { Tier = "Mid Value", PatientCount = midValueCount, TotalRevenue = midValueRev, Percentage = uniquePatientCount > 0 ? Math.Round((double)midValueCount / uniquePatientCount * 100, 1) : 0 },
-                new LtvSegmentDto { Tier = "Low Value", PatientCount = lowValueCount, TotalRevenue = lowValueRev, Percentage = uniquePatientCount > 0 ? Math.Round((double)lowValueCount / uniquePatientCount * 100, 1) : 0 }
-            };
-
-            var cohortHeatmap = new List<RetentionCohortDto>();
-            var cohortGroups = patientInvoicesGrouped
-                .GroupBy(p => p.FirstVisit.ToString("yyyy-MM"))
-                .OrderBy(g => g.Key)
-                .Take(6)
-                .ToList();
-
-            foreach (var cg in cohortGroups)
-            {
-                var cohortMonth = cg.Key;
-                var cohortPatients = cg.ToList();
-                var size = cohortPatients.Count;
-
-                var rates = new List<double> { 100.0 };
-
-                // Safely parse cohort year and month
-                var parts = cohortMonth.Split('-');
-                var year = parts.Length > 0 && int.TryParse(parts[0], out var y) ? y : DateTime.UtcNow.Year;
-                var month = parts.Length > 1 && int.TryParse(parts[1], out var m) ? m : DateTime.UtcNow.Month;
-                var cohortStartDateTime = new DateTime(year, month, 1);
-
-                for (int offset = 1; offset <= 5; offset++)
-                {
-                    var targetMonthStart = cohortStartDateTime.AddMonths(offset);
-                    var targetMonthEnd = targetMonthStart.AddMonths(1).AddTicks(-1);
-
-                    var activeCount = cohortPatients
-                        .Count(p => p.Visits.Any(v => v >= targetMonthStart && v <= targetMonthEnd));
-
-                    var rate = size > 0 ? Math.Round((double)activeCount / size * 100, 1) : 0;
-                    rates.Add(rate);
+                    // Legacy/manual line with no linked AppointmentService (pre-migration
+                    // invoice, or a manually added line) — fall back to the invoice's own
+                    // denormalised modality, same as the old behaviour for this case.
+                    modality = string.IsNullOrWhiteSpace(inv.Modality) ? "GENERAL" : inv.Modality;
+                    serviceName = string.IsNullOrWhiteSpace(it.Description) ? (string.IsNullOrWhiteSpace(inv.Service) ? "OTHER" : inv.Service) : it.Description;
+                    referralCut = 0m; // no per-line cut to attribute without the service link
                 }
 
-                cohortHeatmap.Add(new RetentionCohortDto
+                var lineGross = it.Amount * it.Quantity;
+                var share = inv.GrossAmount > 0 ? lineGross / inv.GrossAmount : 0m;
+
+                return new ServiceLineRow
                 {
-                    CohortMonth = cohortMonth,
-                    Size = size,
-                    RetentionRates = rates
-                });
-            }
+                    Modality = modality.ToUpper(),
+                    ServiceName = serviceName.ToUpper(),
+                    Gross = lineGross,
+                    Total = inv.GrossAmount > 0 ? lineGross * (inv.TotalAmount / inv.GrossAmount) : lineGross,
+                    Paid = inv.GrossAmount > 0 ? inv.PaidAmount * share : 0m,
+                    ReferralCut = referralCut
+                };
+            }).ToList();
 
-            var churnAlerts = new List<PatientChurnAlertDto>();
-            var localNow = DateTime.UtcNow;
-
-            foreach (var group in activeInvoices.GroupBy(i => i.PatientId))
+            // Hydrate the plain calculator-facing rows once, here — every
+            // calculator below takes only these, never the DbContext.
+            var activeInvoices = activeInvoicesRaw.Select(i => new InvoiceMatrixRow
             {
-                var invoices = group.OrderByDescending(i => i.ServiceDate).ToList();
-                var lastInvoice = invoices.First();
-                var daysSince = (localNow - lastInvoice.ServiceDate).Days;
+                Id = i.Id,
+                InvoiceId = i.InvoiceId,
+                PatientId = i.PatientId,
+                PatientName = i.PatientName,
+                GrossAmount = i.GrossAmount,
+                DiscountAmount = i.DiscountAmount,
+                TotalAmount = i.TotalAmount,
+                PaidAmount = i.PaidAmount,
+                CreatedAt = i.CreatedAt,
+                ServiceDate = i.ServiceDate,
+                ReferralCutValue = i.ReferralCutValue,
+                CentreDiscount = i.CentreDiscount,
+                ReferrerDiscount = i.ReferrerDiscount,
+                InstitutionalDeduction = i.InstitutionalDeduction,
+                Status = i.Status,
+                Modality = i.Modality ?? "GENERAL",
+                Service = i.Service ?? "OTHER",
+                HasReferrer = i.HasReferrer,
+                ReferredBy = i.ReferredBy
+            }).ToList();
 
-                if (daysSince > 45 && daysSince <= 180)
-                {
-                    var name = lastInvoice.PatientName ?? "Anonymous Patient";
-                    churnAlerts.Add(new PatientChurnAlertDto
-                    {
-                        PatientName = name,
-                        LastModality = lastInvoice.Modality ?? "Unknown",
-                        LastScanDate = lastInvoice.ServiceDate,
-                        DaysSinceLastScan = daysSince,
-                        RiskLevel = daysSince > 90 ? "CRITICAL" : "ELEVATED"
-                    });
-                }
-            }
-
-            churnAlerts = churnAlerts.OrderByDescending(c => c.DaysSinceLastScan).Take(3).ToList();
-
-            var patientLtv = new PatientLtvDto
+            var expenseRows = expenseData.Select(e => new ExpenseMatrixRow
             {
-                AverageOrderValue = Math.Round(aov, 2),
-                PurchaseFrequency = Math.Round(pf, 2),
-                PatientValue = Math.Round(pv, 2),
-                EstimatedLifetimeValue = Math.Round(estimatedLtv, 2),
-                Segments = ltvSegments,
-                RetentionHeatmap = cohortHeatmap,
-                ChurnAlerts = churnAlerts
-            };
+                Amount = e.Amount,
+                TaxAmount = e.TaxAmount,
+                TransactionDate = e.TransactionDate,
+                Category = e.Category,
+                CostCenter = e.CostCenter,
+                Description = e.Description
+            }).ToList();
+
+            var commissionRows = commissionData.Select(c => new CommissionMatrixRow
+            {
+                ReferrerId = c.ReferrerId,
+                ReferrerName = c.ReferrerName,
+                CommissionAmount = c.CommissionAmount,
+                TransactionDate = c.TransactionDate,
+                Status = c.Status
+            }).ToList();
+
+            var paymentRows = paymentData.Select(p => new PaymentMatrixRow
+            {
+                Amount = p.Amount,
+                PaymentMethod = p.PaymentMethod
+            }).ToList();
+
+            var referenceDate = DateTime.UtcNow;
+
+            var temporal = _temporalCalculator.Calculate(activeInvoices, expenseRows);
 
             return new FinancialMatrixDto
             {
-                Daily = daily,
-                Weekly = weekly,
-                Monthly = monthly,
-                Yearly = yearly,
-                ModalityBreakdown = modalityBreakdown,
-                Performance = performance,
-                ModalityProfitability = modalityProfitability,
-                ReferralContribution = referralContribution,
-                AgingDues = agingDues,
-                DiscountAllocations = discountAllocations,
-                LeakageAudits = leakageAudits,
-                PatientAcquisitionBreakdown = patientAcquisitionBreakdown,
-                PhysicianRoiLedger = physicianRoiLedger,
-                CollectionChannels = collectionChannels,
-                PatientLtv = patientLtv
+                Daily = temporal.Daily,
+                Weekly = temporal.Weekly,
+                Monthly = temporal.Monthly,
+                Yearly = temporal.Yearly,
+                ModalityBreakdown = _modalityRevenueCalculator.Calculate(serviceLines, totalLifeTimeInvoiced),
+                Performance = _clinicPerformanceCalculator.Calculate(activeInvoices, expenseRows),
+                ModalityProfitability = _profitabilityCalculator.Calculate(serviceLines, expenseRows),
+                ReferralContribution = _referralContributionCalculator.Calculate(activeInvoices),
+                AgingDues = _agingCalculator.Calculate(activeInvoices, referenceDate),
+                DiscountAllocations = _discountCalculator.Calculate(activeInvoices),
+                LeakageAudits = _leakageCalculator.Calculate(activeInvoices),
+                PatientAcquisitionBreakdown = _patientAcquisitionCalculator.Calculate(activeInvoices),
+                PhysicianRoiLedger = _physicianRoiCalculator.Calculate(activeInvoices, commissionRows),
+                CollectionChannels = _paymentChannelCalculator.Calculate(paymentRows),
+                PatientLtv = _patientLtvCalculator.Calculate(activeInvoices, referenceDate)
             };
         }
         catch (Exception ex)

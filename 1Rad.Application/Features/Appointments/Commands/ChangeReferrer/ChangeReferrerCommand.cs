@@ -1,5 +1,6 @@
 using MediatR;
 using Microsoft.EntityFrameworkCore;
+using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using _1Rad.Application.Features.Approvals;
 
@@ -63,10 +64,7 @@ public class ChangeReferrerCommandHandler : IRequestHandler<ChangeReferrerComman
             return new ChangeReferrerResult { Message = "A referrer name is required." };
 
         // Payment already collected → the change has to be approved by an admin.
-        var hasPayments = await _context.Invoices
-            .AnyAsync(i => i.AppointmentId == request.AppointmentId && (i.PaidAmount > 0 || i.Status == "PAID" || i.Status == "PARTIAL"), ct)
-            || await _context.Payments
-            .AnyAsync(p => p.Invoice.AppointmentId == request.AppointmentId, ct);
+        var hasPayments = await AppointmentPaymentGuard.HasCollectedPayment(_context, request.AppointmentId, ct);
 
         if (hasPayments)
         {

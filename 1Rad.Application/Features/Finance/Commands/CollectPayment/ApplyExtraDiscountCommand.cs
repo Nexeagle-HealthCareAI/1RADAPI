@@ -1,4 +1,5 @@
 using MediatR;
+using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using _1Rad.Domain.Entities;
@@ -32,16 +33,51 @@ public class ApplyExtraDiscountCommandHandler : IRequestHandler<ApplyExtraDiscou
             throw new KeyNotFoundException($"Invoice with ID '{request.InvoiceId}' not found.");
         }
 
-        // Apply additional discount to existing discount
-        invoice.DiscountAmount += request.ExtraDiscount;
-        
-        // Recalculate total
-        var gross = invoice.GrossAmount > 0 ? invoice.GrossAmount : invoice.Items.Sum(x => x.Amount * x.Quantity);
-        invoice.GrossAmount = gross;
-        invoice.TotalAmount = gross - invoice.DiscountAmount;
+        // A cancelled invoice is closed/refunded audit history — unlike PAID, it
+        // must never accept an adjustment. (This command's whole purpose is
+        // adjusting bills that ARE already paid — "post-payment adjustment",
+        // see useInvoiceActions.handleApplyAdjustment — so PAID is deliberately
+        // NOT blocked here, unlike ApplyInvoiceDiscountCommand's pre-payment
+        // discount editor.)
+        if (invoice.Status == "CANCELLED")
+        {
+            throw new InvalidOperationException($"Invoice '{invoice.InvoiceId}' is cancelled.");
+        }
 
-        // Since it's an adjustment, we might need to record a 'REBATE' payment or just let the balance go negative/positive
-        // To keep ledger clean, we'll ensure status reflects the new total
+        // Apply additional discount to existing discount. RecomputeGross must run
+        // BEFORE this new discount is finalized (see InvoiceTotals) — but this
+        // command derives its new discount by incrementing the OLD value, so grab
+        // it first, recompute gross, then finalize with the incremented figure.
+        var newDiscount = invoice.DiscountAmount + request.ExtraDiscount;
+        InvoiceTotals.RecomputeGross(invoice, invoice.AdditionalCharges);
+        InvoiceTotals.ApplyDiscountAndFinalize(invoice, newDiscount);
+
+        // A discount applied AFTER payment was collected can push PaidAmount
+        // above the new, lower TotalAmount — the patient is now owed the
+        // difference. Every other overpay path in this codebase (CollectPayment,
+        // UpdateAppointment's service-removal gap) books that excess as a
+        // credit instead of letting it vanish into a misleading "PAID" status;
+        // this command was the one place that didn't.
+        var overpay = invoice.PaidAmount - invoice.TotalAmount;
+        if (overpay > 0.009m)
+        {
+            _context.CreditTransactions.Add(new CreditTransaction
+            {
+                HospitalId = invoice.HospitalId,
+                PatientId = invoice.PatientId,
+                PatientName = invoice.PatientName ?? string.Empty,
+                Type = "ADVANCE",
+                Amount = Math.Round(overpay, 2),
+                InvoiceId = invoice.Id,
+                InvoiceDisplayId = invoice.InvoiceId,
+                CreatedByUserId = _context.UserContext.UserId,
+                Remarks = "Advance held — extra discount applied after payment",
+                CreatedAt = DateTime.UtcNow,
+            });
+            invoice.PaidAmount = invoice.TotalAmount;
+        }
+
+        // Ensure status reflects the new total.
         if (invoice.PaidAmount >= invoice.TotalAmount)
         {
             invoice.Status = "PAID";

@@ -1,3 +1,4 @@
+using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Entities;
 using MediatR;
@@ -26,6 +27,25 @@ public class UpdateAppointmentStatusCommandHandler : IRequestHandler<UpdateAppoi
 {
     private readonly IApplicationDbContext _context;
 
+    private static readonly HashSet<string> ValidStatuses = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "BOOKED", "CONFIRMED", "IN_PROGRESS", "SCANNED", "COMPLETED",
+        "REPORTING", "REPORTED", "DELIVERED", "CANCELLED"
+    };
+
+    private static readonly Dictionary<string, HashSet<string>> AllowedTransitions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["BOOKED"] = new(StringComparer.OrdinalIgnoreCase) { "CONFIRMED", "CANCELLED" },
+        ["CONFIRMED"] = new(StringComparer.OrdinalIgnoreCase) { "IN_PROGRESS", "SCANNED", "COMPLETED", "REPORTING", "REPORTED", "DELIVERED", "CANCELLED" },
+        ["IN_PROGRESS"] = new(StringComparer.OrdinalIgnoreCase) { "SCANNED", "COMPLETED", "REPORTING", "REPORTED", "DELIVERED", "CANCELLED" },
+        ["SCANNED"] = new(StringComparer.OrdinalIgnoreCase) { "COMPLETED", "REPORTING", "REPORTED", "DELIVERED", "CANCELLED" },
+        ["COMPLETED"] = new(StringComparer.OrdinalIgnoreCase) { "REPORTING", "REPORTED", "DELIVERED", "CANCELLED" },
+        ["REPORTING"] = new(StringComparer.OrdinalIgnoreCase) { "REPORTED", "DELIVERED" },
+        ["REPORTED"] = new(StringComparer.OrdinalIgnoreCase) { "DELIVERED" },
+        ["DELIVERED"] = new(StringComparer.OrdinalIgnoreCase),
+        ["CANCELLED"] = new(StringComparer.OrdinalIgnoreCase),
+    };
+
     public UpdateAppointmentStatusCommandHandler(IApplicationDbContext context)
     {
         _context = context;
@@ -41,7 +61,28 @@ public class UpdateAppointmentStatusCommandHandler : IRequestHandler<UpdateAppoi
             return new UpdateAppointmentStatusResult { Success = false, Message = "Appointment not found." };
         }
 
-        var newStatus = request.Status.ToUpperInvariant();
+        var newStatus = CanonicalStatus(request.Status);
+        if (!ValidStatuses.Contains(newStatus))
+        {
+            return new UpdateAppointmentStatusResult
+            {
+                Success = false,
+                NotAllowed = true,
+                Message = $"Unknown appointment status '{request.Status}'."
+            };
+        }
+
+        var currentStatus = CanonicalStatus(appointment.Status);
+        if (!string.Equals(currentStatus, newStatus, StringComparison.OrdinalIgnoreCase)
+            && (!AllowedTransitions.TryGetValue(currentStatus, out var allowed) || !allowed.Contains(newStatus)))
+        {
+            return new UpdateAppointmentStatusResult
+            {
+                Success = true,
+                NotAllowed = true,
+                Message = $"Cannot change an appointment from {currentStatus} to {newStatus}."
+            };
+        }
 
         // Arrival gate: a study can't be advanced (scanning, reporting, etc.)
         // until the patient has actually arrived. Only marking the patient
@@ -79,10 +120,7 @@ public class UpdateAppointmentStatusCommandHandler : IRequestHandler<UpdateAppoi
             }
 
             // Enforce validation: Enforce that an appointment can ONLY be cancelled if no payments have been collected
-            var hasPayments = await _context.Invoices
-                .AnyAsync(i => i.AppointmentId == request.AppointmentId && (i.PaidAmount > 0 || i.Status == "PAID" || i.Status == "PARTIAL"), cancellationToken)
-                || await _context.Payments
-                .AnyAsync(p => p.Invoice.AppointmentId == request.AppointmentId, cancellationToken);
+            var hasPayments = await AppointmentPaymentGuard.HasCollectedPayment(_context, request.AppointmentId, cancellationToken);
 
             if (hasPayments)
             {
@@ -139,17 +177,7 @@ public class UpdateAppointmentStatusCommandHandler : IRequestHandler<UpdateAppoi
             //    LIVE (non-deleted) commissions so the ledger doesn't drift.
             foreach (var referrerId in referrersToRecalculate)
             {
-                var allRemainingCommissions = await _context.ReferralCommissions
-                    .Where(c => c.ReferrerId == referrerId && c.HospitalId == hospitalId && c.DeletedAt == null)
-                    .OrderBy(c => c.TransactionDate)
-                    .ToListAsync(cancellationToken);
-
-                decimal runningTotal = 0;
-                foreach (var c in allRemainingCommissions)
-                {
-                    runningTotal += c.CommissionAmount;
-                    c.AccumulatedTotal = runningTotal;
-                }
+                await ReferralLedger.RecomputeAccumulatedTotal(_context, referrerId, hospitalId, cancellationToken);
             }
 
             if (referrersToRecalculate.Any())
@@ -201,6 +229,16 @@ public class UpdateAppointmentStatusCommandHandler : IRequestHandler<UpdateAppoi
         await _context.SaveChangesAsync(cancellationToken);
 
         return new UpdateAppointmentStatusResult { Success = true, DailyTokenNumber = appointment.DailyTokenNumber };
+    }
+
+    private static string CanonicalStatus(string? status)
+    {
+        var normalized = (status ?? string.Empty).Trim().ToUpperInvariant();
+        return normalized switch
+        {
+            "" or "SCHEDULED" or "FUTURE" or "NOT_STARTED" => "BOOKED",
+            _ => normalized,
+        };
     }
 
     // Generate the visit's Invoice (when auto-billing is on) and the per-service

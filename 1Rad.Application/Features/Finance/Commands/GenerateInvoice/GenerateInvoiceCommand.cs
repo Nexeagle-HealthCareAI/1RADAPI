@@ -1,4 +1,5 @@
 using MediatR;
+using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Entities;
 using _1Rad.Domain.Exceptions;
@@ -85,30 +86,76 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
             }
 
             // Verify appointment if provided
+            // Captured here (outside the block below) so the referral commission
+            // created further down can stamp ServiceDate from the actual visit
+            // date instead of leaving it unset — see the comment at its creation.
+            DateTime? appointmentDateTime = null;
             if (request.AppointmentId.HasValue)
             {
                 var appointment = await _context.Appointments
                     .IgnoreQueryFilters()
                     .FirstOrDefaultAsync(a => a.AppointmentId == request.AppointmentId.Value, cancellationToken);
-                
+
                 if (appointment == null)
                 {
                     throw new KeyNotFoundException($"Appointment with ID '{request.AppointmentId}' not found in global registry.");
                 }
 
+                appointmentDateTime = appointment.DateTime;
+
                 if (appointment.PatientId != request.PatientId)
                 {
                     throw new InvalidOperationException("Appointment does not belong to the specified patient.");
+                }
+
+                var hasLiveInvoice = await _context.Invoices
+                    .AnyAsync(i => i.AppointmentId == request.AppointmentId.Value && i.DeletedAt == null, cancellationToken);
+                if (hasLiveInvoice)
+                {
+                    throw new InvalidOperationException("This appointment already has an active invoice.");
+                }
+
+                // One invoice per appointment must cover every live service on it.
+                // A second invoice for the same appointment is blocked (above), so a
+                // service silently left off this one would become permanently
+                // unbillable through this appointment — the only thing that would
+                // ever pick it up is UpdateAppointmentCommand's edit-time
+                // reconciler, which folds it into THIS invoice's total the next
+                // time the appointment is edited for any reason, changing what was
+                // billed without anyone deliberately choosing to bill it. Enforce
+                // full coverage up front instead: remove the SERVICE from the
+                // appointment first if it genuinely shouldn't be billed here.
+                var liveServiceIds = await _context.AppointmentServices
+                    .Where(s => s.AppointmentId == request.AppointmentId.Value && s.DeletedAt == null)
+                    .Select(s => s.Id)
+                    .ToListAsync(cancellationToken);
+                if (liveServiceIds.Count > 0)
+                {
+                    var coveredIds = request.Items
+                        .Where(i => i.AppointmentServiceId.HasValue)
+                        .Select(i => i.AppointmentServiceId!.Value)
+                        .ToHashSet();
+                    var missingCount = liveServiceIds.Count(id => !coveredIds.Contains(id));
+                    if (missingCount > 0)
+                    {
+                        throw new ArgumentException(
+                            $"This invoice is missing {missingCount} service(s) from the appointment. " +
+                            "An invoice must cover every live service on the visit — remove the service from " +
+                            "the appointment itself (Edit) if it shouldn't be billed at all, rather than " +
+                            "omitting it from this invoice.");
+                    }
                 }
             }
 
             var grossAmount = request.Items.Sum(x => x.Amount * x.Quantity);
             var totalDiscount = request.CentreDiscount + request.ReferrerDiscount;
             
-            // Security/Business Rule: Discount cannot exceed Gross Amount
+            // Keep the deduction vectors and the aggregate discount auditable.
+            // Silently clamping the aggregate would persist a total that no
+            // longer matches the centre/referrer amounts the caller submitted.
             if (totalDiscount > grossAmount)
             {
-                totalDiscount = grossAmount;
+                throw new ArgumentException("Total discount cannot exceed the invoice gross amount.");
             }
 
             var invoice = new Invoice
@@ -118,11 +165,8 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
                 PatientName = patient.FullName ?? "UNKNOWN PATIENT",
                 HospitalId = hospitalId,
                 InvoiceId = $"INV-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString().Substring(0, 8).ToUpper()}",
-                GrossAmount = grossAmount,
-                DiscountAmount = totalDiscount,
                 CentreDiscount = request.CentreDiscount,
                 ReferrerDiscount = request.ReferrerDiscount,
-                TotalAmount = grossAmount - totalDiscount,
                 PaidAmount = 0,
                 ReferralCutValue = request.CommissionAmount ?? 0,
                 Status = "PENDING",
@@ -140,6 +184,13 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
                 });
             }
 
+            // Canonical recompute (Common/InvoiceTotals.cs). The explicit throw
+            // above already guarantees totalDiscount <= grossAmount, so
+            // ApplyDiscountAndFinalize's clamp is a no-op on this path — kept
+            // anyway so every invoice-total site goes through the one formula.
+            InvoiceTotals.RecomputeGross(invoice, 0);
+            InvoiceTotals.ApplyDiscountAndFinalize(invoice, totalDiscount);
+
             _context.Invoices.Add(invoice);
 
             // Record a Referral Commission whenever a referrer is chosen — even at
@@ -155,29 +206,67 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
                 // for it (mirrors the arrival-billing path). (#19)
                 if (referrer != null && !_1Rad.Application.Common.NameNormalizer.SameName(referrer.Name, "Self"))
                 {
-                    var currentTotal = await _context.ReferralCommissions
-                        .Where(c => c.ReferrerId == request.ReferrerId.Value && c.HospitalId == hospitalId)
-                        .SumAsync(c => (decimal?)c.CommissionAmount, cancellationToken) ?? 0;
+                    // Guard against a duplicate payout: GenerateBillingOnArrivalAsync
+                    // creates per-service commissions on arrival whenever a service
+                    // carries a referral cut, EVEN WHEN auto-billing is off (it only
+                    // gates invoice creation, not commission creation) — leaving live
+                    // commissions with no invoice behind them yet. This command IS
+                    // that invoice arriving after the fact for an auto-billing-off
+                    // hospital; without this check it would add a second, duplicate
+                    // aggregate commission on top of the arrival rows. Not caught by
+                    // the DB's UX_ReferralCommissions_Live_AppointmentService unique
+                    // index, since this aggregate commission carries no
+                    // AppointmentServiceId. If arrival rows already exist, backfill
+                    // their reference now that a real invoice exists instead of
+                    // creating a second commission.
+                    var existingCommissions = request.AppointmentId.HasValue
+                        ? await _context.ReferralCommissions
+                            .Where(c => c.AppointmentId == request.AppointmentId.Value && c.DeletedAt == null)
+                            .ToListAsync(cancellationToken)
+                        : new List<ReferralCommission>();
 
-                    var netCommission = (request.CommissionAmount ?? 0) - request.ReferrerDiscount;
-                    if (netCommission < 0) netCommission = 0;
-
-                    var commission = new ReferralCommission
+                    if (existingCommissions.Count > 0)
                     {
-                        ReferrerId = request.ReferrerId.Value,
-                        ReferrerName = referrer.Name ?? "Unknown",
-                        Modality = invoice.Items.FirstOrDefault()?.Description ?? "GENERAL",
-                        PatientName = patient.FullName ?? "N/A",
-                        CommissionAmount = netCommission,
-                        AccumulatedTotal = currentTotal + netCommission,
-                        TransactionDate = DateTime.UtcNow,
-                        Status = "UNPAID",
-                        ReferenceNumber = invoice.InvoiceId,
-                        AppointmentId = invoice.AppointmentId,
-                        Remarks = $"Manual Invoice Generation for {patient.FullName}" + (request.ReferrerDiscount > 0 ? $" (Ref. Discount: ₹{request.ReferrerDiscount})" : ""),
-                        HospitalId = hospitalId
-                    };
-                    _context.ReferralCommissions.Add(commission);
+                        foreach (var c in existingCommissions.Where(c => string.IsNullOrEmpty(c.ReferenceNumber)))
+                        {
+                            c.ReferenceNumber = invoice.InvoiceId;
+                        }
+                    }
+                    else
+                    {
+                        var currentTotal = await _context.ReferralCommissions
+                            .Where(c => c.ReferrerId == request.ReferrerId.Value && c.HospitalId == hospitalId)
+                            .SumAsync(c => (decimal?)c.CommissionAmount, cancellationToken) ?? 0;
+
+                        var netCommission = (request.CommissionAmount ?? 0) - request.ReferrerDiscount;
+                        if (netCommission < 0) netCommission = 0;
+
+                        var commission = new ReferralCommission
+                        {
+                            ReferrerId = request.ReferrerId.Value,
+                            ReferrerName = referrer.Name ?? "Unknown",
+                            Modality = invoice.Items.FirstOrDefault()?.Description ?? "GENERAL",
+                            PatientName = patient.FullName ?? "N/A",
+                            CommissionAmount = netCommission,
+                            AccumulatedTotal = currentTotal + netCommission,
+                            TransactionDate = DateTime.UtcNow,
+                            // The visit's actual date, when this invoice is tied to one —
+                            // left unset (defaults) for a freeform/manual invoice, matching
+                            // every other commission-creation site. Without this, Revenue
+                            // Hub (which filters by appointment date) and the Referral Hub
+                            // (which filters by ServiceDate, falling back to TransactionDate)
+                            // could disagree on which day's view an incentive belongs to —
+                            // the same commission showing on Revenue's "Today" but silently
+                            // missing from the Referral Hub's "Today", or vice versa.
+                            ServiceDate = appointmentDateTime ?? default,
+                            Status = "UNPAID",
+                            ReferenceNumber = invoice.InvoiceId,
+                            AppointmentId = invoice.AppointmentId,
+                            Remarks = $"Manual Invoice Generation for {patient.FullName}" + (request.ReferrerDiscount > 0 ? $" (Ref. Discount: ₹{request.ReferrerDiscount})" : ""),
+                            HospitalId = hospitalId
+                        };
+                        _context.ReferralCommissions.Add(commission);
+                    }
                 }
             }
 

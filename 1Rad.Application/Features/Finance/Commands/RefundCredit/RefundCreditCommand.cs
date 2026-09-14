@@ -56,7 +56,15 @@ public class RefundCreditCommandHandler : IRequestHandler<RefundCreditCommand, R
             UpdatedAt = DateTime.UtcNow,
         });
 
-        await _context.SaveChangesAsync(ct);
-        return new RefundCreditResult(true, balance - amount, null);
+        try
+        {
+            await _context.SaveChangesAsync(ct);
+            return new RefundCreditResult(true, balance - amount, null);
+        }
+        catch (DbUpdateException)
+        {
+            return new RefundCreditResult(false, balance,
+                "The patient's advance changed while this refund was being processed. Refresh and try again.");
+        }
     }
 }

@@ -43,7 +43,13 @@ public record ReferralCommissionDto(
     // that's what the payout list shows as "referred by".
     bool ReferrerIsDoctor = true,
     string? SupportedByDoctor = null,
-    Guid? AppointmentId = null
+    Guid? AppointmentId = null,
+    // The specific invoice line this commission was earned on — lets callers
+    // match a commission to its exact service instead of guessing by
+    // Modality string, which collapses when a visit has two services of the
+    // same modality (e.g. two CT scans). Null on legacy rows recorded before
+    // this field existed.
+    Guid? AppointmentServiceId = null
 );
 
 
@@ -174,7 +180,8 @@ public class GetReferralCommissionsQueryHandler : IRequestHandler<GetReferralCom
                 x.Commission.PayeeContact,
                 primaryRef?.IsDoctor ?? x.ReferrerIsDoctor,
                 primaryRef?.SupportedByDoctor ?? x.SupportedByDoctor,
-                x.Commission.AppointmentId
+                x.Commission.AppointmentId,
+                x.Commission.AppointmentServiceId
             );
         }).ToList();
     }

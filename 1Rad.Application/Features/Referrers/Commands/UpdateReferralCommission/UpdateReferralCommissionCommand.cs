@@ -1,3 +1,4 @@
+using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
@@ -30,8 +31,16 @@ public class UpdateReferralCommissionCommandHandler : IRequestHandler<UpdateRefe
         if (commission == null)
             throw new Exception($"FISCAL ERROR: Commission record [{request.CommissionId}] not found for modification.");
 
-        // Floor at zero — a referral commission is never negative.
-        commission.CommissionAmount = Math.Max(0m, request.Amount);
+        if (commission.AppointmentId.HasValue || commission.AppointmentServiceId.HasValue)
+            throw new InvalidOperationException("Appointment-generated commissions can only be changed through an approved appointment or commission adjustment workflow.");
+        if (string.Equals(commission.Status, "PAID", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("A paid commission is immutable. Submit an approval request for an adjustment.");
+        if (request.Amount <= 0)
+            throw new ArgumentException("Commission amount must be greater than zero.", nameof(request.Amount));
+        if (string.Equals(request.Status, "PAID", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Use the payout workflow to mark a commission as paid.");
+
+        commission.CommissionAmount = request.Amount;
         commission.Modality = request.Modality;
         commission.ReferenceNumber = request.ReferenceNumber;
         commission.Remarks = request.Remarks;
@@ -46,17 +55,7 @@ public class UpdateReferralCommissionCommandHandler : IRequestHandler<UpdateRefe
         await _context.SaveChangesAsync(cancellationToken);
 
         // Recalculate Accumulated Total chronologically for this referrer to prevent drift
-        var allCommissions = await _context.ReferralCommissions
-            .Where(c => c.ReferrerId == commission.ReferrerId && c.HospitalId == commission.HospitalId)
-            .OrderBy(c => c.TransactionDate)
-            .ToListAsync(cancellationToken);
-
-        decimal runningTotal = 0;
-        foreach (var c in allCommissions)
-        {
-            runningTotal += c.CommissionAmount;
-            c.AccumulatedTotal = runningTotal;
-        }
+        await ReferralLedger.RecomputeAccumulatedTotal(_context, commission.ReferrerId, commission.HospitalId, cancellationToken);
 
         await _context.SaveChangesAsync(cancellationToken);
         return true;

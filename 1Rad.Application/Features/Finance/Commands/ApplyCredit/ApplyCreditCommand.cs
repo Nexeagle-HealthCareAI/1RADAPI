@@ -89,7 +89,15 @@ public class ApplyCreditCommandHandler : IRequestHandler<ApplyCreditCommand, App
             UpdatedAt = DateTime.UtcNow,
         });
 
-        await _context.SaveChangesAsync(ct);
-        return new ApplyCreditResult(true, toApply, balance - toApply, null);
+        try
+        {
+            await _context.SaveChangesAsync(ct);
+            return new ApplyCreditResult(true, toApply, balance - toApply, null);
+        }
+        catch (DbUpdateException)
+        {
+            return new ApplyCreditResult(false, 0m, balance,
+                "The patient's advance changed while this payment was being applied. Refresh the invoice and try again.");
+        }
     }
 }

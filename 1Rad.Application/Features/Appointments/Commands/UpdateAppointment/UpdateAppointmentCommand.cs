@@ -32,8 +32,8 @@ public record UpdateAppointmentCommand(
     string Modality,
     DateTime DateTime,
     string Doctor,
-    string Notes,
-    string ReferredBy,
+    string? Notes = null,
+    string? ReferredBy = null,
     string? ReferredContact = null,
     string? PatientName = null,
     string? Mobile = null,
@@ -66,6 +66,7 @@ public record UpdateAppointmentCommand(
     string? ReferrerEmail = null,
     string? ReferrerSpecialty = null,
     string? ReferrerDegree = null,
+    string? ReferrerAddress = null,
     // Reschedule-to-future refund choice. When a PAID visit is moved to a future
     // date its bill is voided and any money collected is returned: "WALLET" parks
     // it as a patient credit (carry-forward / refundable), "CASH" books an
@@ -162,10 +163,7 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         var referrerLocked = false;
         if (referrerChanged)
         {
-            referrerLocked = await _context.Invoices
-                .AnyAsync(i => i.AppointmentId == request.AppointmentId && (i.PaidAmount > 0 || i.Status == "PAID" || i.Status == "PARTIAL"), cancellationToken)
-                || await _context.Payments
-                .AnyAsync(p => p.Invoice.AppointmentId == request.AppointmentId, cancellationToken);
+            referrerLocked = await AppointmentPaymentGuard.HasCollectedPayment(_context, request.AppointmentId, cancellationToken);
         }
         var effectiveReferredBy = referrerLocked ? (prevReferredBy ?? string.Empty) : (request.ReferredBy ?? string.Empty);
 
@@ -193,16 +191,17 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         // Update the underlying Patient entity as well
         if (appointment.Patient != null)
         {
-            appointment.Patient.FullName = NameNormalizer.Upper(request.PatientName ?? string.Empty);
-            appointment.Patient.Mobile = request.Mobile;
-            appointment.Patient.Age = request.PatientAge;
-            appointment.Patient.Gender = request.PatientGender;
-            
-            appointment.Patient.Address = request.Address;
-            appointment.Patient.Village = NameNormalizer.Upper(request.Village);
-            appointment.Patient.Block = NameNormalizer.Upper(request.Block);
-            appointment.Patient.District = NameNormalizer.Upper(request.District);
-            appointment.Patient.SourceOfInfo = request.SourceOfInfo;
+            // Null means the caller did not edit this field; an empty string is
+            // still an explicit request to clear it.
+            if (request.PatientName is not null) appointment.Patient.FullName = NameNormalizer.Upper(request.PatientName);
+            if (request.Mobile is not null) appointment.Patient.Mobile = request.Mobile;
+            if (request.PatientAge is not null) appointment.Patient.Age = request.PatientAge;
+            if (request.PatientGender is not null) appointment.Patient.Gender = request.PatientGender;
+            if (request.Address is not null) appointment.Patient.Address = request.Address;
+            if (request.Village is not null) appointment.Patient.Village = NameNormalizer.Upper(request.Village);
+            if (request.Block is not null) appointment.Patient.Block = NameNormalizer.Upper(request.Block);
+            if (request.District is not null) appointment.Patient.District = NameNormalizer.Upper(request.District);
+            if (request.SourceOfInfo is not null) appointment.Patient.SourceOfInfo = request.SourceOfInfo;
         }
 
         // Load every live AppointmentService row on this visit. We reconcile
@@ -211,6 +210,47 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             .Where(s => s.AppointmentId == appointment.AppointmentId && s.DeletedAt == null)
             .OrderBy(s => s.UpdatedAt)
             .ToListAsync(cancellationToken);
+
+        // A disbursed commission is settled ledger history. The service can stay
+        // on the appointment, but its economic basis and payee cannot be changed
+        // through an ordinary edit; doing so would either rewrite money already
+        // paid or create a second commission for the same service.
+        var paidCommissions = await _context.ReferralCommissions
+            .Where(c => c.AppointmentId == appointment.AppointmentId
+                     && c.DeletedAt == null
+                     && c.Status == "PAID")
+            .ToListAsync(cancellationToken);
+
+        if (paidCommissions.Count > 0 && referrerChanged)
+        {
+            throw new InvalidOperationException(
+                "The referring party cannot be changed because this appointment has a paid referral commission. Use the approved referrer-change workflow.");
+        }
+
+        if (request.Services is { Count: > 0 })
+        {
+            var paidByServiceId = paidCommissions
+                .Where(c => c.AppointmentServiceId.HasValue)
+                .GroupBy(c => c.AppointmentServiceId!.Value)
+                .ToDictionary(g => g.Key, g => g.First());
+
+            foreach (var line in request.Services.Where(l => l.Id.HasValue))
+            {
+                if (!paidByServiceId.TryGetValue(line.Id!.Value, out var paid)) continue;
+
+                var original = existingServices.First(s => s.Id == line.Id.Value);
+                if (line.ReferralCutValue != original.ReferralCutValue)
+                {
+                    throw new InvalidOperationException(
+                        "The referral cut cannot be changed after it has been paid. Create an approved commission adjustment instead.");
+                }
+
+                // Keep the paid row associated with the same clinical service.
+                // Renaming, repricing, or changing modality remains allowed, but
+                // must never create another commission for this service.
+                _ = paid;
+            }
+        }
 
         // ── Paid-commission gate (decision: route to admin approval) ──────────
         // If this edit REMOVES a service whose referral commission has already been
@@ -288,10 +328,15 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
                 liveInvoice.DeletedAt = DateTime.UtcNow;
 
                 // Reverse the referral commissions — the service hasn't happened.
+                // Zero the amount before tombstoning (same convention as every other
+                // tombstone site in this file/CollectPaymentCommand) — otherwise a
+                // stale nonzero row lingers and gets double-counted into the referral
+                // total the next time this appointment re-arrives and re-bills, since
+                // reads match by AppointmentId without an amount check.
                 var comms = await _context.ReferralCommissions
                     .Where(c => c.AppointmentId == request.AppointmentId && c.DeletedAt == null)
                     .ToListAsync(cancellationToken);
-                foreach (var c in comms) { c.Status = "Cancelled"; c.DeletedAt = DateTime.UtcNow; }
+                foreach (var c in comms) { c.CommissionAmount = 0; c.Status = "Cancelled"; c.DeletedAt = DateTime.UtcNow; }
 
                 // Return money already collected into the credit ledger.
                 if (paid > 0.009m)
@@ -326,16 +371,33 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             return new UpdateAppointmentResult { Success = true };
         }
 
-        // ── Invoice reconciliation (arrival-gated) ────────────────────────
-        // One Invoice per visit; one InvoiceItem per live service line. A bill is
-        // only created OR modified once the patient has ARRIVED — a not-yet-arrived
-        // edit must touch no bill (no-show protection). After arrival: reconcile the
-        // existing LIVE invoice, or create one when there isn't one yet.
+        // ── Invoice reconciliation ─────────────────────────────────────────
+        // One Invoice per visit; one InvoiceItem per live service line.
+        //
+        // CREATING a bill is arrival-gated (see the `else if (appointment.ArrivedAt
+        // != null)` branch below) — a not-yet-arrived edit must not spontaneously
+        // bill a potential no-show. But reconciling an invoice that ALREADY EXISTS
+        // is NOT gated on arrival: existence of the invoice means billing is
+        // already active for this visit (e.g. GenerateInvoiceCommand can create one
+        // without the appointment ever passing through the arrival status
+        // transition), and GenerateInvoiceCommand's own contract assumes THIS
+        // reconciler folds in any service added afterwards "the next time the
+        // appointment is edited for any reason" — not conditionally on arrival.
+        // Gating this on ArrivedAt left an already-billed visit's invoice frozen
+        // at its old total when a service was added post-hoc, so the next payment
+        // collected against the (stale, too-low) TotalAmount got misclassified as
+        // an overpayment/advance instead of being applied to the real balance.
+        //
+        // Exception: a CANCELLED invoice (ReviewApprovalCommand.
+        // ApplyCancelAppointmentAsync deliberately keeps a refunded invoice VISIBLE
+        // at net ₹0 for audit — DeletedAt stays null, only Status flips) is a closed
+        // record and must never be reconciled back to a live-looking total by a
+        // later edit. See the `invoice.Status != "CANCELLED"` guard below.
         var invoice = await _context.Invoices
             .Include(i => i.Items)
             .FirstOrDefaultAsync(i => i.AppointmentId == request.AppointmentId && i.DeletedAt == null, cancellationToken);
 
-        if (invoice != null && appointment.ArrivedAt != null)
+        if (invoice != null && invoice.Status != "CANCELLED")
         {
             if (dateChanged)
             {
@@ -357,12 +419,18 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             }
 
             // Total gets recomputed from the line items so the invoice stays
-            // consistent with the per-service amounts.
-            invoice.GrossAmount = invoice.Items.Sum(i => i.Amount * i.Quantity);
-            // Discount can't exceed the (possibly reduced) gross.
-            if (invoice.DiscountAmount > invoice.GrossAmount) invoice.DiscountAmount = invoice.GrossAmount;
-            invoice.TotalAmount = invoice.GrossAmount - invoice.DiscountAmount;
+            // consistent with the per-service amounts. Canonical recompute
+            // (Common/InvoiceTotals.cs) — this handler never touches
+            // AdditionalCharges itself, so pass it through unchanged; the shared
+            // helper still folds it into Gross, closing a gap the old inline
+            // version here had: an appointment edit used to silently drop any
+            // AdditionalCharges already on the invoice (e.g. a night charge added
+            // at collection) out of GrossAmount/TotalAmount until the next
+            // payment/discount action re-added them.
+            InvoiceTotals.RecomputeGross(invoice, invoice.AdditionalCharges);
+            InvoiceTotals.ApplyDiscountAndFinalize(invoice, invoice.DiscountAmount);
             invoice.ReferralCutValue = liveServices.Sum(s => s.ReferralCutValue);
+            invoice.PatientName = appointment.PatientName ?? invoice.PatientName;
             // Keep the free rollup honest: only a bill whose every surviving line
             // is free is still a "free test".
             invoice.IsFree = invoice.Items.Count > 0 && invoice.Items.All(i => i.IsFree);
@@ -372,7 +440,6 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             // with an outstanding balance (and removing a service flips a
             // part-paid bill to PAID when it's now fully covered). Mirrors the
             // canonical rule in CollectPaymentCommand.
-            if (invoice.Status != "CANCELLED")
             {
                 // Gap 1 — removing/shrinking a paid service can leave the bill
                 // OVERPAID (PaidAmount > TotalAmount). That excess is the patient's
@@ -428,7 +495,7 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
                     invoice.PaidAt = DateTime.UtcNow;
             }
         }
-        else if (appointment.ArrivedAt != null)
+        else if (invoice == null && appointment.ArrivedAt != null)
         {
             // No live invoice yet, but the patient has ARRIVED — e.g. auto-billing
             // was off at arrival, or billable services were only added now via this
@@ -436,6 +503,12 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             // arrival so a not-yet-arrived (potential no-show) edit still produces
             // no bill here — that case is billed on arrival as usual. Commissions
             // are handled by the arrival-gated reconciliation below.
+            //
+            // `invoice == null` here specifically (not just "falls through from
+            // above") — a CANCELLED invoice (ReviewApprovalCommand.
+            // ApplyCancelAppointmentAsync keeps it VISIBLE at net ₹0, DeletedAt
+            // still null) must NOT trigger a second bill for the same visit; it
+            // stays a closed, refunded record.
             decimal gross = liveServices.Sum(s => s.Amount);
             if (gross > 0)
             {
@@ -446,9 +519,6 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
                     PatientName = appointment.PatientName ?? "Unknown",
                     HospitalId = appointment.HospitalId,
                     InvoiceId = $"INV-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString().Substring(0, 8).ToUpper()}",
-                    GrossAmount = gross,
-                    DiscountAmount = 0,
-                    TotalAmount = gross,
                     PaidAmount = 0,
                     Status = "PENDING",
                     ReferralCutValue = liveServices.Sum(s => s.ReferralCutValue),
@@ -465,6 +535,11 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
                         AppointmentServiceId = s.Id,
                     });
                 }
+                // Canonical recompute (Common/InvoiceTotals.cs) — a brand-new
+                // invoice has no additional charges/discount yet, so Gross ends up
+                // exactly the items sum and Total equals Gross, same as before.
+                InvoiceTotals.RecomputeGross(newInvoice, 0);
+                InvoiceTotals.ApplyDiscountAndFinalize(newInvoice, 0);
                 _context.Invoices.Add(newInvoice);
                 invoice = newInvoice; // let the commission reconciliation below reference it
             }
@@ -475,13 +550,17 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         // shape. v2 fans out one commission per service line. We keep both
         // working by reconciling against the live service list.
         //
-        // Billing-on-arrival: commissions only exist once the patient has
-        // arrived (UpdateAppointmentStatus generates them then). Editing a
-        // not-yet-arrived appointment must NOT create commissions — otherwise
-        // a no-show that was edited would still produce a referral payout.
-        // After arrival we reconcile normally so service add/remove/price
-        // edits flow through to the existing commission rows.
-        if (appointment.ArrivedAt != null)
+        // Billing-on-arrival: commissions normally only exist once the patient
+        // has arrived (UpdateAppointmentStatus generates them then). Editing a
+        // not-yet-arrived, not-yet-invoiced appointment must NOT create
+        // commissions — otherwise a no-show that was edited would still
+        // produce a referral payout. But `invoice != null` also reconciles:
+        // GenerateInvoiceCommand can create a real invoice (and its commission
+        // row) without the appointment ever passing through arrival, and once
+        // that invoice exists a later service edit must keep its commission in
+        // sync too — mirrors the same reasoning as the invoice reconciliation
+        // gate above.
+        if (appointment.ArrivedAt != null || invoice != null)
         {
             // Auto-billing parity: arrival keeps a ₹0 commission row per service
             // when auto-billing is on. The edit reconcile must mirror that so a
@@ -760,6 +839,9 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         {
             if (s.IsFree) removedFreeTotal += s.Amount * s.Quantity;
             invoice.Items.Remove(s);
+            // Explicitly mark for deletion to avoid orphans or EF tracking bugs
+            // since InvoiceItem is a standard HasOne/WithMany entity.
+            _context.Entry(s).State = Microsoft.EntityFrameworkCore.EntityState.Deleted;
         }
         return removedFreeTotal;
     }
@@ -797,6 +879,12 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             || (c.Remarks != null && c.Remarks.Contains("Clawback", StringComparison.OrdinalIgnoreCase))
             || (c.Remarks != null && c.Remarks.Contains("service removed after payment", StringComparison.OrdinalIgnoreCase));
         var commissions = allCommissions.Where(c => !IsSettledHistory(c)).ToList();
+        var paidServiceIds = allCommissions
+            .Where(c => string.Equals(c.Status, "PAID", StringComparison.OrdinalIgnoreCase)
+                     && c.AppointmentServiceId.HasValue
+                     && c.DeletedAt == null)
+            .Select(c => c.AppointmentServiceId!.Value)
+            .ToHashSet();
 
         // No referrer (or a "Self" / walk-in referral) ⇒ wipe any existing
         // commissions to zero (preserves audit trail) and we're done — Self pays
@@ -858,6 +946,7 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         referrer.Email     = Clean(request.ReferrerEmail)     ?? referrer.Email;
         referrer.Specialty = Clean(request.ReferrerSpecialty) ?? referrer.Specialty;
         referrer.Degree    = Clean(request.ReferrerDegree)    ?? referrer.Degree;
+        referrer.Address   = Clean(request.ReferrerAddress)   ?? referrer.Address;
 
         // Keep the payee's contact fresh too (doctor or agent). Normalise to a
         // 10-digit local number the same way booking does; only overwrite when
@@ -953,6 +1042,11 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
 
         foreach (var svc in liveServices)
         {
+            // Paid commissions are immutable settlement history. They must not
+            // be reconsidered as "missing" rows or an edit would append a second
+            // unpaid commission for the same service.
+            if (paidServiceIds.Contains(svc.Id)) continue;
+
             // A row should exist when the line earns a cut, OR auto-billing keeps
             // a ₹0 row (mirrors arrival in UpdateAppointmentStatus so an edited /
             // added service behaves identically to one present at arrival).

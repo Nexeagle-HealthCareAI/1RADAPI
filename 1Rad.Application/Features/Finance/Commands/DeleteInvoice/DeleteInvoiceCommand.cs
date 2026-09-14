@@ -1,5 +1,6 @@
 using MediatR;
 using Microsoft.EntityFrameworkCore;
+using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Entities;
 
@@ -91,18 +92,7 @@ public class DeleteInvoiceCommandHandler : IRequestHandler<DeleteInvoiceCommand,
         // Cascade recalculation of Accumulated Totals for the referrer to prevent ledger drift after deletion
         if (referrerIdToRecalculate.HasValue)
         {
-            var allCommissions = await _context.ReferralCommissions
-                .Where(c => c.ReferrerId == referrerIdToRecalculate.Value && c.HospitalId == hospitalId && c.DeletedAt == null)
-                .OrderBy(c => c.TransactionDate)
-                .ToListAsync(cancellationToken);
-
-            decimal runningTotal = 0;
-            foreach (var c in allCommissions)
-            {
-                runningTotal += c.CommissionAmount;
-                c.AccumulatedTotal = runningTotal;
-            }
-
+            await ReferralLedger.RecomputeAccumulatedTotal(_context, referrerIdToRecalculate.Value, hospitalId, cancellationToken);
             await _context.SaveChangesAsync(cancellationToken);
         }
 

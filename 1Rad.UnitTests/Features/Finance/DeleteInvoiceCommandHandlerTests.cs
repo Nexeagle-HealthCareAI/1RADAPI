@@ -114,7 +114,9 @@ public class DeleteInvoiceCommandHandlerTests : BaseHandlerTest
         // Assert
         Assert.True(result.Success);
         Assert.Null(result.Error);
-        var deletedInvoice = await Context.Invoices.FindAsync(invoiceId);
-        Assert.Null(deletedInvoice);
+        var deletedInvoice = await Context.Invoices
+            .IgnoreQueryFilters()
+            .SingleAsync(i => i.Id == invoiceId);
+        Assert.NotNull(deletedInvoice.DeletedAt);
     }
 }

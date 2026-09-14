@@ -1,5 +1,6 @@
 using System.Data;
 using System.Data.Common;
+using System.Collections.Concurrent;
 using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Common;
 using _1Rad.Domain.Constants;
@@ -12,6 +13,7 @@ namespace _1Rad.Infrastructure.Persistence;
 
 public class ApplicationDbContext : DbContext, IApplicationDbContext
 {
+    private static readonly ConcurrentDictionary<(Guid HospitalId, string CounterKey), int> InMemorySequenceCounters = new();
     private readonly IPublisher _publisher;
     public IUserContext UserContext { get; }
 
@@ -362,6 +364,9 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.TotalAmount).HasPrecision(18, 2);
             entity.Property(e => e.PaidAmount).HasPrecision(18, 2);
             entity.Property(e => e.Status).IsRequired().HasMaxLength(50);
+            entity.HasIndex(e => e.AppointmentId)
+                .IsUnique()
+                .HasFilter("[AppointmentId] IS NOT NULL AND [DeletedAt] IS NULL");
 
             entity.HasOne(e => e.Patient)
                 .WithMany()
@@ -418,6 +423,13 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
                 // → child paths. We soft-delete service rows via
                 // DeletedAt, so the difference never matters in practice.
                 .OnDelete(DeleteBehavior.NoAction);
+
+            // Appointment reconciliation owns one active commission per service.
+            // Historical clawbacks detach from the service and soft-deleted rows
+            // remain auditable without blocking a legitimate replacement.
+            entity.HasIndex(e => e.AppointmentServiceId)
+                .IsUnique()
+                .HasFilter("[AppointmentServiceId] IS NOT NULL AND [DeletedAt] IS NULL");
         });
 
         // Payment Configuration
@@ -1202,6 +1214,17 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     // away with a distinct, gap-free number.
     public async Task<int> NextSequenceValueAsync(Guid hospitalId, string counterKey, int seedIfAbsent, CancellationToken cancellationToken)
     {
+        // EF's InMemory provider has no relational connection and is used only
+        // by handler tests. Keep its counters process-local while production
+        // SQL Server continues through the locked transactional batch below.
+        if (!Database.IsRelational())
+        {
+            return InMemorySequenceCounters.AddOrUpdate(
+                (hospitalId, counterKey),
+                seedIfAbsent,
+                (_, current) => current + 1);
+        }
+
         const string sql = @"
 SET NOCOUNT ON;
 DECLARE @v INT;
