@@ -10,4 +10,6 @@ public record UpdateHospitalDetailsCommand(
     string? RegistrationNumber,
     string? PAN,
     string? NABHNumber,
-    bool IsAutoBillingEnabled) : IRequest<(bool Success, string? Error)>;
+    bool IsAutoBillingEnabled,
+    decimal? Latitude = null,
+    decimal? Longitude = null) : IRequest<(bool Success, string? Error)>;

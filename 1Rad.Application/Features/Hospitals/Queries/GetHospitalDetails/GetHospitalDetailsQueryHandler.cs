@@ -128,6 +128,8 @@ public class GetHospitalDetailsQueryHandler : IRequestHandler<GetHospitalDetails
             hospital.RegistrationNumber,
             hospital.PAN,
             hospital.NABHNumber,
+            hospital.Latitude,
+            hospital.Longitude,
             adminDto,
             usersDto,
             doctorsDto,

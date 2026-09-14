@@ -128,6 +128,10 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.PAN).HasMaxLength(10);
             entity.Property(e => e.NABHNumber).HasMaxLength(100);
             entity.Property(e => e.IsAutoBillingEnabled).HasDefaultValue(false);
+            // Matches Latitude/Longitude DECIMAL(9,6) in the 1RadDb migration —
+            // 6 decimal places is ~0.11m precision, plenty for a centre's pin.
+            entity.Property(e => e.Latitude).HasPrecision(9, 6);
+            entity.Property(e => e.Longitude).HasPrecision(9, 6);
 
             entity.HasOne(e => e.Group)
                 .WithMany(g => g.Hospitals)

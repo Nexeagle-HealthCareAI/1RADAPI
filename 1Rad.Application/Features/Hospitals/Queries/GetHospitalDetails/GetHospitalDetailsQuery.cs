@@ -70,6 +70,8 @@ public record HospitalDetailsDto(
     string? RegistrationNumber,
     string? PAN,
     string? NABHNumber,
+    decimal? Latitude,
+    decimal? Longitude,
     // ── Primary admin user (first user with an Admin role). Null if the
     //    hospital has no admin mapping yet. ──
     HospitalAdminDto? Admin,
