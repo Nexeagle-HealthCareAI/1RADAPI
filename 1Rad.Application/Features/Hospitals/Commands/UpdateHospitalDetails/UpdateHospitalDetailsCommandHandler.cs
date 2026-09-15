@@ -33,6 +33,8 @@ public class UpdateHospitalDetailsCommandHandler : IRequestHandler<UpdateHospita
         hospital.PAN = request.PAN;
         hospital.NABHNumber = request.NABHNumber;
         hospital.IsAutoBillingEnabled = request.IsAutoBillingEnabled;
+        hospital.Latitude = request.Latitude;
+        hospital.Longitude = request.Longitude;
 
         try
         {
