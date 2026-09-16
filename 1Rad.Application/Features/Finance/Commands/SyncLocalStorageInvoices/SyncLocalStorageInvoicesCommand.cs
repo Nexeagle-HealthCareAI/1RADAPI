@@ -75,6 +75,14 @@ public class SyncLocalStorageInvoicesCommandHandler : IRequestHandler<SyncLocalS
                 PaidAmount = legacy.Status == "PAID" ? legacy.TotalAmount : 0,
                 Status = legacy.Status,
                 CreatedAt = legacy.CreatedAt,
+                // Never set here previously, defaulting to DateTime.MinValue —
+                // GetFinancialMatrixQuery (Service Performance/Analytics) filters
+                // invoices by ServiceDate, so every migrated legacy invoice was
+                // permanently invisible to the whole matrix for any date range.
+                // No appointment link exists for these, so CreatedAt (the one
+                // real historical timestamp this record carries) is the best
+                // available stand-in for "when the visit happened".
+                ServiceDate = legacy.CreatedAt,
                 HospitalId = _context.UserContext.HospitalId,
                 PatientId = patient.PatientId
             };

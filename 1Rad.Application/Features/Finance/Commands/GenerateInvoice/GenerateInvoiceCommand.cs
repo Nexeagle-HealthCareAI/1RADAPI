@@ -158,19 +158,31 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
                 throw new ArgumentException("Total discount cannot exceed the invoice gross amount.");
             }
 
+            // ServiceDate is what GetFinancialMatrixQuery (Service Performance,
+            // Analytics, and every other matrix tab) filters invoices by — it was
+            // never set here at all, defaulting to DateTime.MinValue. That made
+            // every manually-generated invoice (auto-billing off, or a freeform
+            // walk-in with no appointment) permanently invisible to the whole
+            // matrix for any date range, forever, while Revenue (which never
+            // reads ServiceDate — it uses the appointment date or CreatedAt)
+            // correctly counted it. Falls back to "now" for a freeform invoice
+            // with no appointment to anchor to, same as the referral commission
+            // created below for the same invoice.
+            var invoiceCreatedAt = DateTime.UtcNow;
             var invoice = new Invoice
             {
                 AppointmentId = request.AppointmentId,
                 PatientId = request.PatientId,
                 PatientName = patient.FullName ?? "UNKNOWN PATIENT",
                 HospitalId = hospitalId,
-                InvoiceId = $"INV-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString().Substring(0, 8).ToUpper()}",
+                InvoiceId = $"INV-{invoiceCreatedAt:yyyyMMdd}-{Guid.NewGuid().ToString().Substring(0, 8).ToUpper()}",
                 CentreDiscount = request.CentreDiscount,
                 ReferrerDiscount = request.ReferrerDiscount,
                 PaidAmount = 0,
                 ReferralCutValue = request.CommissionAmount ?? 0,
                 Status = "PENDING",
-                CreatedAt = DateTime.UtcNow
+                CreatedAt = invoiceCreatedAt,
+                ServiceDate = appointmentDateTime ?? invoiceCreatedAt,
             };
 
             foreach (var item in request.Items)
@@ -252,16 +264,18 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
                             // here counted soft-deleted commissions too, inflating
                             // this figure whenever the referrer had deleted history).
                             AccumulatedTotal = 0,
-                            TransactionDate = DateTime.UtcNow,
-                            // The visit's actual date, when this invoice is tied to one —
-                            // left unset (defaults) for a freeform/manual invoice, matching
-                            // every other commission-creation site. Without this, Revenue
-                            // Hub (which filters by appointment date) and the Referral Hub
-                            // (which filters by ServiceDate, falling back to TransactionDate)
-                            // could disagree on which day's view an incentive belongs to —
-                            // the same commission showing on Revenue's "Today" but silently
-                            // missing from the Referral Hub's "Today", or vice versa.
-                            ServiceDate = appointmentDateTime ?? default,
+                            TransactionDate = invoiceCreatedAt,
+                            // The visit's actual date, when this invoice is tied to one.
+                            // GetReferralCommissionsQuery falls back to TransactionDate
+                            // when ServiceDate is left at its default — but
+                            // GetFinancialMatrixQuery (Service Performance/Analytics)
+                            // filters ServiceDate directly with no such fallback, so a
+                            // left-default value made this commission permanently
+                            // invisible there for any date range. Fall back to "now"
+                            // (matching the invoice's own ServiceDate above) instead of
+                            // defaulting, so every reader agrees on which day this
+                            // freeform/manual commission belongs to.
+                            ServiceDate = appointmentDateTime ?? invoiceCreatedAt,
                             Status = "UNPAID",
                             ReferenceNumber = invoice.InvoiceId,
                             AppointmentId = invoice.AppointmentId,
