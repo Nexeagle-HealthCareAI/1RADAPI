@@ -1,3 +1,4 @@
+using _1Rad.Application.Common;
 using _1Rad.Domain.Entities;
 
 namespace _1Rad.Application.Features.Finance.Queries.GetInvoices;
@@ -35,14 +36,19 @@ public static class InvoiceQueryExtensions
                 (i.InvoiceId != null && i.InvoiceId.ToLower().Contains(search)));
         }
 
+        // StartDate/EndDate arrive as a bare "YYYY-MM-DD" (date picker) — a
+        // DateTimeKind.Unspecified midnight with no timezone info. CreatedAt is
+        // a real UTC instant, so comparing them directly silently treats
+        // "Sept 16" as midnight UTC (5:30am IST) instead of midnight IST,
+        // shifting the day boundary by 5.5 hours. See IstDateRange.
         if (request.StartDate.HasValue)
         {
-            query = query.Where(i => i.CreatedAt >= request.StartDate.Value);
+            query = query.Where(i => i.CreatedAt >= IstDateRange.ToUtcStart(request.StartDate.Value));
         }
 
         if (request.EndDate.HasValue)
         {
-            query = query.Where(i => i.CreatedAt <= request.EndDate.Value);
+            query = query.Where(i => i.CreatedAt <= IstDateRange.ToUtcEndInclusive(request.EndDate.Value));
         }
 
         if (request.AppointmentId.HasValue)

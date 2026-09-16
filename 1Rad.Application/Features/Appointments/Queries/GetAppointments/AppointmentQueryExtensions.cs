@@ -1,3 +1,4 @@
+using _1Rad.Application.Common;
 using _1Rad.Domain.Entities;
 
 namespace _1Rad.Application.Features.Appointments.Queries.GetAppointments;
@@ -29,7 +30,9 @@ public static class AppointmentQueryExtensions
 
         if (request.StartDate.HasValue)
         {
-            query = query.Where(a => a.DateTime >= request.StartDate.Value);
+            // A bare "YYYY-MM-DD" (see IstDateRange) — not to be confused with
+            // UpdatedAfter above, which is already a precise UTC instant.
+            query = query.Where(a => a.DateTime >= IstDateRange.ToUtcStart(request.StartDate.Value));
         }
 
         if (!string.IsNullOrEmpty(request.Modality) && request.Modality != "ALL")
