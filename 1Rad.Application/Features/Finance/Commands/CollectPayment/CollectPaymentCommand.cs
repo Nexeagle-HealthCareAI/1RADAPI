@@ -105,14 +105,23 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
                     .ToHashSet();
                 foreach (var svc in liveServices.Where(s => !invoicedServiceIds.Contains(s.Id)))
                 {
-                    invoice.Items.Add(new InvoiceItem
+                    var newItem = new InvoiceItem
                     {
                         InvoiceId = invoice.Id,
                         Description = svc.ServiceName,
                         Amount = svc.Amount,
                         Quantity = 1,
                         AppointmentServiceId = svc.Id,
-                    });
+                    };
+                    invoice.Items.Add(newItem);
+                    // invoice.Items.Add() alone doesn't reliably track a new item
+                    // as Added onto an ALREADY-TRACKED invoice (its Id is a
+                    // non-default Guid set at construction, not by EF) — it can
+                    // end up Modified, and SaveChanges then issues a no-op UPDATE
+                    // against a row that was never inserted instead of an INSERT,
+                    // silently dropping the self-healed line with no error — on
+                    // this exact "last gate before money changes hands" step.
+                    _context.Entry(newItem).State = Microsoft.EntityFrameworkCore.EntityState.Added;
                 }
             }
 

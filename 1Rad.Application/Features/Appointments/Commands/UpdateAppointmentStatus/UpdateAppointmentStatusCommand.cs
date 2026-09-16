@@ -122,14 +122,29 @@ public class UpdateAppointmentStatusCommandHandler : IRequestHandler<UpdateAppoi
             // Enforce validation: Enforce that an appointment can ONLY be cancelled if no payments have been collected
             var hasPayments = await AppointmentPaymentGuard.HasCollectedPayment(_context, request.AppointmentId, cancellationToken);
 
-            if (hasPayments)
+            // A referral commission can be marked PAID independently of (even
+            // before) the patient's invoice being settled — UpdateReferralCommissionStatusCommand
+            // has no invoice-payment cross-check — so hasPayments alone isn't a
+            // reliable signal that nothing has actually been disbursed. Below,
+            // the direct-cancel path zeroes and soft-deletes every commission
+            // for this appointment with no clawback; doing that to an already-PAID
+            // row would silently erase the record that real money left the
+            // building. Route through approval instead, which already books a
+            // proper clawback (ReviewApprovalCommand.ApplyCancelAppointmentAsync).
+            var hasPaidCommission = await _context.ReferralCommissions
+                .AnyAsync(c => c.AppointmentId == request.AppointmentId && c.DeletedAt == null
+                             && c.Status == "PAID" && c.CommissionAmount > 0, cancellationToken);
+
+            if (hasPayments || hasPaidCommission)
             {
                 return new UpdateAppointmentStatusResult
                 {
                     Success = true,
                     NotAllowed = true,
                     RequiresApproval = true,
-                    Message = "Payment has already been collected for this appointment. Cancelling it needs admin approval."
+                    Message = hasPaidCommission && !hasPayments
+                        ? "A referral commission for this appointment has already been paid out. Cancelling it needs admin approval."
+                        : "Payment has already been collected for this appointment. Cancelling it needs admin approval."
                 };
             }
 
@@ -321,21 +336,20 @@ public class UpdateAppointmentStatusCommandHandler : IRequestHandler<UpdateAppoi
 
         if (referrerId != null && !isSelfReferral && (isAutoBillingEnabled || totalReferralCut > 0))
         {
-            var currentTotal = await _context.ReferralCommissions
-                .Where(c => c.ReferrerId == referrerId && c.HospitalId == appointment.HospitalId)
-                .SumAsync(c => (decimal?)c.CommissionAmount, ct) ?? 0;
-
+            var anyAdded = false;
             foreach (var s in services)
             {
                 if (s.ReferralCutValue <= 0 && !isAutoBillingEnabled) continue;
-                currentTotal += s.ReferralCutValue;
                 _context.ReferralCommissions.Add(new ReferralCommission
                 {
                     ReferrerId = referrerId.Value,
                     ReferrerName = referrerName ?? "Self-Referral",
                     Modality = s.Modality,
                     CommissionAmount = s.ReferralCutValue,
-                    AccumulatedTotal = currentTotal,
+                    // AccumulatedTotal is filled in below via ReferralLedger, which
+                    // needs these rows persisted first (its own query hits the DB,
+                    // so it can't see an Added-but-unsaved entity).
+                    AccumulatedTotal = 0,
                     Status = "UNPAID",
                     TransactionDate = DateTime.UtcNow,
                     ServiceDate = serviceDate,
@@ -344,6 +358,18 @@ public class UpdateAppointmentStatusCommandHandler : IRequestHandler<UpdateAppoi
                     AppointmentServiceId = s.Id,
                     ReferenceNumber = invoiceDisplayId
                 });
+                anyAdded = true;
+            }
+
+            // The old inline running-sum here summed EVERY commission ever
+            // recorded for this referrer, including soft-deleted ones (a
+            // removed service, a cancelled visit) — inflating AccumulatedTotal
+            // on every arrival for any referrer with deleted history.
+            // ReferralLedger is the canonical, DeletedAt-aware recompute.
+            if (anyAdded)
+            {
+                await _context.SaveChangesAsync(ct);
+                await ReferralLedger.RecomputeAccumulatedTotal(_context, referrerId.Value, appointment.HospitalId, ct);
             }
         }
     }

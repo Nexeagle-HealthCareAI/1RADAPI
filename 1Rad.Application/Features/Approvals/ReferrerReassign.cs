@@ -184,22 +184,26 @@ internal static class ReferrerReassign
                 baseCut = svc.ReferralCutValue;
             }
 
-            // Paid path (preserveHistory + actually PAID) → true double-entry: the
-            // old referrer's original row is KEPT, a reversal (−amount) is booked
-            // against them, and a fresh entry is credited to the new referrer.
-            // History is never lost, and a clawback shows if the old cut was
-            // already paid. The simple move (unpaid edit, Self, or a zero cut)
-            // just re-points the row. "Payment collected" (which gates whether
-            // this reassignment needed approval at all) is about the PATIENT'S
-            // invoice, not the commission payout — a fully-paid invoice's
-            // commission is routinely still UNPAID (payouts lag), so this must
-            // check the commission's own Status, not just preserveHistory. Without
-            // it, an unpaid commission took the reversal path too: the original
-            // row was left untouched (still positive, still UNPAID, still owned by
-            // the old referrer) instead of being re-pointed — a stale, live,
-            // still-payable duplicate of the fresh credit given to the new
-            // referrer, undetectable except by reading its remarks text.
-            if (preserveHistory && oldReferrerId != referrer.ReferrerId && c.CommissionAmount != 0
+            // Paid → true double-entry: the old referrer's original row is KEPT, a
+            // reversal (−amount) is booked against them, and a fresh entry is
+            // credited to the new referrer. History is never lost, and a clawback
+            // shows if the old cut was already paid. The simple move (unpaid edit,
+            // Self, or a zero cut) just re-points the row.
+            //
+            // Gated on the commission's own Status alone — NOT on preserveHistory
+            // (i.e. not on whether the caller went through the approval flow).
+            // ChangeReferrerCommand's "does this need approval" gate checks the
+            // PATIENT'S invoice payment, not the commission payout — a referral
+            // commission can be marked PAID independently of (even before) the
+            // invoice being settled (UpdateReferralCommissionStatusCommand has no
+            // invoice-payment cross-check), so an already-disbursed commission on
+            // an appointment whose invoice is still unpaid would reach here via
+            // the DIRECT (preserveHistory=false) path. Requiring preserveHistory
+            // too meant that case silently overwrote a real, already-paid
+            // ledger row in place instead of reversing it — the money stayed with
+            // the old referrer while the system's records reassigned credit for
+            // it to the new one, with no audit trail.
+            if (oldReferrerId != referrer.ReferrerId && c.CommissionAmount != 0
                 && string.Equals(c.Status, "PAID", StringComparison.OrdinalIgnoreCase))
             {
                 var amount = c.CommissionAmount;
@@ -237,7 +241,9 @@ internal static class ReferrerReassign
                     Status = "UNPAID",
                     TransactionDate = now,
                     ServiceDate = c.ServiceDate,
-                    Remarks = $"[Reassigned from {c.ReferrerName} via approval]",
+                    Remarks = preserveHistory
+                        ? $"[Reassigned from {c.ReferrerName} via approval]"
+                        : $"[Reassigned from {c.ReferrerName}]",
                 });
 
                 // Keep the original as immutable history.
