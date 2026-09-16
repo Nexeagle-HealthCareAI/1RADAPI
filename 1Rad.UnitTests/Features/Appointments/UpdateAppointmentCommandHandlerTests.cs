@@ -422,4 +422,92 @@ public class UpdateAppointmentCommandHandlerTests : BaseHandlerTest
         Assert.Equal("PAID", onlyCommission.Status);
         Assert.Equal(120m, onlyCommission.CommissionAmount);
     }
+
+    [Fact]
+    public async Task Handle_ReferralCutExceedingServiceAmount_ThrowsArgumentException()
+    {
+        var patient = new Patient { PatientId = Guid.NewGuid(), HospitalId = HospitalId, FullName = "Cut Guard Patient" };
+        var appointment = new Appointment
+        {
+            AppointmentId = Guid.NewGuid(),
+            PatientId = patient.PatientId,
+            PatientName = patient.FullName,
+            HospitalId = HospitalId,
+            Service = "Ultrasound",
+            Modality = "USG",
+            DateTime = DateTime.UtcNow,
+            Doctor = "Dr. Reader",
+            ReferredBy = "Self",
+            Status = "BOOKED"
+        };
+        Context.AddRange(patient, appointment);
+        await Context.SaveChangesAsync();
+
+        // A brand-new service line whose cut is bigger than its own price —
+        // exactly the case CreateAppointmentCommand/AddBookingServiceCommand
+        // already reject at booking time, previously unguarded on edit.
+        await Assert.ThrowsAsync<ArgumentException>(() => _handler.Handle(new UpdateAppointmentCommand(
+            appointment.AppointmentId,
+            "Ultrasound",
+            "USG",
+            appointment.DateTime,
+            appointment.Doctor,
+            Services: new[]
+            {
+                new AppointmentServiceLine("Ultrasound", "USG", 500m, 5000m)
+            }),
+            CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Handle_UnchangedPreExistingInvalidReferralCut_DoesNotBlockAnUnrelatedEdit()
+    {
+        // A service that already had an invalid cut (data predating this
+        // validation, or written by a since-fixed bug) must not turn the
+        // whole appointment permanently un-editable — only a NEW or
+        // ACTIVELY CHANGED line is checked.
+        var patient = new Patient { PatientId = Guid.NewGuid(), HospitalId = HospitalId, FullName = "Grandfathered Patient" };
+        var appointment = new Appointment
+        {
+            AppointmentId = Guid.NewGuid(),
+            PatientId = patient.PatientId,
+            PatientName = patient.FullName,
+            HospitalId = HospitalId,
+            Service = "Ultrasound",
+            Modality = "USG",
+            DateTime = DateTime.UtcNow,
+            Doctor = "Dr. Old",
+            ReferredBy = "Self",
+            Status = "BOOKED"
+        };
+        var service = new AppointmentService
+        {
+            AppointmentId = appointment.AppointmentId,
+            HospitalId = HospitalId,
+            ServiceName = "Ultrasound",
+            Modality = "USG",
+            Amount = 500m,
+            ReferralCutValue = 5000m, // already invalid, predates this edit
+        };
+        Context.AddRange(patient, appointment, service);
+        await Context.SaveChangesAsync();
+
+        // Same service, same (still-invalid) amount/cut — only the doctor
+        // field actually changes.
+        var result = await _handler.Handle(new UpdateAppointmentCommand(
+            appointment.AppointmentId,
+            "Ultrasound",
+            "USG",
+            appointment.DateTime,
+            "Dr. New",
+            Services: new[]
+            {
+                new AppointmentServiceLine("Ultrasound", "USG", 500m, 5000m, service.Id)
+            }),
+            CancellationToken.None);
+
+        Assert.True(result.Success);
+        var updated = await Context.Appointments.SingleAsync(a => a.AppointmentId == appointment.AppointmentId);
+        Assert.Equal("Dr. New", updated.Doctor);
+    }
 }
