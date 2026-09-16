@@ -328,6 +328,7 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                                 x.i.CentreDiscount,
                                 x.i.ReferrerDiscount,
                                 x.i.InstitutionalDeduction,
+                                x.i.AdditionalCharges,
                                 x.i.Status,
                                 Modality = a != null ? a.Modality : "GENERAL",
                                 Service = a != null ? a.Service : "OTHER",
@@ -465,7 +466,24 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 }
 
                 var lineGross = it.Amount * it.Quantity;
-                var share = inv.GrossAmount > 0 ? lineGross / inv.GrossAmount : 0m;
+
+                // Invoice.GrossAmount = Σ(item lines) + AdditionalCharges (see
+                // InvoiceTotals.RecomputeGross) — a courier/urgent-processing/etc.
+                // extra charge is real money billed on the invoice but isn't any
+                // line item, so it was invisible to this per-line breakdown
+                // entirely. Sharing lineGross against the ITEMS-only subtotal (not
+                // inv.GrossAmount) and then scaling every allocated field off the
+                // true inv.GrossAmount/TotalAmount/PaidAmount makes each line's
+                // share of AdditionalCharges flow through, so summing Gross/Total/
+                // Paid across an invoice's lines reproduces its real invoice-level
+                // totals exactly — previously the Service Performance tab's GROSS
+                // total silently fell short of Revenue's (GrossAmount minus
+                // DiscountAmount reconciles to Revenue's BASE FEE; the old
+                // items-only Gross did not) by the sum of every AdditionalCharges
+                // in the range, and Paid/commission-fallback were under-allocated
+                // by the same proportion.
+                var itemsSubtotal = inv.GrossAmount - inv.AdditionalCharges;
+                var share = itemsSubtotal > 0 ? lineGross / itemsSubtotal : 0m;
 
                 // No per-service commission row (either no link, or this specific
                 // service has none) — check for an invoice-level aggregate
@@ -481,9 +499,9 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 {
                     Modality = modality.ToUpper(),
                     ServiceName = serviceName.ToUpper(),
-                    Gross = lineGross,
-                    Total = inv.GrossAmount > 0 ? lineGross * (inv.TotalAmount / inv.GrossAmount) : lineGross,
-                    Paid = inv.GrossAmount > 0 ? inv.PaidAmount * share : 0m,
+                    Gross = share * inv.GrossAmount,
+                    Total = share * inv.TotalAmount,
+                    Paid = share * inv.PaidAmount,
                     ReferralCut = referralCut
                 };
             }).ToList();
