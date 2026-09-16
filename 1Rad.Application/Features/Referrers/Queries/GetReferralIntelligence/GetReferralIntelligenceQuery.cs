@@ -186,7 +186,16 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
                 }).ToList();
 
                 var totalComm = missionsList.Sum(p => p.CommissionAmount);
-                var paidComm = missionsList.Where(p => p.CommissionStatus.Equals("Paid", StringComparison.OrdinalIgnoreCase)).Sum(p => p.CommissionAmount);
+                // Computed per commission LINE (not per mission's all-or-nothing
+                // CommissionStatus flag above) — a multi-service appointment with one
+                // paid line and one unpaid line has CommissionStatus "Unpaid" (the
+                // ANY-unpaid rule for the per-row badge), which excluded the WHOLE
+                // mission's commission — including the part that really was paid —
+                // from this referrer-level total. Understated PaidCommission and
+                // correspondingly overstated the derived UnpaidCommission below.
+                var paidComm = g.Sum(m => m.Commissions
+                    .Where(c => c.Status.Equals("PAID", StringComparison.OrdinalIgnoreCase))
+                    .Sum(c => c.CommissionAmount));
                 var totalRev = missionsList.Sum(p => p.TotalAmount);
                 var totalDisc = missionsList.Sum(p => p.DiscountAmount);
 
