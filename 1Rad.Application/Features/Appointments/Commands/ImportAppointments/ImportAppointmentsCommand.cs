@@ -26,6 +26,13 @@ public class ImportAppointmentsCommandHandler : IRequestHandler<ImportAppointmen
         int failure = 0;
         var errors = new List<string>();
 
+        // Nothing is saved until SaveChangesAsync after the loop (line ~135),
+        // so this count is identical on every row — hoisted out of the
+        // per-row loop where it used to re-run a full table scan every
+        // iteration. `success` (already incremented per row below) still
+        // makes each row's DisplayId distinct.
+        var appCount = await _context.Appointments.CountAsync(cancellationToken);
+
         System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
 
         using (var reader = ExcelReaderFactory.CreateReader(request.FileStream))
@@ -103,7 +110,6 @@ public class ImportAppointmentsCommandHandler : IRequestHandler<ImportAppointmen
                     DateTime.TryParse(dateStr, out DateTime appDate);
                     if (appDate == default) appDate = DateTime.Today;
 
-                    var appCount = await _context.Appointments.CountAsync(cancellationToken);
                     var appointment = new Appointment
                     {
                         DisplayId = $"APP-{1010 + appCount + success}",

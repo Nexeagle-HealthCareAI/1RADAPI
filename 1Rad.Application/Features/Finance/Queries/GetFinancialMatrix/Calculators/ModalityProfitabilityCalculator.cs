@@ -21,8 +21,16 @@ public class ModalityProfitabilityCalculator : IModalityProfitabilityCalculator
                 var mod = g.Key;
                 var count = g.Count();
                 var gross = g.Sum(x => x.Gross);
+                // `total` is each line's post-discount billed share (Total on
+                // ServiceLineRow — see the handler) — the actually-billed amount,
+                // unlike `gross` which is the pre-discount list price. Net/margin/
+                // efficiency/ROI are all "of what was really billed", so they use
+                // `total`; `gross` stays around only as the list-price figure the
+                // UI shows separately. Net used to be gross - cut, silently
+                // ignoring every discount applied to the invoice.
+                var total = g.Sum(x => x.Total);
                 var cut = g.Sum(x => x.ReferralCut);
-                var net = gross - cut;
+                var net = total - cut;
                 var paid = g.Sum(x => x.Paid);
 
                 var directCost = allocation.DirectByModality.GetValueOrDefault(mod, 0m);
@@ -31,7 +39,7 @@ public class ModalityProfitabilityCalculator : IModalityProfitabilityCalculator
 
                 var netOpProfit = net - operatingCost;
                 var opMarginPct = net > 0 ? (double)Math.Round((netOpProfit / net) * 100, 1) : 0;
-                var roi = operatingCost > 0 ? (double)Math.Round(gross / operatingCost, 1) : 0;
+                var roi = operatingCost > 0 ? (double)Math.Round(total / operatingCost, 1) : 0;
 
                 var avgNetYield = count > 0 ? net / count : 0m;
                 var breakEven = avgNetYield > 0 ? Math.Round(operatingCost / avgNetYield, 1) : 0m;
@@ -41,8 +49,9 @@ public class ModalityProfitabilityCalculator : IModalityProfitabilityCalculator
                     {
                         var svcCount = sg.Count();
                         var svcGross = sg.Sum(x => x.Gross);
+                        var svcTotal = sg.Sum(x => x.Total);
                         var svcCut = sg.Sum(x => x.ReferralCut);
-                        var svcNet = svcGross - svcCut;
+                        var svcNet = svcTotal - svcCut;
                         var svcPaid = sg.Sum(x => x.Paid);
 
                         return new ServiceProfitabilityDto
@@ -52,8 +61,8 @@ public class ModalityProfitabilityCalculator : IModalityProfitabilityCalculator
                             GrossRevenue = svcGross,
                             ReferralCut = svcCut,
                             NetRevenue = svcNet,
-                            MarginPercentage = svcGross > 0 ? (double)Math.Round((svcNet / svcGross) * 100, 1) : 0,
-                            CollectionEfficiency = svcGross > 0 ? (double)Math.Round((svcPaid / svcGross) * 100, 1) : 0
+                            MarginPercentage = svcTotal > 0 ? (double)Math.Round((svcNet / svcTotal) * 100, 1) : 0,
+                            CollectionEfficiency = svcTotal > 0 ? (double)Math.Round((svcPaid / svcTotal) * 100, 1) : 0
                         };
                     })
                     .OrderByDescending(s => s.GrossRevenue)
@@ -66,8 +75,8 @@ public class ModalityProfitabilityCalculator : IModalityProfitabilityCalculator
                     GrossRevenue = gross,
                     ReferralCut = cut,
                     NetRevenue = net,
-                    MarginPercentage = gross > 0 ? (double)Math.Round((net / gross) * 100, 1) : 0,
-                    CollectionEfficiency = gross > 0 ? (double)Math.Round((paid / gross) * 100, 1) : 0,
+                    MarginPercentage = total > 0 ? (double)Math.Round((net / total) * 100, 1) : 0,
+                    CollectionEfficiency = total > 0 ? (double)Math.Round((paid / total) * 100, 1) : 0,
                     OperatingCost = operatingCost,
                     NetOperatingProfit = netOpProfit,
                     OperatingMarginPercentage = opMarginPct,
