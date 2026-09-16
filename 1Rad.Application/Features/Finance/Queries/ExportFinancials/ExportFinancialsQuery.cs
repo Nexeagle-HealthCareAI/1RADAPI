@@ -1,6 +1,7 @@
 using ClosedXML.Excel;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
+using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 
 namespace _1Rad.Application.Features.Finance.Queries.ExportFinancials;
@@ -37,8 +38,10 @@ public class ExportFinancialsQueryHandler : IRequestHandler<ExportFinancialsQuer
                 .AsNoTracking()
                 .Where(i => i.HospitalId == _context.UserContext.HospitalId)
                 .Include(i => i.Patient)
-                .Where(i => (!request.StartDate.HasValue || i.CreatedAt >= request.StartDate.Value) &&
-                            (!request.EndDate.HasValue || i.CreatedAt <= request.EndDate.Value))
+                // See IstDateRange — StartDate/EndDate arrive as a bare
+                // "YYYY-MM-DD", meaning an IST calendar date, not midnight UTC.
+                .Where(i => (!request.StartDate.HasValue || i.CreatedAt >= IstDateRange.ToUtcStart(request.StartDate.Value)) &&
+                            (!request.EndDate.HasValue || i.CreatedAt <= IstDateRange.ToUtcEndInclusive(request.EndDate.Value)))
                 .OrderByDescending(i => i.CreatedAt)
                 .Select(i => new
                 {

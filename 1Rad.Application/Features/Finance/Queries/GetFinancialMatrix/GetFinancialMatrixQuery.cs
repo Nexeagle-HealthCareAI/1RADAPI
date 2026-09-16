@@ -1,5 +1,6 @@
 using MediatR;
 using Microsoft.EntityFrameworkCore;
+using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using _1Rad.Application.Features.Finance.Queries.GetFinancialMatrix.Calculators;
 
@@ -273,15 +274,23 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
             // happened on a different calendar day than the visit itself (late
             // billing, backdated entry), the same class of bug already fixed for
             // the Referral Hub's own date filtering (useBillingData.js).
+            // StartDate/EndDate arrive as a bare "YYYY-MM-DD" (a date picker, or
+            // the frontend's own getIstDateStr()) — model-bound to a
+            // DateTimeKind.Unspecified midnight with no timezone info at all.
+            // ServiceDate/TransactionDate are real UTC instants. Comparing the
+            // two directly silently treats "Sept 16" as midnight UTC (5:30am
+            // IST) instead of midnight IST, shifting every day boundary by 5.5
+            // hours — see IstDateRange's doc comment for the full picture.
             if (request.StartDate.HasValue)
             {
-                invoiceQuery = invoiceQuery.Where(i => i.ServiceDate >= request.StartDate.Value);
-                expenseQuery = expenseQuery.Where(e => e.TransactionDate >= request.StartDate.Value);
-                commissionQuery = commissionQuery.Where(c => c.ServiceDate >= request.StartDate.Value);
+                var start = IstDateRange.ToUtcStart(request.StartDate.Value);
+                invoiceQuery = invoiceQuery.Where(i => i.ServiceDate >= start);
+                expenseQuery = expenseQuery.Where(e => e.TransactionDate >= start);
+                commissionQuery = commissionQuery.Where(c => c.ServiceDate >= start);
             }
             if (request.EndDate.HasValue)
             {
-                var end = request.EndDate.Value.Date.AddDays(1).AddTicks(-1);
+                var end = IstDateRange.ToUtcEndInclusive(request.EndDate.Value);
                 invoiceQuery = invoiceQuery.Where(i => i.ServiceDate <= end);
                 expenseQuery = expenseQuery.Where(e => e.TransactionDate <= end);
                 commissionQuery = commissionQuery.Where(c => c.ServiceDate <= end);
@@ -329,12 +338,11 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
             var paymentQuery = _context.Payments.AsNoTracking().Where(p => p.HospitalId == hospitalId);
             if (request.StartDate.HasValue)
             {
-                paymentQuery = paymentQuery.Where(p => p.CreatedAt >= request.StartDate.Value);
+                paymentQuery = paymentQuery.Where(p => p.CreatedAt >= IstDateRange.ToUtcStart(request.StartDate.Value));
             }
             if (request.EndDate.HasValue)
             {
-                var end = request.EndDate.Value.Date.AddDays(1).AddTicks(-1);
-                paymentQuery = paymentQuery.Where(p => p.CreatedAt <= end);
+                paymentQuery = paymentQuery.Where(p => p.CreatedAt <= IstDateRange.ToUtcEndInclusive(request.EndDate.Value));
             }
             var paymentData = await paymentQuery
                 .Select(p => new { p.Amount, p.PaymentMethod })
