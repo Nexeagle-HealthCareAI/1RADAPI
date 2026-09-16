@@ -135,6 +135,13 @@ public class RecordReferralCommissionsCommandHandler : IRequestHandler<RecordRef
         foreach (var stale in existing.Where(c => !matched.Contains(c.Id)
                                                    && !string.Equals(c.Status, "PAID", StringComparison.OrdinalIgnoreCase)))
         {
+            // Zero the amount before tombstoning — every other soft-delete site for
+            // this entity (DeleteInvoiceCommand, UpdateAppointmentCommand,
+            // ReferrerReassign) does the same, because a handful of reads key off
+            // DeletedAt alone. Leaving CommissionAmount nonzero here let a removed
+            // payout line keep counting in those reads (e.g. GetFinancialMatrixQuery's
+            // Physician ROI Ledger) forever after being tombstoned everywhere else.
+            stale.CommissionAmount = 0;
             stale.DeletedAt = now;
             stale.UpdatedAt = now;
         }

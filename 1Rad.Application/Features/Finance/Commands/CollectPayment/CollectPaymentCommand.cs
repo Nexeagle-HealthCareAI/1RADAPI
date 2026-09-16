@@ -232,8 +232,24 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
 
                 if (commissions.Count > 0)
                 {
-                    // Eligible commission pool before any referral concession this cycle.
-                    var currentTotal = commissions.Sum(c => c.CommissionAmount);
+                    // A PAID commission is disbursement history — the invariant enforced
+                    // everywhere else this table is edited (UpdateReferralCommissionStatusCommand,
+                    // RecordReferralCommissionsCommand, ReferrerReassign's double-entry
+                    // reversal) is that it is never silently rewritten in place; an
+                    // adjustment after disbursement needs an audited reversal, not a
+                    // direct edit. A commission CAN be marked PAID before the invoice
+                    // itself is fully settled (see ReferrerReassign's comment on this),
+                    // so a second CollectPayment call with a changed ReferrerDiscount is
+                    // a real, reachable path here — restrict the redistribution to the
+                    // still-adjustable (non-PAID) rows so a paid row's CommissionAmount
+                    // can never be overwritten by this differential logic.
+                    var lockedCommissions = commissions.Where(c => string.Equals(c.Status, "PAID", StringComparison.OrdinalIgnoreCase)).ToList();
+                    var adjustable = commissions.Except(lockedCommissions).ToList();
+
+                    // Eligible commission pool before any referral concession this cycle
+                    // (locked/paid rows are frozen out of the pool — the full differential
+                    // falls on the remaining adjustable rows only).
+                    var currentTotal = adjustable.Sum(c => c.CommissionAmount);
                     var baseCommission = currentTotal + oldReferrerDiscount;
 
                     // Over-commission funded by the CENTRE: floor the pool at zero and
@@ -248,7 +264,7 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
                         invoice.ReferrerDiscount = baseCommission;
                         invoice.DiscountAmount = invoice.CentreDiscount + invoice.ReferrerDiscount + invoice.InstitutionalDeduction;
                         invoice.TotalAmount = invoice.GrossAmount - invoice.DiscountAmount;
-                        foreach (var c in commissions)
+                        foreach (var c in adjustable)
                             c.Remarks = (c.Remarks ?? "") + $" [Excess ₹{excess:0.##} absorbed by centre]";
                     }
 
@@ -258,17 +274,17 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
                     // so the group sum lands exactly on (baseCommission - ReferrerDiscount).
                     var newTotal = baseCommission - invoice.ReferrerDiscount;
                     var allocated = 0m;
-                    for (var i = 0; i < commissions.Count; i++)
+                    for (var i = 0; i < adjustable.Count; i++)
                     {
-                        var c = commissions[i];
+                        var c = adjustable[i];
                         decimal rowNew;
-                        if (i == commissions.Count - 1)
+                        if (i == adjustable.Count - 1)
                         {
                             rowNew = newTotal - allocated;
                         }
                         else
                         {
-                            var share = currentTotal != 0 ? c.CommissionAmount / currentTotal : 1m / commissions.Count;
+                            var share = currentTotal != 0 ? c.CommissionAmount / currentTotal : 1m / adjustable.Count;
                             rowNew = Math.Round(newTotal * share, 2);
                             allocated += rowNew;
                         }
@@ -288,6 +304,12 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
                             var reason = string.IsNullOrWhiteSpace(request.DeficitReason) ? "" : $" — {request.DeficitReason.Trim()}";
                             c.Remarks += $" [DEFICIT ₹{deficit:0.##} authorised by user {_context.UserContext.UserId}{reason}]";
                         }
+                    }
+
+                    if (lockedCommissions.Count > 0)
+                    {
+                        foreach (var c in lockedCommissions)
+                            c.Remarks = (c.Remarks ?? "") + $" [Referrer discount changed to ₹{invoice.ReferrerDiscount:0.##} after this commission was already paid — left unchanged; submit an approval request to adjust it.]";
                     }
                 }
             }

@@ -261,7 +261,16 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
 
             var invoiceQuery = _context.Invoices.AsNoTracking().Where(i => i.HospitalId == hospitalId);
             var expenseQuery = _context.Expenses.AsNoTracking().Where(e => e.HospitalId == hospitalId);
-            var commissionQuery = _context.ReferralCommissions.AsNoTracking().Where(c => c.HospitalId == hospitalId);
+            // DeletedAt/Status filter matches the convention used everywhere else this
+            // table is read (commissionByServiceId/commissionByAppointmentId below,
+            // GetReferralCommissionsQuery, InvoiceEnrichmentService, GetDoctorPortalQuery).
+            // Without it, a commission line soft-deleted by RecordReferralCommissionsCommand
+            // (a payout line removed/replaced, e.g. a corrected modality) keeps its nonzero
+            // CommissionAmount and DeletedAt-only tombstone — that stale amount then
+            // permanently double-counts into the Physician ROI Ledger below even though
+            // it's already gone from the Referral Hub and every other commission view.
+            var commissionQuery = _context.ReferralCommissions.AsNoTracking()
+                .Where(c => c.HospitalId == hospitalId && c.DeletedAt == null && c.Status != "Cancelled");
 
             // Canonical date basis (agreed 2026-06-14, revised — commissions
             // moved off TransactionDate): invoices AND commissions are bucketed
@@ -322,7 +331,17 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                                 x.i.Status,
                                 Modality = a != null ? a.Modality : "GENERAL",
                                 Service = a != null ? a.Service : "OTHER",
-                                HasReferrer = a != null && !string.IsNullOrEmpty(a.ReferredBy),
+                                // "Self" is the app-wide sentinel for a walk-in/self-referred
+                                // visit (see UpdateAppointmentCommand/UpdateAppointmentStatusCommand/
+                                // ReferrerReassign's isSelf checks) — it is stored in ReferredBy
+                                // like any other name, but pays no commission and is not a
+                                // referral partner. Without excluding it here, every walk-in
+                                // visit was counted as "referred" business: inflating
+                                // ReferralContributionCalculator's ratio/revenue, creating a
+                                // phantom "SELF" row in PhysicianRoiCalculator's ledger, and
+                                // attributing centre discounts to "SELF" in LeakageAuditCalculator.
+                                HasReferrer = a != null && !string.IsNullOrEmpty(a.ReferredBy)
+                                              && a.ReferredBy.Trim().ToUpper() != "SELF",
                                 ReferredBy = a != null ? a.ReferredBy : null
                             })
                 .ToListAsync(cancellationToken);
