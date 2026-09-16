@@ -402,6 +402,13 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             if (dateChanged)
             {
                 invoice.CreatedAt = request.DateTime;
+                // ServiceDate drives GetFinancialMatrixQuery's date filter (the
+                // Service Performance tab and friends) — it used to only be set
+                // once at invoice creation and never refreshed on a reschedule,
+                // so a moved visit's invoice silently stayed under its OLD date
+                // in the matrix while every client-side view (which reads the
+                // live appointment date) showed it under the new one.
+                invoice.ServiceDate = request.DateTime;
             }
 
             // Reconcile the lines and learn how much "free" concession left with

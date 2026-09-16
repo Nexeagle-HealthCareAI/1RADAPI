@@ -370,6 +370,23 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 .Select(s => new { s.Id, s.Modality, s.ServiceName, s.ReferralCutValue })
                 .ToDictionaryAsync(s => s.Id, cancellationToken);
 
+            // Actual earned commission per service — NOT AppointmentService.ReferralCutValue,
+            // which is just the configured/nominal rate and stays populated even on a
+            // self-referred visit with no referrer to pay. That mismatch was silently
+            // inflating the "cut" subtracted in ModalityProfitabilityCalculator for every
+            // walk-in/self-referred service, understating net yield well below the real
+            // figure (Revenue's Clinic Income, which already sums actual commission rows).
+            // "Cancelled" commissions (a voided clawback/reversal) don't count as a real cost.
+            var commissionByServiceId = await _context.ReferralCommissions.AsNoTracking()
+                .Where(c => c.HospitalId == hospitalId
+                         && c.AppointmentServiceId.HasValue
+                         && lineServiceIds.Contains(c.AppointmentServiceId.Value)
+                         && c.DeletedAt == null
+                         && c.Status != "Cancelled")
+                .GroupBy(c => c.AppointmentServiceId!.Value)
+                .Select(g => new { ServiceId = g.Key, Amount = g.Sum(c => c.CommissionAmount) })
+                .ToDictionaryAsync(x => x.ServiceId, x => x.Amount, cancellationToken);
+
             var invoiceById = activeInvoicesRaw.ToDictionary(i => i.Id);
 
             var serviceLines = invoiceItemsRaw.Select(it =>
@@ -383,7 +400,7 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 {
                     modality = string.IsNullOrWhiteSpace(svc.Modality) ? "GENERAL" : svc.Modality;
                     serviceName = string.IsNullOrWhiteSpace(svc.ServiceName) ? (string.IsNullOrWhiteSpace(it.Description) ? "OTHER" : it.Description) : svc.ServiceName;
-                    referralCut = svc.ReferralCutValue;
+                    referralCut = commissionByServiceId.GetValueOrDefault(it.AppointmentServiceId.Value, 0m);
                 }
                 else
                 {

@@ -372,6 +372,14 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
                 .IsUnique()
                 .HasFilter("[AppointmentId] IS NOT NULL AND [DeletedAt] IS NULL");
 
+            // Backfills coverage for the two hot WHERE-clause columns
+            // GetInvoicesQuery/GetFinancialMatrixQuery actually filter/sort
+            // on (CreatedAt DESC, Status) — see schema/91_finance_referral_indexes.sql.
+            entity.HasIndex(e => new { e.HospitalId, e.CreatedAt })
+                .HasDatabaseName("IX_Invoices_Hospital_CreatedAt");
+            entity.HasIndex(e => new { e.HospitalId, e.Status })
+                .HasDatabaseName("IX_Invoices_Hospital_Status");
+
             entity.HasOne(e => e.Patient)
                 .WithMany()
                 .HasForeignKey(e => e.PatientId)
@@ -452,6 +460,11 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.HasOne(e => e.Hospital)
                 .WithMany()
                 .HasForeignKey(e => e.HospitalId);
+
+            // GetFinancialMatrixQuery range-filters payments by CreatedAt per
+            // hospital — see schema/91_finance_referral_indexes.sql.
+            entity.HasIndex(e => new { e.HospitalId, e.CreatedAt })
+                .HasDatabaseName("IX_Payments_Hospital_CreatedAt");
         });
 
         // CreditTransaction Configuration — patient credit-wallet ledger. PatientId
@@ -839,6 +852,16 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
                 // → child paths. We soft-delete service rows via
                 // DeletedAt, so the difference never matters in practice.
                 .OnDelete(DeleteBehavior.NoAction);
+
+            // AppointmentId is a plain Guid? (no FK nav — legacy single-
+            // commission-per-appointment rows resolve this way), so EF
+            // never auto-creates an index for it. It's filtered by
+            // equality directly in UpdateAppointmentCommand,
+            // CollectPaymentCommand, UpdateAppointmentStatusCommand,
+            // ChangeReferrerCommand and InvoiceEnrichmentService — see
+            // schema/91_finance_referral_indexes.sql.
+            entity.HasIndex(e => e.AppointmentId)
+                .HasDatabaseName("IX_ReferralCommissions_AppointmentId");
         });
 
         // SubscriptionPlan Configuration

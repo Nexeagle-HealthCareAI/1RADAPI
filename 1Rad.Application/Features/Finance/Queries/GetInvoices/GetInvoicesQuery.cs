@@ -192,12 +192,12 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, PagedIn
                         Quantity = it.Quantity,
                         AppointmentServiceId = it.AppointmentServiceId,
                         IsFree = it.IsFree,
-                        Modality = it.AppointmentServiceId.HasValue
-                            ? _context.AppointmentServices
-                                .Where(s => s.Id == it.AppointmentServiceId.Value)
-                                .Select(s => s.Modality)
-                                .FirstOrDefault()
-                            : (i.Appointment != null ? i.Appointment.Modality : null)
+                        // Service-linked items: left null here (matches what
+                        // the old per-item correlated subquery would return
+                        // on a miss) and batch-resolved below instead — one
+                        // round trip for the whole page instead of one per
+                        // item. Non-linked items keep the appointment fallback.
+                        Modality = !it.AppointmentServiceId.HasValue && i.Appointment != null ? i.Appointment.Modality : null
                     }).ToList(),
                     ExtraCharges = i.ExtraCharges.Select(ec => new InvoiceExtraChargeDto
                     {
@@ -209,6 +209,28 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, PagedIn
                 })
                 .Take(takeCount)
                 .ToListAsync(cancellationToken);
+
+            // Batch-resolve Modality for service-linked items (was a
+            // correlated subquery per item — one extra round trip here
+            // instead of one per row).
+            var linkedServiceIds = result
+                .SelectMany(r => r.Items)
+                .Where(it => it.AppointmentServiceId.HasValue)
+                .Select(it => it.AppointmentServiceId!.Value)
+                .Distinct()
+                .ToList();
+            if (linkedServiceIds.Count > 0)
+            {
+                var modalityById = await _context.AppointmentServices
+                    .Where(s => linkedServiceIds.Contains(s.Id))
+                    .Select(s => new { s.Id, s.Modality })
+                    .ToDictionaryAsync(s => s.Id, s => s.Modality, cancellationToken);
+                foreach (var item in result.SelectMany(r => r.Items).Where(it => it.AppointmentServiceId.HasValue))
+                {
+                    if (modalityById.TryGetValue(item.AppointmentServiceId!.Value, out var modality))
+                        item.Modality = modality;
+                }
+            }
 
             // Delegate enrichment to domain service (SRP)
             await _enrichmentService.EnrichInvoicesAsync(result, cancellationToken);

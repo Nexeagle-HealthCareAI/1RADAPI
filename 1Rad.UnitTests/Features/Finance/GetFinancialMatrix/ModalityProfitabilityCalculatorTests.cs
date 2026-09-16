@@ -17,12 +17,12 @@ public class FixedModalityExpenseAllocator : IModalityExpenseAllocator
 
 public class ModalityProfitabilityCalculatorTests
 {
-    private static ServiceLineRow Line(string modality, string service, decimal gross, decimal paid, decimal referralCut = 0) => new()
+    private static ServiceLineRow Line(string modality, string service, decimal gross, decimal paid, decimal referralCut = 0, decimal? total = null) => new()
     {
         Modality = modality,
         ServiceName = service,
         Gross = gross,
-        Total = gross,
+        Total = total ?? gross,
         Paid = paid,
         ReferralCut = referralCut,
     };
@@ -41,6 +41,26 @@ public class ModalityProfitabilityCalculatorTests
         mri.GrossRevenue.Should().Be(10000);
         mri.ReferralCut.Should().Be(1500);
         mri.NetRevenue.Should().Be(8500);
+    }
+
+    [Fact]
+    public void Calculate_NetRevenue_UsesPostDiscountTotal_NotPreDiscountGross()
+    {
+        // A ₹10,000 list-price scan billed at ₹8,000 after a discount, with a
+        // ₹500 referral cut. Net must be the post-discount 8,000 - 500 = 7,500 —
+        // not the pre-discount 10,000 - 500 = 9,500 the old gross-based formula
+        // gave, which silently ignored every discount on the invoice.
+        var allocator = new FixedModalityExpenseAllocator(new ModalityExpenseAllocation());
+        var calculator = new ModalityProfitabilityCalculator(allocator);
+
+        var lines = new List<ServiceLineRow> { Line("MRI", "Brain MRI", gross: 10000, paid: 8000, referralCut: 500, total: 8000) };
+
+        var result = calculator.Calculate(lines, new List<ExpenseMatrixRow>());
+
+        var mri = result.Should().ContainSingle().Subject;
+        mri.GrossRevenue.Should().Be(10000);
+        mri.NetRevenue.Should().Be(7500);
+        mri.CollectionEfficiency.Should().Be(100); // fully paid relative to what was actually billed
     }
 
     [Fact]
