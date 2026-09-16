@@ -353,7 +353,39 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
                 }
             }
 
-            await _context.SaveChangesAsync(cancellationToken);
+            // Retry-and-refresh on concurrency conflicts, mirroring
+            // UpdateAppointmentCommand's handling of the same failure mode. The
+            // only RowVersion-tracked entity this handler ever writes is
+            // AppointmentService (the free→paid rollback above) — everything
+            // else it touches (Invoice, InvoiceItem, Payment, CreditTransaction,
+            // ReferralCommission) carries no OCC token. So a conflict here can
+            // only mean a concurrent appointment edit (e.g. adding/removing a
+            // test) bumped an AppointmentService row's RowVersion after this
+            // handler read it — a spurious clash, not a real lost update, since
+            // that edit changes service composition while this handler only
+            // flips IsFree/UpdatedAt. Refresh the stale token and re-apply
+            // rather than bubbling a 409 the biller can't act on. Bounded to
+            // avoid a loop.
+            const int maxConcurrencyAttempts = 3;
+            for (var attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    await _context.SaveChangesAsync(cancellationToken);
+                    break;
+                }
+                catch (DbUpdateConcurrencyException ex) when (attempt < maxConcurrencyAttempts)
+                {
+                    foreach (var entry in ex.Entries)
+                    {
+                        var dbValues = await entry.GetDatabaseValuesAsync(cancellationToken);
+                        if (dbValues == null)
+                            entry.State = EntityState.Detached;          // row was deleted — drop just this change
+                        else
+                            entry.OriginalValues.SetValues(dbValues);     // refresh token; our change still wins
+                    }
+                }
+            }
             return true;
         }
         catch (Exception)
