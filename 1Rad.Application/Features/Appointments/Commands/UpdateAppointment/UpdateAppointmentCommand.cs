@@ -670,6 +670,31 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         }
 
         var existingById = existing.ToDictionary(e => e.Id);
+
+        // Same guard CreateAppointmentCommand/AddBookingServiceCommand/
+        // UpsertServiceChargeCommand already enforce at booking time — an
+        // edit was the one path that let a service's referral cut end up
+        // negative or bigger than its own price, with nothing downstream
+        // (invoice totals, commission reconciliation, Service Performance's
+        // net yield) expecting that to be possible. Only checked for a NEW
+        // line or one whose price/cut actually changed — an untouched
+        // existing line that happened to predate this validation must not
+        // turn into a permanently un-editable appointment.
+        foreach (var badLine in incoming)
+        {
+            var existingMatch = badLine.Id is { } existingId ? existingById.GetValueOrDefault(existingId) : null;
+            var isUnchanged = existingMatch != null
+                && existingMatch.Amount == badLine.Amount
+                && existingMatch.ReferralCutValue == badLine.ReferralCutValue;
+            if (isUnchanged) continue;
+
+            if (badLine.ReferralCutValue < 0 || badLine.ReferralCutValue > badLine.Amount)
+            {
+                throw new ArgumentException(
+                    $"The referral cut for '{badLine.ServiceName}' (₹{badLine.ReferralCutValue:0.##}) cannot be negative or exceed its price (₹{badLine.Amount:0.##}).");
+            }
+        }
+
         var kept = new HashSet<Guid>();
         var live = new List<AppointmentService>(incoming.Count);
 
