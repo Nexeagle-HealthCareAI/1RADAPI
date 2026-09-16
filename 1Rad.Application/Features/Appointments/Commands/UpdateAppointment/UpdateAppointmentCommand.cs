@@ -791,13 +791,32 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         UpdateAppointmentCommand request,
         CancellationToken cancellationToken)
     {
-        await Task.CompletedTask;
-
         var itemsByServiceId = invoice.Items
             .Where(i => i.AppointmentServiceId.HasValue)
             .ToDictionary(i => i.AppointmentServiceId!.Value);
 
-        var orphanLegacyItem = invoice.Items.FirstOrDefault(i => i.AppointmentServiceId == null);
+        // Only treat an item as a genuine legacy/freeform orphan if it was ALREADY
+        // unlinked before this request touched anything. By this point
+        // ReconcileServicesAsync (called first) may already have marked a removed
+        // service's AppointmentService row Deleted — EF's own client-side fixup
+        // then silently nulls AppointmentServiceId on any tracked InvoiceItem that
+        // pointed at it, in memory, well before SaveChanges runs. Reading
+        // invoice.Items directly here can't tell "always had no service link"
+        // apart from "just lost its link because its service is being removed in
+        // THIS SAME edit" — an AsNoTracking query is untouched by that in-memory
+        // fixup and reflects only what's actually persisted, so it's unaffected by
+        // ReconcileServicesAsync's not-yet-saved change.
+        var trueOrphanId = liveServices.Count == 1
+            ? await _context.Invoices.AsNoTracking()
+                .Where(i => i.Id == invoice.Id)
+                .SelectMany(i => i.Items)
+                .Where(i => i.AppointmentServiceId == null)
+                .Select(i => (Guid?)i.Id)
+                .FirstOrDefaultAsync(cancellationToken)
+            : null;
+        var orphanLegacyItem = trueOrphanId.HasValue
+            ? invoice.Items.FirstOrDefault(i => i.Id == trueOrphanId.Value)
+            : null;
 
         var keep = new HashSet<Guid>();
         foreach (var svc in liveServices)
@@ -834,6 +853,16 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
                 AppointmentServiceId  = svc.Id
             };
             invoice.Items.Add(newItem);
+            // invoice.Items.Add() alone doesn't reliably register a brand-new
+            // InvoiceItem as Added — its Id is already a non-default Guid
+            // (set at construction, not by EF), so relationship fixup can track
+            // it as Modified instead of Added. SaveChanges then issues an UPDATE
+            // against a row that was never inserted, matching zero rows — which
+            // throws a concurrency exception that this handler's own retry loop
+            // (below, in Handle()) treats as "someone else deleted this row" and
+            // silently DETACHES, dropping the new line item with no error at
+            // all. Explicit state avoids relying on fixup guessing right.
+            _context.Entry(newItem).State = Microsoft.EntityFrameworkCore.EntityState.Added;
             keep.Add(newItem.Id);
         }
 
@@ -1042,7 +1071,20 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             .GroupBy(c => c.AppointmentServiceId!.Value)
             .ToDictionary(g => g.Key, g => g.OrderBy(c => c.DeletedAt.HasValue).First());
 
-        var orphan = commissions.FirstOrDefault(c => c.AppointmentServiceId == null && c.DeletedAt == null);
+        // An "orphan" (no AppointmentServiceId) is typically the single aggregate
+        // commission GenerateInvoiceCommand books for a manually-invoiced visit
+        // (auto-billing off) — there's no per-service split to begin with. Only
+        // auto-adopt it into a service below when there's exactly ONE live
+        // service, i.e. the target is unambiguous. With two or more live
+        // services there's no principled way to know which one (or what split)
+        // the aggregate amount actually belongs to — whichever line happened to
+        // be first in the request's Services array would silently claim the
+        // whole thing, and every sibling service on the same visit would show
+        // no commission at all. Leaving the orphan untouched here is honest
+        // about the ambiguity instead of guessing.
+        var orphan = liveServices.Count == 1
+            ? commissions.FirstOrDefault(c => c.AppointmentServiceId == null && c.DeletedAt == null)
+            : null;
         var keep   = new HashSet<Guid>();
         var touchedReferrers = new HashSet<Guid> { referrer.ReferrerId };
         var now = DateTime.UtcNow;

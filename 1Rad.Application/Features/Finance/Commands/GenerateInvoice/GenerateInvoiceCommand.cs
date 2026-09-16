@@ -193,6 +193,10 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
 
             _context.Invoices.Add(invoice);
 
+            // Set below only when a NEW commission row is actually added, so the
+            // post-save AccumulatedTotal recompute runs only when needed.
+            Guid? newCommissionReferrerId = null;
+
             // Record a Referral Commission whenever a referrer is chosen — even at
             // ₹0 — so the referral is tracked against them and the invoice's referrer
             // (Revenue Hub) matches the Referral Hub. Self / walk-in is skipped below
@@ -234,10 +238,6 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
                     }
                     else
                     {
-                        var currentTotal = await _context.ReferralCommissions
-                            .Where(c => c.ReferrerId == request.ReferrerId.Value && c.HospitalId == hospitalId)
-                            .SumAsync(c => (decimal?)c.CommissionAmount, cancellationToken) ?? 0;
-
                         var netCommission = (request.CommissionAmount ?? 0) - request.ReferrerDiscount;
                         if (netCommission < 0) netCommission = 0;
 
@@ -248,7 +248,10 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
                             Modality = invoice.Items.FirstOrDefault()?.Description ?? "GENERAL",
                             PatientName = patient.FullName ?? "N/A",
                             CommissionAmount = netCommission,
-                            AccumulatedTotal = currentTotal + netCommission,
+                            // Filled in below via ReferralLedger (the old inline sum
+                            // here counted soft-deleted commissions too, inflating
+                            // this figure whenever the referrer had deleted history).
+                            AccumulatedTotal = 0,
                             TransactionDate = DateTime.UtcNow,
                             // The visit's actual date, when this invoice is tied to one —
                             // left unset (defaults) for a freeform/manual invoice, matching
@@ -266,11 +269,20 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
                             HospitalId = hospitalId
                         };
                         _context.ReferralCommissions.Add(commission);
+                        newCommissionReferrerId = request.ReferrerId.Value;
                     }
                 }
             }
 
             await _context.SaveChangesAsync(cancellationToken);
+
+            // ReferralLedger's own query hits the DB, so it has to run after the
+            // new commission row above is actually persisted.
+            if (newCommissionReferrerId.HasValue)
+            {
+                await ReferralLedger.RecomputeAccumulatedTotal(_context, newCommissionReferrerId.Value, hospitalId, cancellationToken);
+                await _context.SaveChangesAsync(cancellationToken);
+            }
 
             return invoice.Id;
         }

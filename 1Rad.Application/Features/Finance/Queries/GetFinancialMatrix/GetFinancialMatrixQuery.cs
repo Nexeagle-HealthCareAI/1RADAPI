@@ -296,6 +296,7 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                             (x, a) => new
                             {
                                 x.i.Id,
+                                x.i.AppointmentId,
                                 x.i.InvoiceId,
                                 x.i.PatientId,
                                 x.i.PatientName,
@@ -387,6 +388,28 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 .Select(g => new { ServiceId = g.Key, Amount = g.Sum(c => c.CommissionAmount) })
                 .ToDictionaryAsync(x => x.ServiceId, x => x.Amount, cancellationToken);
 
+            // Fallback for commissions with no AppointmentServiceId — GenerateInvoiceCommand
+            // (manual invoicing / auto-billing-off hospitals) books ONE aggregate commission
+            // for the whole invoice rather than one per service line, unlike arrival billing.
+            // Without this, every manually-invoiced referred visit's services would show
+            // zero commission here despite a real one being owed and paid, overstating net
+            // yield for exactly those invoices. Allocated per line the same way Paid/Total
+            // already are — proportional to each line's share of the invoice's GrossAmount.
+            var activeAppointmentIds = activeInvoicesRaw
+                .Where(i => i.AppointmentId.HasValue)
+                .Select(i => i.AppointmentId!.Value)
+                .ToHashSet();
+            var commissionByAppointmentId = await _context.ReferralCommissions.AsNoTracking()
+                .Where(c => c.HospitalId == hospitalId
+                         && c.AppointmentServiceId == null
+                         && c.AppointmentId.HasValue
+                         && activeAppointmentIds.Contains(c.AppointmentId.Value)
+                         && c.DeletedAt == null
+                         && c.Status != "Cancelled")
+                .GroupBy(c => c.AppointmentId!.Value)
+                .Select(g => new { AppointmentId = g.Key, Amount = g.Sum(c => c.CommissionAmount) })
+                .ToDictionaryAsync(x => x.AppointmentId, x => x.Amount, cancellationToken);
+
             var invoiceById = activeInvoicesRaw.ToDictionary(i => i.Id);
 
             var serviceLines = invoiceItemsRaw.Select(it =>
@@ -394,13 +417,14 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 var inv = invoiceById[it.InvoiceId];
                 string modality;
                 string serviceName;
+                bool hasDirectServiceCut;
                 decimal referralCut;
 
                 if (it.AppointmentServiceId.HasValue && svcLookup.TryGetValue(it.AppointmentServiceId.Value, out var svc))
                 {
                     modality = string.IsNullOrWhiteSpace(svc.Modality) ? "GENERAL" : svc.Modality;
                     serviceName = string.IsNullOrWhiteSpace(svc.ServiceName) ? (string.IsNullOrWhiteSpace(it.Description) ? "OTHER" : it.Description) : svc.ServiceName;
-                    referralCut = commissionByServiceId.GetValueOrDefault(it.AppointmentServiceId.Value, 0m);
+                    hasDirectServiceCut = commissionByServiceId.TryGetValue(it.AppointmentServiceId.Value, out referralCut);
                 }
                 else
                 {
@@ -409,11 +433,22 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                     // denormalised modality, same as the old behaviour for this case.
                     modality = string.IsNullOrWhiteSpace(inv.Modality) ? "GENERAL" : inv.Modality;
                     serviceName = string.IsNullOrWhiteSpace(it.Description) ? (string.IsNullOrWhiteSpace(inv.Service) ? "OTHER" : inv.Service) : it.Description;
-                    referralCut = 0m; // no per-line cut to attribute without the service link
+                    hasDirectServiceCut = false;
+                    referralCut = 0m;
                 }
 
                 var lineGross = it.Amount * it.Quantity;
                 var share = inv.GrossAmount > 0 ? lineGross / inv.GrossAmount : 0m;
+
+                // No per-service commission row (either no link, or this specific
+                // service has none) — check for an invoice-level aggregate
+                // commission (GenerateInvoiceCommand's manual-invoicing path) and
+                // allocate it proportionally, same as Paid/Total below.
+                if (!hasDirectServiceCut && inv.AppointmentId.HasValue
+                    && commissionByAppointmentId.TryGetValue(inv.AppointmentId.Value, out var invoiceCommission))
+                {
+                    referralCut = invoiceCommission * share;
+                }
 
                 return new ServiceLineRow
                 {
