@@ -59,6 +59,15 @@ public class InvoiceDto
     public decimal BalanceAmount { get; set; }
     public string Status { get; set; } = string.Empty;
     public DateTime CreatedAt { get; set; }
+    // The canonical "which day does this invoice belong to" field — every
+    // date-filtered backend report (GetFinancialMatrixQuery/Service
+    // Performance, ExportFinancialsQuery, etc.) buckets by this, kept in sync
+    // with the appointment's date on creation/reschedule. Previously absent
+    // from this DTO entirely, which forced the frontend to improvise its own
+    // date (from the linked appointment's live date, or CreatedAt as a
+    // fallback) for the Revenue tab's own date-range filtering — a second,
+    // independent mechanism that could silently drift from ServiceDate.
+    public DateTime ServiceDate { get; set; }
     public string? ReferrerName { get; set; }
     public Guid? ReferrerId { get; set; }
     public string? Modality { get; set; }
@@ -178,6 +187,7 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, PagedIn
                     BalanceAmount = i.TotalAmount - i.PaidAmount,
                     Status = i.Status,
                     CreatedAt = i.CreatedAt,
+                    ServiceDate = i.ServiceDate,
                     ReferrerName = (i.Appointment != null ? i.Appointment.ReferredBy : (i.Patient.Referrer != null ? i.Patient.Referrer.Name : null)),
                     ReferrerId = i.Patient.ReferrerId,
                     Modality = i.Appointment != null ? i.Appointment.Modality : null,
