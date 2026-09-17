@@ -409,6 +409,20 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
                 // in the matrix while every client-side view (which reads the
                 // live appointment date) showed it under the new one.
                 invoice.ServiceDate = request.DateTime;
+
+                // ReferralCommission.ServiceDate drives its own date filters
+                // (GetFinancialMatrixQuery's commissionQuery, and the Referral
+                // Hub's client-side "today/past/custom" bucketing via
+                // cut.serviceDate) independently of the invoice above — moving
+                // the invoice's date without also moving its commission rows
+                // left a rescheduled visit's incentive counted under the NEW
+                // date on Revenue (invoice-driven) but still under the OLD date
+                // on the Referral Hub (commission-driven), the same visit
+                // silently disagreeing with itself across the two tabs.
+                var rescheduledCommissions = await _context.ReferralCommissions
+                    .Where(c => c.AppointmentId == request.AppointmentId && c.DeletedAt == null)
+                    .ToListAsync(cancellationToken);
+                foreach (var rc in rescheduledCommissions) rc.ServiceDate = request.DateTime;
             }
 
             // Reconcile the lines and learn how much "free" concession left with
