@@ -1,3 +1,4 @@
+using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
@@ -110,11 +111,19 @@ public class GetReferralCommissionsQueryHandler : IRequestHandler<GetReferralCom
             commissionsQuery = commissionsQuery.Where(c => allMatchingIds.Contains(c.ReferrerId));
         }
 
+        // ServiceDate (when the visit happened), not TransactionDate (when this
+        // row was recorded) — matches the basis every other date-filtered report
+        // uses (GetFinancialMatrixQuery, exports). A commission booked days after
+        // its visit (late billing, backdated entry) used to land in a different
+        // day/range bucket here than on Revenue/Service Performance for the exact
+        // same visit. StartDate/EndDate arrive as a bare "YYYY-MM-DD" — see
+        // IstDateRange's doc comment for why a raw comparison silently shifts
+        // every day boundary by 5.5 hours.
         if (request.StartDate.HasValue)
-            commissionsQuery = commissionsQuery.Where(c => c.TransactionDate >= request.StartDate.Value);
+            commissionsQuery = commissionsQuery.Where(c => c.ServiceDate >= IstDateRange.ToUtcStart(request.StartDate.Value));
 
         if (request.EndDate.HasValue)
-            commissionsQuery = commissionsQuery.Where(c => c.TransactionDate <= request.EndDate.Value);
+            commissionsQuery = commissionsQuery.Where(c => c.ServiceDate <= IstDateRange.ToUtcEndInclusive(request.EndDate.Value));
 
         // 3. Project with Tactical Joins to resolve missing columns (PatientName/ReferrerName)
         //    plus the linked invoice's collection state so the Referral Hub can show the

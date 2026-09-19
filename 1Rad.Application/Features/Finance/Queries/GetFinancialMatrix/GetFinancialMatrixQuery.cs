@@ -19,6 +19,7 @@ public class FinancialMatrixDto
     public List<MatrixItemDto> Monthly { get; set; } = new();
     public List<MatrixItemDto> Yearly { get; set; } = new();
     public List<ModalityRevenueDto> ModalityBreakdown { get; set; } = new();
+    public RevenueSummaryDto RevenueSummary { get; set; } = new();
     public ClinicPerformanceDto Performance { get; set; } = new();
     public List<ModalityProfitabilityDto> ModalityProfitability { get; set; } = new();
     public ReferralContributionDto ReferralContribution { get; set; } = new();
@@ -50,6 +51,25 @@ public class ModalityRevenueDto
     public string Modality { get; set; } = string.Empty;
     public decimal RangeRevenue { get; set; }
     public int ContributionPercentage { get; set; }
+}
+
+// The single backend-computed source for the Revenue tab's headline KPI
+// strip (GROSS, PATIENT BILL, PENDING AMOUNT, TOTAL COLLECTED, CLINIC
+// INCOME, DISCOUNTS GIVEN, INCENTIVE ACCRUED) — added so Revenue reads the
+// exact same live-DB aggregate Service Performance already does for the
+// same date range, instead of re-deriving totals from whatever invoices
+// happen to be in the client's local offline cache (which is capped to a
+// rolling recent window and can legitimately be missing older records for
+// a wider date range, silently under-counting versus this query).
+public class RevenueSummaryDto
+{
+    public decimal GrossListPrice { get; set; }
+    public decimal PatientBill { get; set; }
+    public decimal PendingAmount { get; set; }
+    public decimal TotalCollected { get; set; }
+    public decimal ClinicIncome { get; set; }
+    public decimal DiscountsGiven { get; set; }
+    public decimal IncentiveAccrued { get; set; }
 }
 
 public class ClinicPerformanceDto
@@ -559,6 +579,26 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
             var referenceDate = DateTime.UtcNow;
 
             var temporal = _temporalCalculator.Calculate(activeInvoices, expenseRows);
+            var performance = _clinicPerformanceCalculator.Calculate(activeInvoices, expenseRows);
+
+            // Same accrual-basis incentive figure Revenue's old client-computed
+            // INCENTIVE ACCRUED used (every non-cancelled, non-deleted commission
+            // in range, paid or not) — commissionData is filtered identically to
+            // invoiceData by ServiceDate above, and the two now move together on
+            // an appointment reschedule (UpdateAppointmentCommand keeps a
+            // commission's ServiceDate synced with its invoice's), so this and
+            // PatientBill are the same population for the same date range.
+            var incentiveAccrued = commissionData.Sum(c => c.CommissionAmount);
+            var revenueSummary = new RevenueSummaryDto
+            {
+                GrossListPrice = performance.GrossRevenue,
+                PatientBill = totalLifeTimeInvoiced,
+                PendingAmount = performance.OutstandingAR,
+                TotalCollected = performance.CashCollected,
+                DiscountsGiven = performance.ConcessionLeakage,
+                IncentiveAccrued = incentiveAccrued,
+                ClinicIncome = Math.Max(0, totalLifeTimeInvoiced - incentiveAccrued)
+            };
 
             return new FinancialMatrixDto
             {
@@ -567,7 +607,8 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 Monthly = temporal.Monthly,
                 Yearly = temporal.Yearly,
                 ModalityBreakdown = _modalityRevenueCalculator.Calculate(serviceLines, totalLifeTimeInvoiced),
-                Performance = _clinicPerformanceCalculator.Calculate(activeInvoices, expenseRows),
+                RevenueSummary = revenueSummary,
+                Performance = performance,
                 ModalityProfitability = _profitabilityCalculator.Calculate(serviceLines, expenseRows),
                 ReferralContribution = _referralContributionCalculator.Calculate(activeInvoices),
                 AgingDues = _agingCalculator.Calculate(activeInvoices, referenceDate),
