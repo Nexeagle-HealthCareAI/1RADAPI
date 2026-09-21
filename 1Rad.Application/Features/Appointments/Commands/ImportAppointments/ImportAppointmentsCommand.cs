@@ -99,7 +99,8 @@ public class ImportAppointmentsCommandHandler : IRequestHandler<ImportAppointmen
                             {
                                 Name = referrerName,
                                 Contact = referrerContact ?? "N/A",
-                                Address = referrerAddress ?? "N/A"
+                                Address = referrerAddress ?? "N/A",
+                                HospitalId = _context.UserContext.HospitalId
                             };
                             _context.Referrers.Add(referrer);
                         }
@@ -123,6 +124,7 @@ public class ImportAppointmentsCommandHandler : IRequestHandler<ImportAppointmen
                         Type = "In-Patient",
                         Doctor = "Imported Source",
                         ReferredBy = referrerName ?? "Self",
+                        ReferrerId = referrerId,
                         ReferredContact = referrerContact ?? string.Empty,
                         HospitalId = _context.UserContext.HospitalId
                     };

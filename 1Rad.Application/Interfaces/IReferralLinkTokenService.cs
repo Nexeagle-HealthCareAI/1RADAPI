@@ -14,8 +14,23 @@ namespace _1Rad.Application.Interfaces;
 // versions existed carry version 0.
 public interface IReferralLinkTokenService
 {
+    /// <summary>How long a newly issued link works (ReferralLinks:TtlDays, default 90).</summary>
+    TimeSpan Ttl { get; }
+
     string Issue(Guid referrerId, int version = 0, TimeSpan? ttl = null);
 
     /// <summary>Valid signature, right partner, not expired, and issued under the partner's CURRENT version.</summary>
     bool Validate(string token, Guid expectedReferrerId, int currentVersion);
+
+    /// <summary>
+    /// Reads a token's claims after verifying ONLY its signature - expiry and version are
+    /// NOT checked. Lets the server recognise an expired link (to offer renewal) or read
+    /// the expiry of a link it just minted. Returns false for anything not signed by us.
+    /// </summary>
+    bool TryReadClaims(string token, out ReferralLinkClaims claims);
+}
+
+public readonly record struct ReferralLinkClaims(Guid ReferrerId, DateTime ExpiresAtUtc, int Version)
+{
+    public bool IsExpired(DateTime nowUtc) => nowUtc >= ExpiresAtUtc;
 }

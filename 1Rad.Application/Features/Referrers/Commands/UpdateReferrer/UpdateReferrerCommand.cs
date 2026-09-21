@@ -3,6 +3,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Exceptions;
 using MediatR;
@@ -56,7 +57,28 @@ public class UpdateReferrerCommandHandler : IRequestHandler<UpdateReferrerComman
 
         if (referrer == null) return false;
 
-        referrer.Name = request.Name;
+        // Stored form is trimmed + UPPERCASE, the same as booking and Create (#15).
+        var newName = NameNormalizer.Upper(request.Name);
+        if (newName.Length == 0)
+            throw new ValidationException("Name", "Referrer name is required.");
+
+        var oldName = referrer.Name ?? string.Empty;
+        var renamed = !string.Equals(oldName.Trim(), newName, StringComparison.Ordinal);
+        if (renamed)
+        {
+            // Two live partners may not share a name (unique index). Say so plainly instead of
+            // letting the database throw a 500 - the way to combine two records is Merge.
+            var lower = newName.ToLower();
+            var taken = await _context.Referrers.AnyAsync(r =>
+                r.ReferrerId != request.ReferrerId && r.HospitalId == referrer.HospitalId
+                && r.DeletedAt == null && r.Name.ToLower() == lower, cancellationToken);
+            if (taken)
+                throw new ConflictException($"Another partner is already named \"{newName}\". To combine the two records, merge them instead of renaming.");
+
+            await PropagateRenameAsync(referrer, oldName, newName, cancellationToken);
+        }
+
+        referrer.Name = newName;
         referrer.Contact = digits;
         referrer.Address = request.Address;
         referrer.Email     = string.IsNullOrWhiteSpace(request.Email)     ? null : request.Email.Trim();
@@ -67,5 +89,36 @@ public class UpdateReferrerCommandHandler : IRequestHandler<UpdateReferrerComman
 
         await _context.SaveChangesAsync(cancellationToken);
         return true;
+    }
+
+    /// <summary>
+    /// Carries a rename to the places that hold the partner's name as TEXT. Visits are keyed by
+    /// Appointment.ReferrerId, so history stays with the partner regardless; this keeps the
+    /// name text on the visits and on the commission rows in step so the exports, the ledger
+    /// and the name-keyed finance reports read the new name everywhere. Visits that predate the
+    /// id column (no ReferrerId, but the old name) are re-linked by id at the same time, so a
+    /// rename never orphans them even when the backfill script has not been run.
+    /// </summary>
+    private async Task PropagateRenameAsync(_1Rad.Domain.Entities.Referrer referrer, string oldName, string newName, CancellationToken ct)
+    {
+        var id = referrer.ReferrerId;
+        var hospitalId = referrer.HospitalId;
+        var oldLower = oldName.Trim().ToLower();
+
+        var visits = await _context.Appointments
+            .Where(a => a.HospitalId == hospitalId
+                && (a.ReferrerId == id
+                    || (a.ReferrerId == null && oldLower.Length > 0 && a.ReferredBy != null && a.ReferredBy.ToLower() == oldLower)))
+            .ToListAsync(ct);
+        foreach (var v in visits)
+        {
+            v.ReferrerId = id;
+            if (!string.Equals(v.ReferredBy, newName, StringComparison.Ordinal)) v.ReferredBy = newName;
+        }
+
+        var commissions = await _context.ReferralCommissions
+            .Where(c => c.ReferrerId == id && c.HospitalId == hospitalId && c.ReferrerName != newName)
+            .ToListAsync(ct);
+        foreach (var c in commissions) c.ReferrerName = newName;
     }
 }

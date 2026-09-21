@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
+using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using Microsoft.Extensions.Configuration;
 
@@ -18,9 +19,12 @@ public class ReferralLinkTokenService : IReferralLinkTokenService
     private const int LegacyPayloadSize = 24; // 16 (Guid) + 8 (exp)         — version 0
     private const int PayloadSize = 28;       // 16 (Guid) + 8 (exp) + 4 (version)
     private static readonly byte[] Domain = Encoding.ASCII.GetBytes("REFERRAL_LINK_V1");
-    private static readonly TimeSpan DefaultTtl = TimeSpan.FromDays(365);
 
     private readonly byte[] _key;
+
+    // New links live ReferralLinks:TtlDays (default 90). Links minted earlier keep the
+    // expiry they were signed with - the expiry is inside the token.
+    public TimeSpan Ttl { get; }
 
     public ReferralLinkTokenService(IConfiguration configuration)
     {
@@ -31,11 +35,12 @@ public class ReferralLinkTokenService : IReferralLinkTokenService
                 "Jwt:Secret is not configured. ReferralLinkTokenService cannot sign tokens.");
         }
         _key = Encoding.UTF8.GetBytes(secret);
+        Ttl = ReferralLinkOptions.From(configuration).Ttl;
     }
 
     public string Issue(Guid referrerId, int version = 0, TimeSpan? ttl = null)
     {
-        var expUnix = DateTimeOffset.UtcNow.Add(ttl ?? DefaultTtl).ToUnixTimeSeconds();
+        var expUnix = DateTimeOffset.UtcNow.Add(ttl ?? Ttl).ToUnixTimeSeconds();
         var payload = new byte[PayloadSize];
         referrerId.TryWriteBytes(payload.AsSpan(0, 16));
         BinaryPrimitives.WriteInt64BigEndian(payload.AsSpan(16, 8), expUnix);
@@ -64,6 +69,26 @@ public class ReferralLinkTokenService : IReferralLinkTokenService
 
         var exp = DateTimeOffset.FromUnixTimeSeconds(BinaryPrimitives.ReadInt64BigEndian(payload.AsSpan(16, 8)));
         return DateTimeOffset.UtcNow < exp;
+    }
+
+    public bool TryReadClaims(string token, out ReferralLinkClaims claims)
+    {
+        claims = default;
+        if (string.IsNullOrWhiteSpace(token)) return false;
+        var parts = token.Split('.');
+        if (parts.Length != 2) return false;
+
+        byte[] payload, sig;
+        try { payload = UnB64(parts[0]); sig = UnB64(parts[1]); }
+        catch { return false; }
+
+        if (payload.Length != PayloadSize && payload.Length != LegacyPayloadSize) return false;
+        if (!CryptographicOperations.FixedTimeEquals(Hmac(payload), sig)) return false;
+
+        var exp = DateTimeOffset.FromUnixTimeSeconds(BinaryPrimitives.ReadInt64BigEndian(payload.AsSpan(16, 8))).UtcDateTime;
+        var version = payload.Length == PayloadSize ? BinaryPrimitives.ReadInt32BigEndian(payload.AsSpan(24, 4)) : 0;
+        claims = new ReferralLinkClaims(new Guid(payload.AsSpan(0, 16)), exp, version);
+        return true;
     }
 
     private byte[] Hmac(byte[] data)

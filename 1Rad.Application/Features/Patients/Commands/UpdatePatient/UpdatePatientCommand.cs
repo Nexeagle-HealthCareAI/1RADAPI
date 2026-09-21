@@ -46,7 +46,7 @@ public class UpdatePatientCommandHandler : IRequestHandler<UpdatePatientCommand,
         patient.Block = NameNormalizer.Upper(request.Block);
         patient.District = NameNormalizer.Upper(request.District);
         patient.Address = NameNormalizer.Upper(request.Address);
-        patient.SourceOfInfo = request.SourceOfInfo;
+        patient.SourceOfInfo = PatientSources.Canonicalize(request.SourceOfInfo);
         patient.ReferrerId = request.ReferrerId;
 
         await _context.SaveChangesAsync(cancellationToken);

@@ -70,6 +70,10 @@ public static class DependencyInjection
         services.AddSingleton<ITrackingTokenService, TrackingTokenService>();
         services.AddSingleton<IStudyShareTokenService, StudyShareTokenService>();
         services.AddSingleton<IReferralLinkTokenService, ReferralLinkTokenService>();
+        // Lifetime / renewal policy for doctor-portal links (ReferralLinks:* config).
+        services.AddSingleton(_1Rad.Application.Common.ReferralLinkOptions.From(configuration));
+        // Mints + delivers + records a portal link (manual send, daily renewal, doctor self-service).
+        services.AddScoped<_1Rad.Application.Common.ReferralLinkSender>();
 
         // Session management — the active-session cache is process-local;
         // when we scale to multi-instance, swap the IActiveSessionCache
@@ -122,6 +126,7 @@ public static class DependencyInjection
 
         services.AddHostedService<DailyFinancialReportJob>();
         services.AddHostedService<DailyReferralExcelReportJob>();
+        services.AddHostedService<ReferralLinkRenewalJob>();
         services.AddHostedService<SubscriptionLifecycleJob>();
         services.AddHostedService<BlobOrphanSweepJob>();
 

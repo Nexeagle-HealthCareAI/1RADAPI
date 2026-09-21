@@ -65,12 +65,16 @@ public class RevokeReferralLinksCommandHandler : IRequestHandler<RevokeReferralL
                 row.Version += 1;
                 row.RevokedAt = now;
                 row.RevokedByUserId = userId;
+                // A revoked partner must not be auto-messaged a fresh link behind the
+                // centre's back; renewals resume only when a centre sends a link again.
+                row.AutoRenew = false;
+                row.LastSentExpiresAt = null;
             }
             else
             {
                 _context.ReferrerLinkVersions.Add(new ReferrerLinkVersion
                 {
-                    ReferrerId = id, HospitalId = hospitalId, Version = 1, RevokedAt = now, RevokedByUserId = userId,
+                    ReferrerId = id, HospitalId = hospitalId, Version = 1, RevokedAt = now, RevokedByUserId = userId, AutoRenew = false,
                 });
             }
         }

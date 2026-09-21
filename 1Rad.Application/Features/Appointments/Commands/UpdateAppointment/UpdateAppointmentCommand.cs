@@ -171,6 +171,14 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         appointment.Doctor = request.Doctor;
         appointment.Notes = request.Notes;
         appointment.ReferredBy = NameNormalizer.Upper(effectiveReferredBy);
+        // Point the visit at the partner record (Appointment.ReferrerId). A changed referrer is
+        // looked up afresh; an unchanged one keeps the id it has (or gets one if it predates
+        // the column). Only EXISTING partners are matched here - a brand-new name is created on
+        // first use by the commission reconcile below and stamped there. Self / blank -> null.
+        if (referrerChanged && !referrerLocked)
+            appointment.ReferrerId = await ReferrerLookup.FindIdByNameAsync(_context, appointment.HospitalId, effectiveReferredBy, cancellationToken);
+        else
+            appointment.ReferrerId ??= await ReferrerLookup.FindIdByNameAsync(_context, appointment.HospitalId, effectiveReferredBy, cancellationToken);
         if (!referrerLocked && request.ReferredContact != null)
             appointment.ReferredContact = request.ReferredContact;
 
@@ -201,7 +209,7 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             if (request.Village is not null) appointment.Patient.Village = NameNormalizer.Upper(request.Village);
             if (request.Block is not null) appointment.Patient.Block = NameNormalizer.Upper(request.Block);
             if (request.District is not null) appointment.Patient.District = NameNormalizer.Upper(request.District);
-            if (request.SourceOfInfo is not null) appointment.Patient.SourceOfInfo = request.SourceOfInfo;
+            if (request.SourceOfInfo is not null) appointment.Patient.SourceOfInfo = PatientSources.Canonicalize(request.SourceOfInfo);
         }
 
         // Load every live AppointmentService row on this visit. We reconcile
@@ -973,6 +981,7 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             // Self / walk-in pays no commission — drop the rows from the ledger
             // (tombstone), don't leave visible ₹0 entries.
             var nowSelf = DateTime.UtcNow;
+            appointment.ReferrerId = null;
             foreach (var c in commissions)
             {
                 c.CommissionAmount = 0;
@@ -997,6 +1006,9 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             };
             _context.Referrers.Add(referrer);
         }
+
+        // Stamp the visit with the partner's id (first-use creation lands here).
+        appointment.ReferrerId = referrer.ReferrerId;
 
         // Keep the referral source profile in sync with what the edit sent
         // (payee-first model — same behaviour as booking). The type is only
