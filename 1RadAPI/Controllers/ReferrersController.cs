@@ -13,12 +13,14 @@ using _1Rad.Application.Features.Referrers.Commands.DeleteReferrer;
 using _1Rad.Application.Features.Referrers.Commands.RecordReferralCommission;
 using _1Rad.Application.Features.Referrers.Commands.RecordReferralCommissions;
 using _1Rad.Application.Features.Referrers.Commands.PayReferralCommissions;
+using _1Rad.Application.Features.Referrers.Commands.WriteOffReferralDeficit;
 using _1Rad.Application.Features.Referrers.Commands.UpdateReferralCommission;
 using _1Rad.Application.Features.Referrers.Commands.UpdateReferralCommissionStatus;
 using _1Rad.Application.Features.Referrers.Commands.MergeReferrers;
 using _1Rad.Application.Features.Referrers.Commands.UnmergeReferrer;
 using _1Rad.Domain.Constants;
 using MediatR;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -32,11 +34,13 @@ public class ReferrersController : ControllerBase
 {
     private readonly IMediator _mediator;
     private readonly IReferralLinkTokenService _referralTokens;
+    private readonly IApplicationDbContext _context;
 
-    public ReferrersController(IMediator mediator, IReferralLinkTokenService referralTokens)
+    public ReferrersController(IMediator mediator, IReferralLinkTokenService referralTokens, IApplicationDbContext context)
     {
         _mediator = mediator;
         _referralTokens = referralTokens;
+        _context = context;
     }
 
     [HttpGet]
@@ -66,17 +70,30 @@ public class ReferrersController : ControllerBase
 
     // ── Doctor-portal share links (#3) ─────────────────────────────────────
     // Mint this referrer's signed portal-link token (for copy / WhatsApp).
+    // A link is only ever minted for a live partner of the CALLER's centre — the token
+    // is a bearer credential for that partner's earnings, so signing one for an
+    // arbitrary id (another centre's partner, a deleted one) is refused.
     [HttpGet("{id:guid}/share-link")]
-    public IActionResult ShareLink(Guid id)
-        => Ok(new { success = true, referrerId = id, token = _referralTokens.Issue(id) });
+    public async Task<IActionResult> ShareLink(Guid id)
+    {
+        var hospitalId = _context.UserContext.HospitalId;
+        var exists = await _context.Referrers.AnyAsync(r => r.ReferrerId == id && r.HospitalId == hospitalId && r.DeletedAt == null);
+        if (!exists) return NotFound(new { success = false, error = "Partner not found." });
+        return Ok(new { success = true, referrerId = id, token = _referralTokens.Issue(id) });
+    }
 
     // Mint tokens for several referrers at once (bulk copy / WhatsApp).
     public sealed record ShareLinksBody(List<Guid> ReferrerIds);
     [HttpPost("share-links")]
-    public IActionResult ShareLinks([FromBody] ShareLinksBody body)
+    public async Task<IActionResult> ShareLinks([FromBody] ShareLinksBody body)
     {
-        var links = (body?.ReferrerIds ?? new List<Guid>()).Distinct()
-            .Select(id => new { referrerId = id, token = _referralTokens.Issue(id) });
+        var requested = (body?.ReferrerIds ?? new List<Guid>()).Distinct().ToList();
+        var hospitalId = _context.UserContext.HospitalId;
+        var allowed = await _context.Referrers
+            .Where(r => requested.Contains(r.ReferrerId) && r.HospitalId == hospitalId && r.DeletedAt == null)
+            .Select(r => r.ReferrerId)
+            .ToListAsync();
+        var links = allowed.Select(id => new { referrerId = id, token = _referralTokens.Issue(id) });
         return Ok(new { success = true, links });
     }
 
@@ -156,6 +173,17 @@ public class ReferrersController : ControllerBase
     public async Task<IActionResult> PayCommissions([FromBody] PayReferralCommissionsCommand command)
     {
         var result = await _mediator.Send(command);
+        return Ok(result);
+    }
+
+    // The centre absorbs a partner's outstanding clawback deficit (settles the open
+    // negative rows and books the compensating write-off). The amount is computed
+    // server-side from live rows; a repeat call is refused because nothing is open.
+    [HttpPost("{id:guid}/write-off-deficit")]
+    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Accountant}")]
+    public async Task<IActionResult> WriteOffDeficit(Guid id)
+    {
+        var result = await _mediator.Send(new WriteOffReferralDeficitCommand(id));
         return Ok(result);
     }
 

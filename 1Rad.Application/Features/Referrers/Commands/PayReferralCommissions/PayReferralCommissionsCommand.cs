@@ -19,6 +19,11 @@ namespace _1Rad.Application.Features.Referrers.Commands.PayReferralCommissions;
 ///     error, so re-submitting the same payout is safe.
 ///   • Rows it will not pay (cancelled, non-positive, patient hasn't paid yet) are
 ///     reported back with the reason instead of failing the whole payout.
+///   • NetDeficits (opt-in): the partner's outstanding clawback/reversal deficit
+///     (negative UNPAID rows) is recovered out of this payout, oldest first, so the
+///     cash actually handed over is gross − recovered. A deficit row that can only be
+///     partly recovered is split: the recovered part is settled, the rest stays
+///     outstanding.
 /// </summary>
 public record PayReferralCommissionsCommand(
     List<Guid> CommissionIds,
@@ -26,15 +31,21 @@ public record PayReferralCommissionsCommand(
     string PayeeName,
     string? PayeeContact = null,
     string? PayeeEmail = null,
-    string? PayeeAddress = null
+    string? PayeeAddress = null,
+    bool NetDeficits = false
 ) : IRequest<PayReferralCommissionsResult>;
 
 public record SkippedCommission(Guid CommissionId, string Reason);
 
+/// <param name="TotalPaid">Gross of the commissions marked paid.</param>
+/// <param name="DeficitRecovered">Deficit recovered out of this payout (0 unless NetDeficits).</param>
+/// <param name="NetPaid">Cash to hand over: TotalPaid − DeficitRecovered.</param>
 public record PayReferralCommissionsResult(
     List<Guid> Paid,
     List<SkippedCommission> Skipped,
-    decimal TotalPaid);
+    decimal TotalPaid,
+    decimal DeficitRecovered = 0m,
+    decimal NetPaid = 0m);
 
 public class PayReferralCommissionsCommandHandler : IRequestHandler<PayReferralCommissionsCommand, PayReferralCommissionsResult>
 {
@@ -122,9 +133,102 @@ public class PayReferralCommissionsCommandHandler : IRequestHandler<PayReferralC
             total += c.CommissionAmount;
         }
 
+        decimal recovered = 0m;
+        var splitReferrers = new HashSet<Guid>();
+        if (paid.Count > 0 && request.NetDeficits)
+            recovered = await RecoverDeficitsAsync(rows.Where(c => paid.Contains(c.Id)).ToList(), paidBy, payeeName, now, hospitalId, splitReferrers, ct);
+
         if (paid.Count > 0)
             await _context.SaveChangesAsync(ct);
 
-        return new PayReferralCommissionsResult(paid, skipped, total);
+        // A split adds a row (its running total starts at 0) — re-base those partners.
+        if (splitReferrers.Count > 0)
+        {
+            foreach (var referrerId in splitReferrers)
+                await ReferralLedger.RecomputeAccumulatedTotal(_context, referrerId, hospitalId, ct);
+            await _context.SaveChangesAsync(ct);
+        }
+
+        return new PayReferralCommissionsResult(paid, skipped, total, recovered, total - recovered);
+    }
+
+    /// <summary>
+    /// Settles the partner's open deficit (negative UNPAID rows) against the gross of
+    /// the rows just paid. Per partner (merge-resolved) so a duplicate's deficit is
+    /// netted against the primary's payout. Returns the amount recovered.
+    /// </summary>
+    private async Task<decimal> RecoverDeficitsAsync(
+        List<Domain.Entities.ReferralCommission> paidRows, string paidBy, string payeeName, DateTime now, Guid hospitalId, HashSet<Guid> splitReferrers, CancellationToken ct)
+    {
+        var registry = await _context.Referrers.AsNoTracking()
+            .Where(r => r.HospitalId == hospitalId)
+            .Select(r => new { r.ReferrerId, r.MergedIntoId })
+            .ToListAsync(ct);
+        var mergeMap = registry.ToDictionary(r => r.ReferrerId, r => r.MergedIntoId);
+        Guid Root(Guid id)
+        {
+            var seen = new HashSet<Guid>();
+            while (mergeMap.TryGetValue(id, out var next) && next.HasValue && seen.Add(id)) id = next.Value;
+            return id;
+        }
+
+        decimal recoveredTotal = 0m;
+        foreach (var group in paidRows.GroupBy(c => Root(c.ReferrerId)))
+        {
+            var capacity = group.Sum(c => c.CommissionAmount);          // gross paid to this partner
+            if (capacity <= 0m) continue;
+
+            var aliasIds = registry.Where(r => Root(r.ReferrerId) == group.Key).Select(r => r.ReferrerId).ToList();
+            var deficits = await _context.ReferralCommissions
+                .Where(c => c.HospitalId == hospitalId && c.DeletedAt == null && c.CommissionAmount < 0m
+                            && aliasIds.Contains(c.ReferrerId)
+                            && c.Status != CommissionStatus.Paid
+                            && c.Status != CommissionStatus.Cancelled && c.Status != "CANCELLED")
+                .OrderBy(c => c.ServiceDate).ThenBy(c => c.TransactionDate).ThenBy(c => c.Id)
+                .ToListAsync(ct);
+
+            foreach (var d in deficits)
+            {
+                if (capacity <= 0m) break;
+                var owed = -d.CommissionAmount;
+                var take = Math.Min(owed, capacity);
+
+                if (take < owed)
+                {
+                    // Only part of this deficit can be recovered: split it. The recovered
+                    // slice is settled below; the remainder stays outstanding. The
+                    // remainder is detached from any service line (clawback rows sit
+                    // outside the one-live-commission-per-service index).
+                    _context.ReferralCommissions.Add(new Domain.Entities.ReferralCommission
+                    {
+                        HospitalId = hospitalId,
+                        ReferrerId = d.ReferrerId,
+                        ReferrerName = d.ReferrerName,
+                        Modality = d.Modality,
+                        AppointmentId = d.AppointmentId,
+                        AppointmentServiceId = null,
+                        ReferenceNumber = d.ReferenceNumber,
+                        CommissionAmount = -(owed - take),
+                        Status = CommissionStatus.Unpaid,
+                        TransactionDate = d.TransactionDate,
+                        ServiceDate = d.ServiceDate,
+                        Remarks = $"[Remainder of a deficit after ₹{take:0.##} was recovered from a payout on {now:yyyy-MM-dd}] " + d.Remarks,
+                    });
+                    d.CommissionAmount = -take;
+                    splitReferrers.Add(d.ReferrerId);
+                }
+
+                d.Status = CommissionStatus.Paid;       // settled = recovered
+                d.PaymentDate = now;
+                d.PaidBy = paidBy;
+                d.PayeeName = payeeName;
+                d.Remarks = (d.Remarks ?? string.Empty) + $" [Recovered ₹{take:0.##} by netting against a payout on {now:yyyy-MM-dd}]";
+                d.UpdatedAt = now;
+
+                capacity -= take;
+                recoveredTotal += take;
+            }
+        }
+        return recoveredTotal;
     }
 }

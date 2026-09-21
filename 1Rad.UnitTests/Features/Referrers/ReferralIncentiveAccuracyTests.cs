@@ -10,6 +10,7 @@ using _1Rad.Application.Features.Referrers.Commands.MergeReferrers;
 using _1Rad.Application.Features.Referrers.Commands.PayReferralCommissions;
 using _1Rad.Application.Features.Referrers.Commands.RecordReferralCommissions;
 using _1Rad.Application.Features.Referrers.Commands.UpdateReferralCommissionStatus;
+using _1Rad.Application.Features.Referrers.Commands.WriteOffReferralDeficit;
 using _1Rad.Application.Features.Referrers.Queries.GetDetailedReferralLedger;
 using _1Rad.Application.Features.Referrers.Queries.GetDoctorPortal;
 using _1Rad.Application.Features.Referrers.Queries.GetReferralCommissions;
@@ -585,5 +586,205 @@ public class ReferralIncentiveAccuracyTests : BaseHandlerTest
         Assert.Equal(2, row.Total);
         Assert.Equal(2, row.Counts["Evening (5pm-12am)"]);
         Assert.Equal(0, row.Counts["Afternoon (12pm-5pm)"]);
+    }
+
+    // ── netting a clawback deficit against a payout ─────────────────────────────
+
+    private (Referrer Partner, ReferralCommission Payable) PayablePartner(decimal payable)
+    {
+        var a = AddReferrer("DR A");
+        var (visit, _) = AddVisit("DR A", a.ReferrerId);
+        AddInvoice(visit, 1000m, 1000m, "PAID");
+        return (a, AddCommission(a, visit, payable));
+    }
+
+    [Fact]
+    public async Task Netting_RecoversTheWholeDeficitOutOfALargerPayout()
+    {
+        var (a, payable) = PayablePartner(200m);
+        var deficit = AddCommission(a, null, -50m);
+        await Context.SaveChangesAsync();
+
+        var result = await new PayReferralCommissionsCommandHandler(Context).Handle(
+            new PayReferralCommissionsCommand(new() { payable.Id }, "Asha", "Dr A", NetDeficits: true), CancellationToken.None);
+
+        Assert.Equal(200m, result.TotalPaid);
+        Assert.Equal(50m, result.DeficitRecovered);
+        Assert.Equal(150m, result.NetPaid);
+        var settled = Context.ReferralCommissions.Single(x => x.Id == deficit.Id);
+        Assert.Equal("PAID", settled.Status);
+        Assert.Equal(-50m, settled.CommissionAmount);
+        Assert.NotNull(settled.PaymentDate);
+        // Nothing left owed by the partner, and the cash "paid" figure is the net 150.
+        var rows = Context.ReferralCommissions.Where(x => x.ReferrerId == a.ReferrerId).ToList();
+        Assert.Equal(0m, rows.Where(x => x.Status != "PAID").Sum(x => x.CommissionAmount));
+        Assert.Equal(150m, rows.Where(x => x.Status == "PAID").Sum(x => x.CommissionAmount));
+    }
+
+    [Fact]
+    public async Task Netting_SplitsADeficitRowWhenOnlyPartOfItCanBeRecovered()
+    {
+        var (a, payable) = PayablePartner(100m);
+        var oldest = AddCommission(a, null, -60m, serviceDate: DateTime.UtcNow.AddDays(-9));
+        var next = AddCommission(a, null, -240m, serviceDate: DateTime.UtcNow.AddDays(-2));
+        await Context.SaveChangesAsync();
+
+        var result = await new PayReferralCommissionsCommandHandler(Context).Handle(
+            new PayReferralCommissionsCommand(new() { payable.Id }, "Asha", "Dr A", NetDeficits: true), CancellationToken.None);
+
+        Assert.Equal(100m, result.DeficitRecovered);
+        Assert.Equal(0m, result.NetPaid);                      // fully offset - nothing to hand over
+        var oldestRow = Context.ReferralCommissions.Single(x => x.Id == oldest.Id);
+        Assert.Equal(-60m, oldestRow.CommissionAmount);        // oldest settled whole
+        Assert.Equal("PAID", oldestRow.Status);
+        var partlyRecovered = Context.ReferralCommissions.Single(x => x.Id == next.Id);
+        Assert.Equal("PAID", partlyRecovered.Status);
+        Assert.Equal(-40m, partlyRecovered.CommissionAmount);
+        var remainder = Assert.Single(Context.ReferralCommissions.Where(x =>
+            x.Id != next.Id && x.Id != oldest.Id && x.Id != payable.Id && x.ReferrerId == a.ReferrerId));
+        Assert.Equal(-200m, remainder.CommissionAmount);
+        Assert.Equal("UNPAID", remainder.Status);
+        Assert.Null(remainder.AppointmentServiceId);
+        // Owed before: 300. Recovered: 100. Still outstanding: 200.
+        Assert.Equal(-200m, Context.ReferralCommissions.Where(x => x.ReferrerId == a.ReferrerId && x.Status != "PAID").Sum(x => x.CommissionAmount));
+    }
+
+    [Fact]
+    public async Task Netting_IsOffByDefault_AndDoesNothingWhenTheRowsWereAlreadyPaid()
+    {
+        var (a, payable) = PayablePartner(200m);
+        var deficit = AddCommission(a, null, -50m);
+        await Context.SaveChangesAsync();
+        var handler = new PayReferralCommissionsCommandHandler(Context);
+
+        var plain = await handler.Handle(new PayReferralCommissionsCommand(new() { payable.Id }, "Asha", "Dr A"), CancellationToken.None);
+        Assert.Equal(0m, plain.DeficitRecovered);
+        Assert.Equal(200m, plain.NetPaid);
+        Assert.Equal("UNPAID", Context.ReferralCommissions.Single(x => x.Id == deficit.Id).Status);
+
+        // Re-submitting the (already paid) payout with netting on recovers nothing more.
+        var again = await handler.Handle(new PayReferralCommissionsCommand(new() { payable.Id }, "Asha", "Dr A", NetDeficits: true), CancellationToken.None);
+        Assert.Empty(again.Paid);
+        Assert.Equal(0m, again.DeficitRecovered);
+        Assert.Equal("UNPAID", Context.ReferralCommissions.Single(x => x.Id == deficit.Id).Status);
+    }
+
+    [Fact]
+    public async Task Netting_AppliesAMergedDuplicatesDeficitToThePrimarysPayout_ButNeverAnotherPartnersDebt()
+    {
+        var primary = AddReferrer("DR PRIMARY");
+        var dupe = AddReferrer("DR DUPE", mergedInto: primary.ReferrerId);
+        var (visit, _) = AddVisit("DR PRIMARY", primary.ReferrerId);
+        AddInvoice(visit, 1000m, 1000m, "PAID");
+        var payable = AddCommission(primary, visit, 300m);
+        var dupeDeficit = AddCommission(dupe, null, -120m);
+        var stranger = AddReferrer("DR OTHER");
+        var otherDeficit = AddCommission(stranger, null, -999m);
+        await Context.SaveChangesAsync();
+
+        var result = await new PayReferralCommissionsCommandHandler(Context).Handle(
+            new PayReferralCommissionsCommand(new() { payable.Id }, "Asha", "Dr Primary", NetDeficits: true), CancellationToken.None);
+
+        Assert.Equal(120m, result.DeficitRecovered);
+        Assert.Equal("PAID", Context.ReferralCommissions.Single(x => x.Id == dupeDeficit.Id).Status);
+        Assert.Equal("UNPAID", Context.ReferralCommissions.Single(x => x.Id == otherDeficit.Id).Status);
+    }
+
+    // ── one live commission per appointment service (migration 89) ──────────────
+
+    [Fact]
+    public async Task ReassigningAPaidCommission_KeepsAtMostOneLiveRowOnTheServiceLine()
+    {
+        // SQL Server enforces UX_ReferralCommissions_Live_AppointmentService (one live row per
+        // service). The reversal must be detached and the original PAID row must release the
+        // service id to the fresh credit - otherwise the save fails in production.
+        var a = AddReferrer("DR A");
+        var (visit, _) = AddVisit("DR A", a.ReferrerId);
+        var svc = new AppointmentService { AppointmentId = visit.AppointmentId, HospitalId = HospitalId, ServiceName = "CT", Modality = "CT", Amount = 1000m, ReferralCutValue = 500m };
+        Context.AppointmentServices.Add(svc);
+        var paid = AddCommission(a, visit, 500m, "PAID", serviceId: svc.Id);
+        await Context.SaveChangesAsync();
+
+        await new ChangeReferrerCommandHandler(Context).Handle(
+            new ChangeReferrerCommand { AppointmentId = visit.AppointmentId, NewReferrerName = "DR NEW" }, CancellationToken.None);
+
+        var live = Context.ReferralCommissions.Where(x => x.AppointmentId == visit.AppointmentId && x.DeletedAt == null).ToList();
+        Assert.Equal(1, live.Count(x => x.AppointmentServiceId == svc.Id));
+        var credit = Assert.Single(live, x => x.AppointmentServiceId == svc.Id);
+        Assert.Equal("DR NEW", credit.ReferrerName);
+        Assert.Equal(500m, credit.CommissionAmount);
+        Assert.Null(Context.ReferralCommissions.Single(x => x.Id == paid.Id).AppointmentServiceId);   // history kept, detached
+        Assert.Contains(live, x => x.CommissionAmount == -500m && x.AppointmentServiceId == null);    // reversal detached
+        // The old partner nets to zero (500 paid, -500 reversal).
+        Assert.Equal(0m, live.Where(x => x.ReferrerId == a.ReferrerId).Sum(x => x.CommissionAmount));
+    }
+
+    // ── writing a deficit off ───────────────────────────────────────────────────
+
+    [Fact]
+    public async Task WriteOff_SettlesTheOpenDeficitRowsAndBooksTheCompensatingPaidRow()
+    {
+        var a = AddReferrer("DR A");
+        var d1 = AddCommission(a, null, -100m);
+        var d2 = AddCommission(a, null, -50m);
+        var recoveredAlready = AddCommission(a, null, -30m, "PAID");       // recovered earlier - not part of the deficit
+        var upcoming = AddCommission(a, null, 400m);                        // an unrelated positive payable row
+        await Context.SaveChangesAsync();
+
+        var result = await new WriteOffReferralDeficitCommandHandler(Context)
+            .Handle(new WriteOffReferralDeficitCommand(a.ReferrerId), CancellationToken.None);
+
+        Assert.Equal(150m, result.WrittenOff);
+        Assert.Equal(2, result.RowsSettled);
+        Assert.Equal("Cancelled", Context.ReferralCommissions.Single(x => x.Id == d1.Id).Status);
+        Assert.Equal("Cancelled", Context.ReferralCommissions.Single(x => x.Id == d2.Id).Status);
+        Assert.Equal("PAID", Context.ReferralCommissions.Single(x => x.Id == recoveredAlready.Id).Status);
+        Assert.Equal("UNPAID", Context.ReferralCommissions.Single(x => x.Id == upcoming.Id).Status);
+        var booked = Assert.Single(Context.ReferralCommissions.Where(x => x.Modality == "WRITE-OFF"));
+        Assert.Equal(150m, booked.CommissionAmount);
+        Assert.Equal("PAID", booked.Status);
+        Assert.NotNull(booked.PaymentDate);
+    }
+
+    [Fact]
+    public async Task WriteOff_IsNotRepeatable_AndANetPayoutAfterwardsRecoversNothingTwice()
+    {
+        var (a, payable) = PayablePartner(200m);
+        AddCommission(a, null, -80m);
+        await Context.SaveChangesAsync();
+
+        await new WriteOffReferralDeficitCommandHandler(Context)
+            .Handle(new WriteOffReferralDeficitCommand(a.ReferrerId), CancellationToken.None);
+
+        // A second write-off has nothing left to absorb.
+        await Assert.ThrowsAsync<BusinessRuleViolationException>(() => new WriteOffReferralDeficitCommandHandler(Context)
+            .Handle(new WriteOffReferralDeficitCommand(a.ReferrerId), CancellationToken.None));
+
+        // And paying the partner with netting on must not recover the absorbed deficit again.
+        var pay = await new PayReferralCommissionsCommandHandler(Context).Handle(
+            new PayReferralCommissionsCommand(new() { payable.Id }, "Asha", "Dr A", NetDeficits: true), CancellationToken.None);
+        Assert.Equal(0m, pay.DeficitRecovered);
+        Assert.Equal(200m, pay.NetPaid);
+    }
+
+    [Fact]
+    public async Task WriteOff_ForAMergedDuplicateCoversTheWholePartner_AndRefusesWhenNothingIsOwed()
+    {
+        var primary = AddReferrer("DR PRIMARY");
+        var dupe = AddReferrer("DR DUPE", mergedInto: primary.ReferrerId);
+        var onDupe = AddCommission(dupe, null, -40m);
+        var stranger = AddReferrer("DR OTHER");
+        var otherDebt = AddCommission(stranger, null, -500m);
+        var clean = AddReferrer("DR CLEAN");
+        await Context.SaveChangesAsync();
+        var handler = new WriteOffReferralDeficitCommandHandler(Context);
+
+        var result = await handler.Handle(new WriteOffReferralDeficitCommand(primary.ReferrerId), CancellationToken.None);
+
+        Assert.Equal(40m, result.WrittenOff);
+        Assert.Equal("Cancelled", Context.ReferralCommissions.Single(x => x.Id == onDupe.Id).Status);
+        Assert.Equal("UNPAID", Context.ReferralCommissions.Single(x => x.Id == otherDebt.Id).Status);   // another partner is untouched
+        await Assert.ThrowsAsync<BusinessRuleViolationException>(() =>
+            handler.Handle(new WriteOffReferralDeficitCommand(clean.ReferrerId), CancellationToken.None));
     }
 }

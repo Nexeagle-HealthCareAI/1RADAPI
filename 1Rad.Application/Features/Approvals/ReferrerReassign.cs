@@ -129,6 +129,9 @@ internal static class ReferrerReassign
 
         var now = DateTime.UtcNow;
         var affected = new HashSet<Guid>();
+        // Credits to the new referrer that must be inserted AFTER the original PAID row
+        // has released its service id (see the paid branch below).
+        var pendingCredits = new List<ReferralCommission>();
         
         // If the appointment has already arrived, but it was previously "Self",
         // the system skipped creating commission rows entirely. We need to create them now
@@ -234,7 +237,11 @@ internal static class ReferrerReassign
                     Modality = c.Modality,
                     PatientName = c.PatientName,
                     AppointmentId = c.AppointmentId,
-                    AppointmentServiceId = c.AppointmentServiceId,
+                    // Detached: the DB allows ONE live commission per appointment service
+                    // (UX_ReferralCommissions_Live_AppointmentService, migration 89) and
+                    // the clawback/reversal rows are deliberately outside it — leaving the
+                    // service id here made the save fail on SQL Server.
+                    AppointmentServiceId = null,
                     ReferenceNumber = c.ReferenceNumber,
                     CommissionAmount = -amount,
                     Status = "UNPAID",
@@ -243,8 +250,13 @@ internal static class ReferrerReassign
                     Remarks = $"[Reversal — referrer changed to {referrer.Name}; was ₹{amount:0.##} credited to {c.ReferrerName}]",
                 });
 
-                // Fresh credit to the NEW referrer (Self earns nothing).
-                ctx.ReferralCommissions.Add(new ReferralCommission
+                // Fresh credit to the NEW referrer (Self earns nothing). It takes over the
+                // service line, so the original PAID row is detached from it (it stays
+                // linked to the visit through AppointmentId for audit) — and the credit
+                // is only inserted after that detach has been saved, so the two never
+                // hold the service id at the same time.
+                var creditServiceId = c.AppointmentServiceId;
+                pendingCredits.Add(new ReferralCommission
                 {
                     HospitalId = hospitalId,
                     ReferrerId = referrer.ReferrerId,
@@ -252,7 +264,7 @@ internal static class ReferrerReassign
                     Modality = c.Modality,
                     PatientName = c.PatientName,
                     AppointmentId = c.AppointmentId,
-                    AppointmentServiceId = c.AppointmentServiceId,
+                    AppointmentServiceId = creditServiceId,
                     ReferenceNumber = c.ReferenceNumber,
                     CommissionAmount = isSelf ? 0 : baseCut,
                     Status = "UNPAID",
@@ -263,7 +275,8 @@ internal static class ReferrerReassign
                         : $"[Reassigned from {c.ReferrerName}]",
                 });
 
-                // Keep the original as immutable history.
+                // Keep the original as immutable history (detached from the service line).
+                c.AppointmentServiceId = null;
                 c.Remarks = (c.Remarks ?? "") + $" [Referrer changed to {referrer.Name} — reversed by ledger entry]";
                 c.UpdatedAt = now;
             }
@@ -282,8 +295,15 @@ internal static class ReferrerReassign
         }
         affected.Add(referrer.ReferrerId);
 
-        // Persist the moves so the re-base query below sees current ownership.
+        // Persist the moves (and the detach of any paid original) so the re-base query
+        // below sees current ownership; then insert the fresh credits, which reuse the
+        // service ids just released.
         await ctx.SaveChangesAsync(ct);
+        if (pendingCredits.Count > 0)
+        {
+            ctx.ReferralCommissions.AddRange(pendingCredits);
+            await ctx.SaveChangesAsync(ct);
+        }
 
         // Re-base accumulated totals for every affected referrer over live rows.
         foreach (var rid in affected)
