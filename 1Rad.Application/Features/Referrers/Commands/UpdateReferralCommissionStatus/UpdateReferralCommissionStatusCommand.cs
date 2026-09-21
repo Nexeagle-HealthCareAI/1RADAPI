@@ -1,3 +1,5 @@
+using _1Rad.Application.Common;
+using _1Rad.Domain.Exceptions;
 using _1Rad.Application.Interfaces;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
@@ -30,21 +32,37 @@ public class UpdateReferralCommissionStatusCommandHandler : IRequestHandler<Upda
             .FirstOrDefaultAsync(c => c.Id == request.CommissionId, cancellationToken);
 
         if (commission == null)
-            throw new Exception($"FISCAL ERROR: Commission record [{request.CommissionId}] not found in strategic ledger.");
+            throw new NotFoundException($"Commission record [{request.CommissionId}] was not found.");
 
         var requestedStatus = (request.Status ?? string.Empty).Trim().ToUpperInvariant();
         if (requestedStatus is not "UNPAID" and not "PAID" and not "CANCELLED")
-            throw new ArgumentException("Commission status must be UNPAID, PAID, or CANCELLED.", nameof(request.Status));
+            throw new ValidationException("Commission status must be UNPAID, PAID, or CANCELLED.");
 
         var currentStatus = (commission.Status ?? string.Empty).Trim().ToUpperInvariant();
         if (currentStatus == "PAID" && requestedStatus != "PAID")
-            throw new InvalidOperationException("A paid commission cannot be reversed directly. Submit an approval request to unpay or adjust it.");
+            throw new BusinessRuleViolationException("A paid commission cannot be reversed directly. Submit an approval request to unpay or adjust it.");
         if (requestedStatus == "CANCELLED" && (commission.AppointmentId.HasValue || commission.AppointmentServiceId.HasValue))
-            throw new InvalidOperationException("Appointment-generated commissions can only be cancelled through the appointment cancellation workflow.");
+            throw new BusinessRuleViolationException("Appointment-generated commissions can only be cancelled through the appointment cancellation workflow.");
         if (requestedStatus == "PAID" && currentStatus != "UNPAID")
-            throw new InvalidOperationException("Only an unpaid commission can be marked paid.");
+            throw new BusinessRuleViolationException("Only an unpaid commission can be marked paid.");
         if (requestedStatus == "PAID" && commission.CommissionAmount <= 0)
-            throw new InvalidOperationException("Only a positive commission amount can be paid.");
+            throw new BusinessRuleViolationException("Only a positive commission amount can be paid.");
+
+        // A referrer is paid once the patient has paid — the Referral Hub already
+        // hides the action until then, but that was the ONLY place the rule lived,
+        // so any other caller (or a stale screen) could pay out on a visit the
+        // patient had not settled. Only commissions earned on an appointment have
+        // a patient bill to check; manual/legacy ones do not.
+        if (requestedStatus == "PAID" && commission.AppointmentId.HasValue)
+        {
+            var payability = await PatientPaymentStatus.ForCommissionsAsync(
+                _context, commission.HospitalId,
+                new[] { (commission.Id, commission.AppointmentId, commission.ReferenceNumber) },
+                cancellationToken);
+            payability.TryGetValue(commission.Id, out var patientStatus);
+            if (!PatientPaymentStatus.IsPayable(patientStatus))
+                throw new BusinessRuleViolationException("The patient has not paid for this visit yet, so the referral commission cannot be paid out.");
+        }
 
         commission.Status = requestedStatus;
         if (requestedStatus == "PAID")

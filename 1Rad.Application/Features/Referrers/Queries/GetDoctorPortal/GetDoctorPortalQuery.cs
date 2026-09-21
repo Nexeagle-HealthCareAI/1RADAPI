@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
@@ -48,7 +49,12 @@ public record DoctorPortalDto(
     decimal TotalEligible,
     decimal PaymentReceived,
     decimal Outstanding,
-    List<DoctorPortalPatientDto> Patients
+    List<DoctorPortalPatientDto> Patients,
+    // Outstanding, split by whether it can be paid yet: PayableNow is the unpaid
+    // incentive on visits where the patient has paid (something), AwaitingPatient
+    // is the unpaid incentive still waiting on the patient.
+    decimal PayableNow = 0,
+    decimal AwaitingPatient = 0
 );
 
 public class GetDoctorPortalQueryHandler : IRequestHandler<GetDoctorPortalQuery, DoctorPortalDto?>
@@ -92,9 +98,34 @@ public class GetDoctorPortalQueryHandler : IRequestHandler<GetDoctorPortalQuery,
             .ThenBy(x => x.AssignedAt)
             .FirstOrDefault();
 
+        // A partner may have duplicates merged into it (virtual merge, MergedIntoId).
+        // Whichever alias this link belongs to, the doctor sees the combined
+        // picture under the primary partner's identity — otherwise a merged
+        // duplicate's payouts silently drop off the portal.
+        var registry = await _context.Referrers.AsNoTracking().IgnoreQueryFilters()
+            .Where(r => r.HospitalId == hospitalId)
+            .Select(r => new { r.ReferrerId, r.MergedIntoId })
+            .ToListAsync(ct);
+        var mergeMap = registry.ToDictionary(r => r.ReferrerId, r => r.MergedIntoId);
+        Guid Root(Guid id)
+        {
+            var current = id;
+            var seen = new HashSet<Guid>();
+            while (mergeMap.TryGetValue(current, out var next) && next.HasValue && seen.Add(current)) current = next.Value;
+            return current;
+        }
+        var rootId = Root(request.ReferrerId);
+        var aliasIds = registry.Where(r => Root(r.ReferrerId) == rootId).Select(r => r.ReferrerId).ToList();
+        if (rootId != referrer.ReferrerId)
+        {
+            var rootReferrer = await _context.Referrers.AsNoTracking().IgnoreQueryFilters()
+                .FirstOrDefaultAsync(r => r.ReferrerId == rootId && r.DeletedAt == null, ct);
+            if (rootReferrer != null) referrer = rootReferrer;
+        }
+
         var commissions = await _context.ReferralCommissions.AsNoTracking().IgnoreQueryFilters()
-            .Where(c => c.ReferrerId == request.ReferrerId && c.HospitalId == hospitalId
-                        && c.DeletedAt == null && c.Status != "Cancelled")
+            .Where(c => aliasIds.Contains(c.ReferrerId) && c.HospitalId == hospitalId
+                        && c.DeletedAt == null && c.Status != "Cancelled" && c.Status != "CANCELLED")
             .OrderByDescending(c => c.ServiceDate)
             .Select(c => new { c.PatientName, c.Modality, c.ServiceDate, c.TransactionDate, c.AppointmentId, c.AppointmentServiceId, c.CommissionAmount, c.Status })
             .ToListAsync(ct);
@@ -116,15 +147,34 @@ public class GetDoctorPortalQueryHandler : IRequestHandler<GetDoctorPortalQuery,
         // commission's service line for the per-study price and allocate the
         // invoice's ReferrerDiscount pro-rata across its lines. Flattened via
         // SelectMany (a join) to avoid a nested collection projection.
-        var invoiceLines = apptIds.Count == 0
-            ? new List<InvoiceLine>()
+        var invoiceRows = apptIds.Count == 0
+            ? null
             : await _context.Invoices.AsNoTracking().IgnoreQueryFilters()
                 .Where(inv => inv.AppointmentId != null && apptIds.Contains(inv.AppointmentId.Value)
                               && inv.DeletedAt == null && inv.Status != "CANCELLED")
-                .SelectMany(inv => inv.Items.Select(it => new InvoiceLine(
-                    inv.AppointmentId, inv.GrossAmount, inv.ReferrerDiscount,
-                    it.AppointmentServiceId, it.Amount, it.Quantity, inv.PaidAmount, inv.TotalAmount)))
+                .Select(inv => new
+                {
+                    inv.AppointmentId, inv.GrossAmount, inv.ReferrerDiscount, inv.PaidAmount, inv.TotalAmount, inv.Status,
+                    Items = inv.Items.Select(it => new { it.AppointmentServiceId, it.Amount, it.Quantity }).ToList(),
+                })
                 .ToListAsync(ct);
+        // Flattened to one row per line in memory (a collection projection instead of
+        // SelectMany keeps the SQL a single shaped query and runs on every provider).
+        var invoiceLines = invoiceRows == null
+            ? new List<InvoiceLine>()
+            : invoiceRows.SelectMany(inv => inv.Items.Select(it => new InvoiceLine(
+                inv.AppointmentId, inv.GrossAmount, inv.ReferrerDiscount,
+                it.AppointmentServiceId, it.Amount, it.Quantity, inv.PaidAmount, inv.TotalAmount))).ToList();
+        // The patient's payment state comes from the INVOICE (amounts), never from its
+        // line items — an invoice with no lines is still a paid/unpaid invoice.
+        var paymentByAppt = (invoiceRows ?? new())
+            .Where(i => i.AppointmentId != null)
+            .GroupBy(i => i.AppointmentId!.Value)
+            .ToDictionary(g => g.Key, g =>
+            {
+                var i = g.OrderByDescending(x => x.PaidAmount).First();
+                return PatientPaymentStatus.Resolve(i.PaidAmount, i.TotalAmount, i.Status);
+            });
         var linesByAppt = invoiceLines
             .Where(l => l.AppointmentId != null)
             .GroupBy(l => l.AppointmentId!.Value)
@@ -174,11 +224,12 @@ public class GetDoctorPortalQueryHandler : IRequestHandler<GetDoctorPortalQuery,
                 var share = gross > 0 ? lineSubtotal / gross : 1m;
                 discount = Math.Round(refDiscount * share, 2);
 
-                var net = lines[0].TotalAmount;
-                var invPaid = lines[0].PaidAmount;
-                if (net <= 0 || invPaid >= net - 0.01m) paymentStatus = "PAID";
-                else if (invPaid > 0) paymentStatus = "PARTIAL";
-                else paymentStatus = "UNPAID";
+            }
+            if (c.AppointmentId != null && paymentByAppt.TryGetValue(c.AppointmentId.Value, out var resolved))
+            {
+                // PENDING (nothing collected yet) reads UNPAID on the portal; a fully
+                // discounted / zero-total bill needs nothing from the patient.
+                paymentStatus = resolved == PatientPaymentStatus.Pending ? "UNPAID" : resolved;
             }
 
             // "Total amount" on the portal = the doctor's TOTAL ELIGIBLE INCENTIVE
@@ -203,6 +254,17 @@ public class GetDoctorPortalQueryHandler : IRequestHandler<GetDoctorPortalQuery,
             );
         }).ToList();
 
+        // Unpaid, positive incentive split by whether the patient has paid yet.
+        // patients[] is 1:1 with commissions[] (same order).
+        decimal payableNow = 0m, awaitingPatient = 0m;
+        for (var i = 0; i < commissions.Count; i++)
+        {
+            var c = commissions[i];
+            if (string.Equals(c.Status, "PAID", StringComparison.OrdinalIgnoreCase) || c.CommissionAmount <= 0m) continue;
+            if (patients[i].PaymentStatus is "PAID" or "PARTIAL") payableNow += c.CommissionAmount;
+            else awaitingPatient += c.CommissionAmount;
+        }
+
         var totalEligible = commissions.Sum(c => c.CommissionAmount);
         var paidTotal = commissions.Where(c => string.Equals(c.Status, "PAID", StringComparison.OrdinalIgnoreCase)).Sum(c => c.CommissionAmount);
         var referredCount = commissions.Select(c => c.AppointmentId).Where(x => x != null).Distinct().Count();
@@ -224,7 +286,9 @@ public class GetDoctorPortalQueryHandler : IRequestHandler<GetDoctorPortalQuery,
             totalEligible,
             paidTotal,
             totalEligible - paidTotal,
-            patients
+            patients,
+            payableNow,
+            awaitingPatient
         );
     }
 

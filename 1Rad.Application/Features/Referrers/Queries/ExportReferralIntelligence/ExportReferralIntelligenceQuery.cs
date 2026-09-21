@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using ClosedXML.Excel;
 using MediatR;
@@ -30,19 +31,27 @@ public class ExportReferralIntelligenceQueryHandler : IRequestHandler<ExportRefe
     public async Task<byte[]> Handle(ExportReferralIntelligenceQuery request, CancellationToken cancellationToken)
     {
         var query = _context.Appointments
-            .Include(a => a.Patient)
             .AsNoTracking()
             // Cancelled visits aren't referral business — keep them out of the
             // export so it matches the on-screen referral intelligence.
             .Where(a => a.Status != "CANCELLED");
 
+        // The range arrives as bare "YYYY-MM-DD" IST days. Comparing the UTC .Date of a
+        // stored timestamp against it shifted every day boundary by 5.5h, so the export
+        // disagreed with the Referrals screen it is downloaded from (an evening visit
+        // fell on the next day). Use the same IST day bounds as every other report.
         if (!request.AllTime)
         {
             if (request.StartDate.HasValue)
-                query = query.Where(a => a.DateTime.Date >= request.StartDate.Value.Date);
-            
+            {
+                var fromUtc = IstDateRange.ToUtcStart(request.StartDate.Value);
+                query = query.Where(a => a.DateTime >= fromUtc);
+            }
             if (request.EndDate.HasValue)
-                query = query.Where(a => a.DateTime.Date <= request.EndDate.Value.Date);
+            {
+                var toUtc = IstDateRange.ToUtcEndInclusive(request.EndDate.Value);
+                query = query.Where(a => a.DateTime <= toUtc);
+            }
         }
 
         // Multi-service rollout (batch-5 fix). The export is now driven
@@ -59,16 +68,36 @@ public class ExportReferralIntelligenceQueryHandler : IRequestHandler<ExportRefe
             .Select(a => new
             {
                 a.AppointmentId,
-                Referrer = a.ReferredBy ?? "Direct / Walk-in",
+                ReferredBy = a.ReferredBy,
                 PatientName = a.Patient != null ? (a.Patient.FullName ?? "Unknown") : "Unknown",
                 PatientID = a.DisplayId,
                 ParentModality = a.Modality,
                 ParentService = a.Service,
                 Status = a.Status,
-                Date = a.DateTime.ToString("yyyy-MM-dd HH:mm"),
+                DateUtc = a.DateTime,
                 Mobile = a.Mobile
             })
             .ToListAsync(cancellationToken);
+
+        // A merged duplicate is reported under its primary partner's name, exactly as
+        // the Referrals screen groups it — otherwise the same doctor is split across
+        // several rows in the sheet.
+        var registry = await _context.Referrers.AsNoTracking()
+            .Select(r => new { r.ReferrerId, r.Name, r.MergedIntoId })
+            .ToListAsync(cancellationToken);
+        var byId = registry.ToDictionary(r => r.ReferrerId);
+        var idByName = new Dictionary<string, Guid>(StringComparer.OrdinalIgnoreCase);
+        foreach (var r in registry.OrderBy(r => r.MergedIntoId != null).ThenBy(r => r.ReferrerId))
+            if (!string.IsNullOrWhiteSpace(r.Name)) idByName.TryAdd(r.Name!.Trim(), r.ReferrerId);
+        string ReferrerLabel(string? referredBy)
+        {
+            var name = (referredBy ?? string.Empty).Trim();
+            if (name.Length == 0) return "Direct / Walk-in";
+            if (!idByName.TryGetValue(name, out var id)) return name;
+            var seen = new HashSet<Guid>();
+            while (byId.TryGetValue(id, out var node) && node.MergedIntoId.HasValue && seen.Add(id)) id = node.MergedIntoId.Value;
+            return byId.TryGetValue(id, out var root) && !string.IsNullOrWhiteSpace(root.Name) ? root.Name! : name;
+        }
 
         var apptIds = apptHeaders.Select(a => a.AppointmentId).ToList();
         var serviceLines = apptIds.Count == 0
@@ -88,24 +117,24 @@ public class ExportReferralIntelligenceQueryHandler : IRequestHandler<ExportRefe
             (serviceLines.TryGetValue(a.AppointmentId, out var lines) && lines.Count > 0)
                 ? lines.Select(l => new
                 {
-                    a.Referrer,
+                    Referrer = ReferrerLabel(a.ReferredBy),
                     a.PatientName,
                     a.PatientID,
                     Modality = l.Modality,
                     Service  = l.Service,
                     a.Status,
-                    a.Date,
+                    Date = IstDateRange.ToIst(a.DateUtc).ToString("yyyy-MM-dd HH:mm"),
                     a.Mobile,
                 })
                 : new[] { new
                 {
-                    a.Referrer,
+                    Referrer = ReferrerLabel(a.ReferredBy),
                     a.PatientName,
                     a.PatientID,
                     Modality = a.ParentModality,
                     Service  = a.ParentService,
                     a.Status,
-                    a.Date,
+                    Date = IstDateRange.ToIst(a.DateUtc).ToString("yyyy-MM-dd HH:mm"),
                     a.Mobile,
                 } }
         ).ToList();

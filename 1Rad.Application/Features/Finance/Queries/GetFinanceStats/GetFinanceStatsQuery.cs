@@ -53,7 +53,7 @@ public class GetFinanceStatsQueryHandler : IRequestHandler<GetFinanceStatsQuery,
             // Cash-basis profit subtracts commissions actually PAID out to referrers.
             var commissionsPaid = await _context.ReferralCommissions
                 .AsNoTracking()
-                .Where(c => c.HospitalId == hospitalId && c.Status == "PAID")
+                .Where(c => c.HospitalId == hospitalId && c.DeletedAt == null && c.Status == "PAID")
                 .SumAsync(c => c.CommissionAmount, cancellationToken);
 
             if (!invoiceData.Any() && !expenseData.Any()) return new FinanceStatsDto();

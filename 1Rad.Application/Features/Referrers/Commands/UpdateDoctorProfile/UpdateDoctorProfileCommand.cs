@@ -38,11 +38,13 @@ public class UpdateDoctorProfileCommandHandler : IRequestHandler<UpdateDoctorPro
         // Trim to null so a cleared field stores null rather than whitespace.
         static string? Clean(string? v) => string.IsNullOrWhiteSpace(v) ? null : v.Trim();
 
-        // Name is identity — only overwrite when a non-empty value is supplied
-        // (never let the doctor blank out their own name).
-        var name = Clean(request.Name);
-        if (name != null) referrer.Name = name;
-
+        // The NAME is deliberately not editable from the public link. It is the
+        // partner's identity everywhere: appointments record the referrer by name
+        // (Appointment.ReferredBy), payout/ledger rows carry it, and reports join on
+        // it. Anyone holding the capability link could otherwise rename the payee
+        // and silently detach their history — a name correction is a centre-side
+        // edit (Referrals → Edit partner). The request field is accepted but ignored
+        // so older portal builds keep working.
         referrer.Address   = Clean(request.Location);   // "location" on the portal
         referrer.Specialty = Clean(request.Specialty);
         referrer.Degree    = Clean(request.Degree);

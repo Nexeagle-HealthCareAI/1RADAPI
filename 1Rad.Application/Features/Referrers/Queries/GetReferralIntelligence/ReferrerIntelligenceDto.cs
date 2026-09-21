@@ -43,7 +43,12 @@ public record ReferredPatientDto(
     // ServiceLines is the per-line breakdown — used by ReferralsPage's
     // chart aggregators so a multi-service visit contributes to the
     // CT bucket AND the USG bucket, not just the X-Ray primary.
-    IReadOnlyList<ReferredServiceLineDto>? ServiceLines = null
+    IReadOnlyList<ReferredServiceLineDto>? ServiceLines = null,
+    // The part of CommissionAmount that has NOT been paid yet. CommissionStatus is
+    // a single any-unpaid flag for the visit, so a visit with one paid and one
+    // unpaid service line read as fully "Unpaid" — summing CommissionAmount by
+    // that flag overstated outstanding liability. Sum this instead.
+    decimal UnpaidAmount = 0
 );
 
 /// <summary>

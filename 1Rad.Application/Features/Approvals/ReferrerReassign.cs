@@ -173,13 +173,30 @@ internal static class ReferrerReassign
         foreach (var c in commissions)
         {
             var oldReferrerId = c.ReferrerId;
+
+            // Re-assigning a visit to the referrer it already has changes nothing.
+            // Without this, the "move" branch below would rewrite the row's amount
+            // (even a PAID row's) from the service's base cut, silently discarding
+            // any referrer-concession adjustment or approved manual edit.
+            if (oldReferrerId == referrer.ReferrerId) continue;
+
+            // A negative row is a clawback/reversal deficit owed by whoever was paid.
+            // It stays with that referrer — moving it would make the new referrer owe
+            // money they never received.
+            if (c.CommissionAmount < 0m) continue;
+
             if (oldReferrerId != Guid.Empty) affected.Add(oldReferrerId);
 
-            // Resolve the base referral cut from the original service line if possible.
-            // If the old row was "Self", its CommissionAmount is 0, so we use the base cut 
-            // from the service to correctly incentivize the newly assigned doctor.
+            // The amount that follows the visit to the new referrer is what the old
+            // row actually carries — that already reflects any referrer concession
+            // taken off the cut and any admin-approved edit, and for a PAID row it is
+            // exactly the money that was disbursed. Only when the row carries nothing
+            // (it was "Self"/cancelled, which earns ₹0) do we fall back to the
+            // service line's base cut so the newly assigned referrer is credited.
             decimal baseCut = c.CommissionAmount;
-            if (c.AppointmentServiceId.HasValue && services.TryGetValue(c.AppointmentServiceId.Value, out var svc))
+            if (baseCut == 0m
+                && c.AppointmentServiceId.HasValue
+                && services.TryGetValue(c.AppointmentServiceId.Value, out var svc))
             {
                 baseCut = svc.ReferralCutValue;
             }

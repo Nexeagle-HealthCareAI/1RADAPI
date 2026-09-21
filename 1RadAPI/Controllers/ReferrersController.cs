@@ -12,6 +12,7 @@ using _1Rad.Application.Interfaces;
 using _1Rad.Application.Features.Referrers.Commands.DeleteReferrer;
 using _1Rad.Application.Features.Referrers.Commands.RecordReferralCommission;
 using _1Rad.Application.Features.Referrers.Commands.RecordReferralCommissions;
+using _1Rad.Application.Features.Referrers.Commands.PayReferralCommissions;
 using _1Rad.Application.Features.Referrers.Commands.UpdateReferralCommission;
 using _1Rad.Application.Features.Referrers.Commands.UpdateReferralCommissionStatus;
 using _1Rad.Application.Features.Referrers.Commands.MergeReferrers;
@@ -144,6 +145,18 @@ public class ReferrersController : ControllerBase
     {
         var result = await _mediator.Send(command);
         return Ok(new { commissionIds = result });
+    }
+
+    // Settle several commissions in ONE transaction with one set of disbursement
+    // details. Replaces the browser firing one PATCH per row (a dropped
+    // connection left the payout half-recorded). Rows it won't pay come back in
+    // `skipped` with a reason; re-submitting is safe (already-paid rows skip).
+    [HttpPost("commissions/pay")]
+    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Accountant}")]
+    public async Task<IActionResult> PayCommissions([FromBody] PayReferralCommissionsCommand command)
+    {
+        var result = await _mediator.Send(command);
+        return Ok(result);
     }
 
     [HttpGet("commissions")]

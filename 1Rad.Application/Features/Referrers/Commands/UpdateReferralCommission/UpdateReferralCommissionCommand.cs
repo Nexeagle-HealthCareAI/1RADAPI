@@ -1,4 +1,5 @@
 using _1Rad.Application.Common;
+using _1Rad.Domain.Exceptions;
 using _1Rad.Application.Interfaces;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
@@ -29,27 +30,27 @@ public class UpdateReferralCommissionCommandHandler : IRequestHandler<UpdateRefe
             .FirstOrDefaultAsync(c => c.Id == request.CommissionId, cancellationToken);
 
         if (commission == null)
-            throw new Exception($"FISCAL ERROR: Commission record [{request.CommissionId}] not found for modification.");
+            throw new NotFoundException($"Commission record [{request.CommissionId}] was not found.");
 
         if (commission.AppointmentId.HasValue || commission.AppointmentServiceId.HasValue)
-            throw new InvalidOperationException("Appointment-generated commissions can only be changed through an approved appointment or commission adjustment workflow.");
+            throw new BusinessRuleViolationException("Appointment-generated commissions can only be changed through an approved appointment or commission adjustment workflow.");
         if (string.Equals(commission.Status, "PAID", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("A paid commission is immutable. Submit an approval request for an adjustment.");
+            throw new BusinessRuleViolationException("A paid commission is immutable. Submit an approval request for an adjustment.");
         if (request.Amount <= 0)
-            throw new ArgumentException("Commission amount must be greater than zero.", nameof(request.Amount));
+            throw new ValidationException("Commission amount must be greater than zero.");
         if (string.Equals(request.Status, "PAID", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Use the payout workflow to mark a commission as paid.");
+            throw new BusinessRuleViolationException("Use the payout workflow to mark a commission as paid.");
+
+        // Free-text status used to be stored verbatim ("paid ", "Unpaid", a typo…),
+        // which every strict-equality reader downstream then mis-bucketed.
+        var status = CommissionStatus.Normalize(request.Status)
+            ?? throw new ValidationException("Commission status must be UNPAID or CANCELLED.");
 
         commission.CommissionAmount = request.Amount;
         commission.Modality = request.Modality;
         commission.ReferenceNumber = request.ReferenceNumber;
         commission.Remarks = request.Remarks;
-        commission.Status = request.Status;
-
-        if (request.Status == "PAID" && commission.PaymentDate == null)
-        {
-            commission.PaymentDate = DateTime.UtcNow;
-        }
+        commission.Status = status;
 
         // Save current changes first
         await _context.SaveChangesAsync(cancellationToken);

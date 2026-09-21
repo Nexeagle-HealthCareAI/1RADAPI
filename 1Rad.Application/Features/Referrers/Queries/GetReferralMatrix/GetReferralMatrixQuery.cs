@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
@@ -124,6 +125,12 @@ public class GetReferralMatrixQueryHandler : IRequestHandler<GetReferralMatrixQu
             };
         }
 
+        // The window above is in IST calendar terms; stored timestamps are UTC. Compare
+        // against the UTC instants of those IST boundaries, and bucket each visit by its
+        // IST wall-clock time below — using the UTC hour/day put an evening visit in the
+        // wrong slot (Morning/Afternoon/Evening) or on the next day's column.
+        var startUtc = IstDateRange.ToUtcStart(startDate);
+        var endUtc = IstDateRange.ToUtcEndInclusive(endDate);
         var query = _context.Appointments
             .AsNoTracking()
             .Include(a => a.Patient)
@@ -131,7 +138,7 @@ public class GetReferralMatrixQueryHandler : IRequestHandler<GetReferralMatrixQu
             .Where(a => a.Patient.ReferrerId != null)
             // Cancelled visits don't count toward referral volume.
             .Where(a => a.Status != "CANCELLED")
-            .Where(a => a.DateTime >= startDate && a.DateTime <= endDate);
+            .Where(a => a.DateTime >= startUtc && a.DateTime <= endUtc);
 
         if (!string.IsNullOrWhiteSpace(request.SearchQuery))
         {
@@ -149,8 +156,22 @@ public class GetReferralMatrixQueryHandler : IRequestHandler<GetReferralMatrixQu
             })
             .ToListAsync(cancellationToken);
 
+        // Duplicates merged into a primary partner roll up under it (the Referrals
+        // screen does the same); Self / walk-in is not a partner and is left out.
+        var registry = await _context.Referrers.AsNoTracking()
+            .Select(r => new { r.ReferrerId, r.Name, r.Contact, r.MergedIntoId })
+            .ToListAsync(cancellationToken);
+        var refById = registry.ToDictionary(r => r.ReferrerId);
+        Guid Root(Guid id)
+        {
+            var seen = new HashSet<Guid>();
+            while (refById.TryGetValue(id, out var n) && n.MergedIntoId.HasValue && seen.Add(id)) id = n.MergedIntoId.Value;
+            return id;
+        }
+
         var rows = appointments
-            .GroupBy(p => p.ReferrerId)
+            .Where(p => !NameNormalizer.SameName(p.ReferrerName, "Self"))
+            .GroupBy(p => Root(p.ReferrerId!.Value))
             .Select(g =>
             {
                 var counts = cols.ToDictionary(c => c, c => 0);
@@ -158,7 +179,7 @@ public class GetReferralMatrixQueryHandler : IRequestHandler<GetReferralMatrixQu
 
                 foreach (var p in g)
                 {
-                    var key = getColKey(p.DateTime);
+                    var key = getColKey(IstDateRange.ToIst(p.DateTime));
                     if (key != null && counts.ContainsKey(key))
                     {
                         counts[key]++;
@@ -166,10 +187,11 @@ public class GetReferralMatrixQueryHandler : IRequestHandler<GetReferralMatrixQu
                     }
                 }
 
+                var primary = refById.TryGetValue(g.Key, out var pr) ? pr : null;
                 return new MatrixRowDto(
-                    g.Key.Value,
-                    g.First().ReferrerName,
-                    g.First().ReferrerContact ?? "N/A",
+                    g.Key,
+                    primary?.Name ?? g.First().ReferrerName,
+                    primary?.Contact ?? g.First().ReferrerContact ?? "N/A",
                     total,
                     counts
                 );
