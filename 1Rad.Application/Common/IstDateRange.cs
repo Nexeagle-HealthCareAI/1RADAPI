@@ -34,4 +34,11 @@ public static class IstDateRange
     /// an inclusive upper bound for a `&lt;=` filter.
     /// </summary>
     public static DateTime ToUtcEndInclusive(DateTime date) => date.Date.AddDays(1) - Offset - TimeSpan.FromTicks(1);
+
+    /// <summary>
+    /// A stored UTC instant expressed as IST wall-clock time — for display and for
+    /// bucketing by IST day / hour (a UTC `.Date` or `.Hour` puts an evening visit
+    /// on the wrong day).
+    /// </summary>
+    public static DateTime ToIst(DateTime utc) => utc + Offset;
 }

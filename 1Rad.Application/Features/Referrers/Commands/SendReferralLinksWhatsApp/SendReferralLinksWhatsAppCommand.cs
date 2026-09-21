@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
@@ -46,6 +47,8 @@ public class SendReferralLinksWhatsAppCommandHandler : IRequestHandler<SendRefer
             .Select(r => new { r.ReferrerId, r.Name, r.Contact })
             .ToListAsync(ct);
 
+        var versions = await ReferralLinkVersions.GetAsync(_context, referrers.Select(r => r.ReferrerId).ToList(), ct);
+
         var centreName = await _context.Hospitals
             .Where(h => h.HospitalId == hospitalId)
             .Select(h => h.HospitalName)
@@ -68,7 +71,7 @@ public class SendReferralLinksWhatsAppCommandHandler : IRequestHandler<SendRefer
                 continue;
             }
 
-            var token = _tokens.Issue(r.ReferrerId);
+            var token = _tokens.Issue(r.ReferrerId, versions.GetValueOrDefault(r.ReferrerId));
             var link = $"{baseUrl}/r/{r.ReferrerId}?t={token}";
             try
             {

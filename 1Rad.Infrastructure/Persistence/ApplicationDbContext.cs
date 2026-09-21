@@ -71,6 +71,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<ApprovalRequest> ApprovalRequests => Set<ApprovalRequest>();
     public DbSet<IdempotencyRecord> IdempotencyKeys => Set<IdempotencyRecord>();
     public DbSet<RadAiQuestionLog> RadAiQuestionLogs => Set<RadAiQuestionLog>();
+    public DbSet<ReferrerLinkVersion> ReferrerLinkVersions => Set<ReferrerLinkVersion>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -89,6 +90,14 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.Model).HasMaxLength(20);
             entity.HasIndex(e => new { e.HospitalId, e.CreatedAt });
             entity.HasIndex(e => new { e.HospitalId, e.Covered });
+        });
+
+        // Portal-link versions (revocation). One row per partner, created on first revoke.
+        modelBuilder.Entity<ReferrerLinkVersion>(entity =>
+        {
+            entity.ToTable("ReferrerLinkVersions", "dbo");
+            entity.HasKey(e => e.ReferrerId);
+            entity.Property(e => e.ReferrerId).ValueGeneratedNever();
         });
 
         // User Configuration

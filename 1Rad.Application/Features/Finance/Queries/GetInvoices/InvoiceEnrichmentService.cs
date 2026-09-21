@@ -31,6 +31,9 @@ public class InvoiceEnrichmentService : IInvoiceEnrichmentService
                 .AsNoTracking()
                 .Where(c => c.HospitalId == commHospitalId
                     && c.DeletedAt == null
+                    // A manually cancelled commission keeps its original amount — it must not
+                    // count toward the invoice's incentive figure.
+                    && c.Status != "Cancelled" && c.Status != "CANCELLED"
                     && ((c.AppointmentId != null && commApptIds.Contains(c.AppointmentId.Value))
                         || (c.ReferenceNumber != null && commDisplayIds.Contains(c.ReferenceNumber))))
                 .Select(c => new { c.Id, c.AppointmentId, c.ReferenceNumber, c.ReferrerId, c.ReferrerName, c.CommissionAmount })

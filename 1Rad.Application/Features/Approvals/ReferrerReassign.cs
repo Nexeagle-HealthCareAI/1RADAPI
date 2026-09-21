@@ -129,6 +129,9 @@ internal static class ReferrerReassign
 
         var now = DateTime.UtcNow;
         var affected = new HashSet<Guid>();
+        // Credits to the new referrer that must be inserted AFTER the original PAID row
+        // has released its service id (see the paid branch below).
+        var pendingCredits = new List<ReferralCommission>();
         
         // If the appointment has already arrived, but it was previously "Self",
         // the system skipped creating commission rows entirely. We need to create them now
@@ -173,13 +176,30 @@ internal static class ReferrerReassign
         foreach (var c in commissions)
         {
             var oldReferrerId = c.ReferrerId;
+
+            // Re-assigning a visit to the referrer it already has changes nothing.
+            // Without this, the "move" branch below would rewrite the row's amount
+            // (even a PAID row's) from the service's base cut, silently discarding
+            // any referrer-concession adjustment or approved manual edit.
+            if (oldReferrerId == referrer.ReferrerId) continue;
+
+            // A negative row is a clawback/reversal deficit owed by whoever was paid.
+            // It stays with that referrer — moving it would make the new referrer owe
+            // money they never received.
+            if (c.CommissionAmount < 0m) continue;
+
             if (oldReferrerId != Guid.Empty) affected.Add(oldReferrerId);
 
-            // Resolve the base referral cut from the original service line if possible.
-            // If the old row was "Self", its CommissionAmount is 0, so we use the base cut 
-            // from the service to correctly incentivize the newly assigned doctor.
+            // The amount that follows the visit to the new referrer is what the old
+            // row actually carries — that already reflects any referrer concession
+            // taken off the cut and any admin-approved edit, and for a PAID row it is
+            // exactly the money that was disbursed. Only when the row carries nothing
+            // (it was "Self"/cancelled, which earns ₹0) do we fall back to the
+            // service line's base cut so the newly assigned referrer is credited.
             decimal baseCut = c.CommissionAmount;
-            if (c.AppointmentServiceId.HasValue && services.TryGetValue(c.AppointmentServiceId.Value, out var svc))
+            if (baseCut == 0m
+                && c.AppointmentServiceId.HasValue
+                && services.TryGetValue(c.AppointmentServiceId.Value, out var svc))
             {
                 baseCut = svc.ReferralCutValue;
             }
@@ -217,7 +237,11 @@ internal static class ReferrerReassign
                     Modality = c.Modality,
                     PatientName = c.PatientName,
                     AppointmentId = c.AppointmentId,
-                    AppointmentServiceId = c.AppointmentServiceId,
+                    // Detached: the DB allows ONE live commission per appointment service
+                    // (UX_ReferralCommissions_Live_AppointmentService, migration 89) and
+                    // the clawback/reversal rows are deliberately outside it — leaving the
+                    // service id here made the save fail on SQL Server.
+                    AppointmentServiceId = null,
                     ReferenceNumber = c.ReferenceNumber,
                     CommissionAmount = -amount,
                     Status = "UNPAID",
@@ -226,8 +250,13 @@ internal static class ReferrerReassign
                     Remarks = $"[Reversal — referrer changed to {referrer.Name}; was ₹{amount:0.##} credited to {c.ReferrerName}]",
                 });
 
-                // Fresh credit to the NEW referrer (Self earns nothing).
-                ctx.ReferralCommissions.Add(new ReferralCommission
+                // Fresh credit to the NEW referrer (Self earns nothing). It takes over the
+                // service line, so the original PAID row is detached from it (it stays
+                // linked to the visit through AppointmentId for audit) — and the credit
+                // is only inserted after that detach has been saved, so the two never
+                // hold the service id at the same time.
+                var creditServiceId = c.AppointmentServiceId;
+                pendingCredits.Add(new ReferralCommission
                 {
                     HospitalId = hospitalId,
                     ReferrerId = referrer.ReferrerId,
@@ -235,7 +264,7 @@ internal static class ReferrerReassign
                     Modality = c.Modality,
                     PatientName = c.PatientName,
                     AppointmentId = c.AppointmentId,
-                    AppointmentServiceId = c.AppointmentServiceId,
+                    AppointmentServiceId = creditServiceId,
                     ReferenceNumber = c.ReferenceNumber,
                     CommissionAmount = isSelf ? 0 : baseCut,
                     Status = "UNPAID",
@@ -246,7 +275,8 @@ internal static class ReferrerReassign
                         : $"[Reassigned from {c.ReferrerName}]",
                 });
 
-                // Keep the original as immutable history.
+                // Keep the original as immutable history (detached from the service line).
+                c.AppointmentServiceId = null;
                 c.Remarks = (c.Remarks ?? "") + $" [Referrer changed to {referrer.Name} — reversed by ledger entry]";
                 c.UpdatedAt = now;
             }
@@ -265,8 +295,15 @@ internal static class ReferrerReassign
         }
         affected.Add(referrer.ReferrerId);
 
-        // Persist the moves so the re-base query below sees current ownership.
+        // Persist the moves (and the detach of any paid original) so the re-base query
+        // below sees current ownership; then insert the fresh credits, which reuse the
+        // service ids just released.
         await ctx.SaveChangesAsync(ct);
+        if (pendingCredits.Count > 0)
+        {
+            ctx.ReferralCommissions.AddRange(pendingCredits);
+            await ctx.SaveChangesAsync(ct);
+        }
 
         // Re-base accumulated totals for every affected referrer over live rows.
         foreach (var rid in affected)

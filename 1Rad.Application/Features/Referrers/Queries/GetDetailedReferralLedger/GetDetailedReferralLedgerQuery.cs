@@ -1,3 +1,4 @@
+using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
@@ -47,13 +48,39 @@ public class GetDetailedReferralLedgerQueryHandler : IRequestHandler<GetDetailed
 
         // 2. Apply Filters
         if (request.ReferrerId.HasValue)
-            commissionsQuery = commissionsQuery.Where(c => c.ReferrerId == request.ReferrerId.Value);
+        {
+            // Include every partner merged into the requested one.
+            var registry = await _context.Referrers.AsNoTracking()
+                .Where(r => r.HospitalId == hospitalId)
+                .Select(r => new { r.ReferrerId, r.MergedIntoId })
+                .ToListAsync(cancellationToken);
+            var byId = registry.ToDictionary(r => r.ReferrerId, r => r.MergedIntoId);
+            Guid Root(Guid id)
+            {
+                var seen = new HashSet<Guid>();
+                while (byId.TryGetValue(id, out var next) && next.HasValue && seen.Add(id)) id = next.Value;
+                return id;
+            }
+            var root = Root(request.ReferrerId.Value);
+            var aliasIds = registry.Where(r => Root(r.ReferrerId) == root).Select(r => r.ReferrerId).ToList();
+            if (!aliasIds.Contains(request.ReferrerId.Value)) aliasIds.Add(request.ReferrerId.Value);
+            commissionsQuery = commissionsQuery.Where(c => aliasIds.Contains(c.ReferrerId));
+        }
 
+        // Bucket by the day of the SERVICE (IST), like the commission list and every
+        // other report — not by when the row happened to be recorded — and treat the
+        // end date as the whole IST day. (A bare-date EndDate is midnight, so the old
+        // "<= EndDate" silently dropped the entire last day.)
         if (request.StartDate.HasValue)
-            commissionsQuery = commissionsQuery.Where(c => c.TransactionDate >= request.StartDate.Value);
-
+        {
+            var fromUtc = IstDateRange.ToUtcStart(request.StartDate.Value);
+            commissionsQuery = commissionsQuery.Where(c => c.ServiceDate >= fromUtc);
+        }
         if (request.EndDate.HasValue)
-            commissionsQuery = commissionsQuery.Where(c => c.TransactionDate <= request.EndDate.Value);
+        {
+            var toUtc = IstDateRange.ToUtcEndInclusive(request.EndDate.Value);
+            commissionsQuery = commissionsQuery.Where(c => c.ServiceDate <= toUtc);
+        }
 
         // 3. Project clean intermediate structures (EF Core safe translation)
         var rawData = await commissionsQuery
@@ -72,8 +99,9 @@ public class GetDetailedReferralLedgerQueryHandler : IRequestHandler<GetDetailed
                 // AppointmentId first (most reliable link), then fall back to
                 // the display InvoiceId stored in the commission's reference.
                 InvoiceDetails = _context.Invoices
-                    .Where(i => (c.AppointmentId != null && i.AppointmentId == c.AppointmentId)
-                                || (c.ReferenceNumber != null && i.InvoiceId == c.ReferenceNumber))
+                    .Where(i => i.DeletedAt == null
+                                && ((c.AppointmentId != null && i.AppointmentId == c.AppointmentId)
+                                    || (c.ReferenceNumber != null && i.InvoiceId == c.ReferenceNumber)))
                     .OrderByDescending(i => i.PaidAmount)
                     .Select(i => new {
                         i.InvoiceId,
@@ -117,32 +145,9 @@ public class GetDetailedReferralLedgerQueryHandler : IRequestHandler<GetDetailed
             // Derive patient payment status from the actual amounts rather than
             // trusting the stored Status string (which can be stale/casing-variant).
             // This is what unblocks paying the referrer once the patient has paid.
-            ResolvePatientPaymentStatus(x.InvoiceDetails?.PaidAmount, x.InvoiceDetails?.TotalAmount, x.InvoiceDetails?.Status)
+            PatientPaymentStatus.Resolve(x.InvoiceDetails?.PaidAmount, x.InvoiceDetails?.TotalAmount, x.InvoiceDetails?.Status)
         )).ToList();
 
         return result;
-    }
-
-    /// <summary>
-    /// Normalises an invoice's collection state into PAID / PARTIAL / PENDING.
-    /// Amounts are the source of truth; the stored status is only a tie-breaker
-    /// (e.g. a fully-settled invoice with rounding, or an explicit CANCELLED).
-    /// </summary>
-    private static string ResolvePatientPaymentStatus(decimal? paidAmount, decimal? totalAmount, string? status)
-    {
-        var normalized = (status ?? "").Trim().ToUpperInvariant();
-        if (normalized == "CANCELLED") return "CANCELLED";
-
-        var paid = paidAmount ?? 0m;
-        var total = totalAmount ?? 0m;
-
-        if (total > 0m && paid >= total - 0.01m) return "PAID";
-        if (paid > 0m) return "PARTIAL";
-
-        // No amount captured yet — fall back to a recognised paid synonym so a
-        // manually-marked invoice still unblocks the payout.
-        if (normalized is "PAID" or "COMPLETED" or "SETTLED") return "PAID";
-        if (normalized == "PARTIAL") return "PARTIAL";
-        return "PENDING";
     }
 }

@@ -1,4 +1,5 @@
 using System;
+using _1Rad.Domain.Exceptions;
 using System.Threading;
 using System.Threading.Tasks;
 using _1Rad.Application.Features.Approvals.Commands.ReviewApproval;
@@ -58,7 +59,7 @@ public class ReferralCommissionIntegrityHandlerTests : BaseHandlerTest
         await Context.SaveChangesAsync();
 
         var handler = new UpdateReferralCommissionCommandHandler(Context);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => handler.Handle(
+        await Assert.ThrowsAsync<BusinessRuleViolationException>(() => handler.Handle(
             new UpdateReferralCommissionCommand(commission.Id, 300m, "CT", null, null, "UNPAID"),
             CancellationToken.None));
     }
@@ -80,7 +81,7 @@ public class ReferralCommissionIntegrityHandlerTests : BaseHandlerTest
         await Context.SaveChangesAsync();
 
         var handler = new UpdateReferralCommissionStatusCommandHandler(Context);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => handler.Handle(
+        await Assert.ThrowsAsync<BusinessRuleViolationException>(() => handler.Handle(
             new UpdateReferralCommissionStatusCommand(commission.Id, "UNPAID"),
             CancellationToken.None));
     }
@@ -102,7 +103,7 @@ public class ReferralCommissionIntegrityHandlerTests : BaseHandlerTest
         await Context.SaveChangesAsync();
 
         var handler = new UpdateReferralCommissionStatusCommandHandler(Context);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => handler.Handle(
+        await Assert.ThrowsAsync<BusinessRuleViolationException>(() => handler.Handle(
             new UpdateReferralCommissionStatusCommand(commission.Id, "CANCELLED"),
             CancellationToken.None));
     }

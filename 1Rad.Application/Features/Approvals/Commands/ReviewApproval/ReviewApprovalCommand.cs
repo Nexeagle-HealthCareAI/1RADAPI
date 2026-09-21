@@ -412,7 +412,9 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
                     Modality = c.Modality,
                     PatientName = c.PatientName,
                     AppointmentId = c.AppointmentId,
-                    AppointmentServiceId = c.AppointmentServiceId,
+                    // Detached — the cancelled original keeps the service id (only one live
+                    // commission per appointment service is allowed by migration 89).
+                    AppointmentServiceId = null,
                     ReferenceNumber = c.ReferenceNumber,
                     CommissionAmount = -paidAmount,
                     Status = "UNPAID",

@@ -1,4 +1,5 @@
 using _1Rad.Application.Common;
+using _1Rad.Domain.Exceptions;
 using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Entities;
 using MediatR;
@@ -32,7 +33,7 @@ public class RecordReferralCommissionCommandHandler : IRequestHandler<RecordRefe
             .FirstOrDefaultAsync(r => r.ReferrerId == request.ReferrerId, cancellationToken);
 
         if (referrer == null)
-            throw new Exception($"TACTICAL FAILURE: Referrer identity [{request.ReferrerId}] not recognized in global registry for current facility.");
+            throw new NotFoundException($"Referrer identity [{request.ReferrerId}] was not found for this facility.");
 
         var hospitalId = _context.UserContext.HospitalId;
         if (hospitalId == Guid.Empty)
@@ -49,13 +50,13 @@ public class RecordReferralCommissionCommandHandler : IRequestHandler<RecordRefe
         }
 
         if (commission != null)
-            throw new InvalidOperationException("A commission already exists for this reference. Use the approved commission adjustment workflow.");
+            throw new BusinessRuleViolationException("A commission already exists for this reference. Use the approved commission adjustment workflow.");
 
         if (request.Amount <= 0)
-            throw new ArgumentException("Commission amount must be greater than zero.", nameof(request.Amount));
+            throw new ValidationException("Commission amount must be greater than zero.");
 
         if (string.Equals(request.Status, "PAID", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("New commissions must start as UNPAID and be marked paid through the payout workflow.");
+            throw new BusinessRuleViolationException("New commissions must start as UNPAID and be marked paid through the payout workflow.");
 
         var amount = request.Amount;
 

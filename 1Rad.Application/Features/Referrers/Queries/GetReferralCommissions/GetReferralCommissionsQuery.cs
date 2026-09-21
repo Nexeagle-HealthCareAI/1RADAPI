@@ -150,9 +150,12 @@ public class GetReferralCommissionsQueryHandler : IRequestHandler<GetReferralCom
                     .FirstOrDefault(),
                 // Match the commission to its invoice (AppointmentId first, then the
                 // display InvoiceId stored in ReferenceNumber).
+                // Soft-deleted invoices are ignored: one that carried the highest PaidAmount
+                // used to be picked, wrongly unblocking (or blocking) the payout.
                 Invoice = _context.Invoices
-                    .Where(i => (c.AppointmentId != null && i.AppointmentId == c.AppointmentId)
-                                || (c.ReferenceNumber != null && i.InvoiceId == c.ReferenceNumber))
+                    .Where(i => i.DeletedAt == null
+                                && ((c.AppointmentId != null && i.AppointmentId == c.AppointmentId)
+                                    || (c.ReferenceNumber != null && i.InvoiceId == c.ReferenceNumber)))
                     .OrderByDescending(i => i.PaidAmount)
                     .Select(i => new { i.PaidAmount, i.TotalAmount, i.Status })
                     .FirstOrDefault()
@@ -182,7 +185,7 @@ public class GetReferralCommissionsQueryHandler : IRequestHandler<GetReferralCom
                 x.PatientDetails?.Gender,
                 x.PatientDetails?.Mobile,
                 x.ServiceName,
-                ResolvePatientPaymentStatus(x.Invoice?.PaidAmount, x.Invoice?.TotalAmount, x.Invoice?.Status),
+                PatientPaymentStatus.Resolve(x.Invoice?.PaidAmount, x.Invoice?.TotalAmount, x.Invoice?.Status),
                 x.Commission.UpdatedAt,
                 x.Commission.DeletedAt,
                 x.Commission.PayeeName,
@@ -193,25 +196,5 @@ public class GetReferralCommissionsQueryHandler : IRequestHandler<GetReferralCom
                 x.Commission.AppointmentServiceId
             );
         }).ToList();
-    }
-
-    /// <summary>
-    /// Normalises an invoice's collection state into PAID / PARTIAL / PENDING.
-    /// Amounts are the source of truth; the stored status is only a tie-breaker.
-    /// </summary>
-    private static string ResolvePatientPaymentStatus(decimal? paidAmount, decimal? totalAmount, string? status)
-    {
-        var normalized = (status ?? "").Trim().ToUpperInvariant();
-        if (normalized == "CANCELLED") return "CANCELLED";
-
-        var paid = paidAmount ?? 0m;
-        var total = totalAmount ?? 0m;
-
-        if (total > 0m && paid >= total - 0.01m) return "PAID";
-        if (paid > 0m) return "PARTIAL";
-
-        if (normalized is "PAID" or "COMPLETED" or "SETTLED") return "PAID";
-        if (normalized == "PARTIAL") return "PARTIAL";
-        return "PENDING";
     }
 }

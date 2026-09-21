@@ -1,4 +1,5 @@
 using System;
+using _1Rad.Domain.Exceptions;
 using System.Threading;
 using System.Threading.Tasks;
 using _1Rad.Application.Common;
@@ -26,10 +27,10 @@ public class UnmergeReferrerCommandHandler : IRequestHandler<UnmergeReferrerComm
             .FirstOrDefaultAsync(r => r.ReferrerId == request.SourceReferrerId && r.HospitalId == hospitalId, ct);
             
         if (source == null || source.DeletedAt != null)
-            throw new ArgumentException("Duplicate partner not found or is deleted.");
+            throw new NotFoundException("Duplicate partner not found or is deleted.");
 
         if (source.MergedIntoId == null)
-            throw new ArgumentException("This partner is not currently merged into another.");
+            throw new ValidationException("This partner is not currently merged into another.");
 
         // Revert Virtual Merge
         source.MergedIntoId = null;
