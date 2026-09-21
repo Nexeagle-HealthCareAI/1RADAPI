@@ -14,6 +14,7 @@ using _1Rad.Application.Features.Referrers.Commands.RecordReferralCommission;
 using _1Rad.Application.Features.Referrers.Commands.RecordReferralCommissions;
 using _1Rad.Application.Features.Referrers.Commands.PayReferralCommissions;
 using _1Rad.Application.Features.Referrers.Commands.RevokeReferralLinks;
+using _1Rad.Application.Features.Referrers.Queries.GetReferralLinkStatus;
 using _1Rad.Application.Common;
 using _1Rad.Application.Features.Referrers.Commands.WriteOffReferralDeficit;
 using _1Rad.Application.Features.Referrers.Commands.UpdateReferralCommission;
@@ -99,6 +100,15 @@ public class ReferrersController : ControllerBase
         var versions = await ReferralLinkVersions.GetAsync(_context, allowed, HttpContext.RequestAborted);
         var links = allowed.Select(id => new { referrerId = id, token = _referralTokens.Issue(id, versions.GetValueOrDefault(id)) });
         return Ok(new { success = true, links });
+    }
+
+    // Per-partner link state for the Doctor Links tab: when a link was last sent, over
+    // which channel, when it expires, and whether it renews automatically.
+    [HttpGet("link-status")]
+    public async Task<IActionResult> GetLinkStatus()
+    {
+        var result = await _mediator.Send(new GetReferralLinkStatusQuery());
+        return Ok(result);
     }
 
     // Pull back every portal link ever issued for this partner (and any partner merged

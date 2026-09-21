@@ -98,6 +98,8 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.ToTable("ReferrerLinkVersions", "dbo");
             entity.HasKey(e => e.ReferrerId);
             entity.Property(e => e.ReferrerId).ValueGeneratedNever();
+            entity.Property(e => e.LastSentChannel).HasMaxLength(16);
+            entity.Property(e => e.LastSentBaseUrl).HasMaxLength(300);
         });
 
         // User Configuration

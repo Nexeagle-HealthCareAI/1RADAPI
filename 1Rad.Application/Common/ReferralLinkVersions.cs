@@ -35,8 +35,33 @@ public static class ReferralLinkVersions
 /// CURRENT link version — so a revoked link fails even though its signature and
 /// expiry are still good.
 /// </summary>
+public enum ReferralLinkState
+{
+    Valid,
+    /// <summary>Genuine, current-version link that simply ran out - the doctor may request a fresh one.</summary>
+    Expired,
+    /// <summary>Malformed, forged, for someone else, or revoked/replaced.</summary>
+    Invalid,
+}
+
 public static class ReferralLinkAccess
 {
+    public static async Task<ReferralLinkState> CheckAsync(
+        IApplicationDbContext context, IReferralLinkTokenService tokens, string? token, Guid referrerId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(token)) return ReferralLinkState.Invalid;
+        var version = await ReferralLinkVersions.GetOneAsync(context, referrerId, ct);
+        if (tokens.Validate(token, referrerId, version)) return ReferralLinkState.Valid;
+
+        // Not valid - but is it merely EXPIRED? (signed by us, this partner, current version)
+        return tokens.TryReadClaims(token, out var claims)
+               && claims.ReferrerId == referrerId
+               && claims.Version == version
+               && claims.IsExpired(DateTime.UtcNow)
+            ? ReferralLinkState.Expired
+            : ReferralLinkState.Invalid;
+    }
+
     public static async Task<bool> IsValidAsync(
         IApplicationDbContext context, IReferralLinkTokenService tokens, string? token, Guid referrerId, CancellationToken ct)
     {
