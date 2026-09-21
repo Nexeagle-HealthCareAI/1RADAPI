@@ -49,6 +49,7 @@ public interface IApplicationDbContext
     DbSet<StaffLeaveRequest> StaffLeaveRequests { get; }
     DbSet<ApprovalRequest> ApprovalRequests { get; }
     DbSet<RadAiQuestionLog> RadAiQuestionLogs { get; }
+    DbSet<ReferrerLinkVersion> ReferrerLinkVersions { get; }
     IUserContext UserContext { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken);

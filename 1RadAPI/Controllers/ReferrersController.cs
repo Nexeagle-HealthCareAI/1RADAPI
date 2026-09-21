@@ -13,6 +13,8 @@ using _1Rad.Application.Features.Referrers.Commands.DeleteReferrer;
 using _1Rad.Application.Features.Referrers.Commands.RecordReferralCommission;
 using _1Rad.Application.Features.Referrers.Commands.RecordReferralCommissions;
 using _1Rad.Application.Features.Referrers.Commands.PayReferralCommissions;
+using _1Rad.Application.Features.Referrers.Commands.RevokeReferralLinks;
+using _1Rad.Application.Common;
 using _1Rad.Application.Features.Referrers.Commands.WriteOffReferralDeficit;
 using _1Rad.Application.Features.Referrers.Commands.UpdateReferralCommission;
 using _1Rad.Application.Features.Referrers.Commands.UpdateReferralCommissionStatus;
@@ -79,7 +81,8 @@ public class ReferrersController : ControllerBase
         var hospitalId = _context.UserContext.HospitalId;
         var exists = await _context.Referrers.AnyAsync(r => r.ReferrerId == id && r.HospitalId == hospitalId && r.DeletedAt == null);
         if (!exists) return NotFound(new { success = false, error = "Partner not found." });
-        return Ok(new { success = true, referrerId = id, token = _referralTokens.Issue(id) });
+        var version = await ReferralLinkVersions.GetOneAsync(_context, id, HttpContext.RequestAborted);
+        return Ok(new { success = true, referrerId = id, token = _referralTokens.Issue(id, version) });
     }
 
     // Mint tokens for several referrers at once (bulk copy / WhatsApp).
@@ -93,8 +96,19 @@ public class ReferrersController : ControllerBase
             .Where(r => requested.Contains(r.ReferrerId) && r.HospitalId == hospitalId && r.DeletedAt == null)
             .Select(r => r.ReferrerId)
             .ToListAsync();
-        var links = allowed.Select(id => new { referrerId = id, token = _referralTokens.Issue(id) });
+        var versions = await ReferralLinkVersions.GetAsync(_context, allowed, HttpContext.RequestAborted);
+        var links = allowed.Select(id => new { referrerId = id, token = _referralTokens.Issue(id, versions.GetValueOrDefault(id)) });
         return Ok(new { success = true, links });
+    }
+
+    // Pull back every portal link ever issued for this partner (and any partner merged
+    // into them): a forwarded message, a lost phone, a doctor who left. Old links stop
+    // working immediately; links minted afterwards (copy / email / WhatsApp) work.
+    [HttpPost("{id:guid}/revoke-links")]
+    public async Task<IActionResult> RevokeLinks(Guid id)
+    {
+        var result = await _mediator.Send(new RevokeReferralLinksCommand(id));
+        return Ok(result);
     }
 
     // Email each named referrer their personal portal link.

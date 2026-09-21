@@ -7,14 +7,16 @@ using Microsoft.Extensions.Configuration;
 namespace _1Rad.Infrastructure.Services;
 
 // HMAC-SHA256 signed capability token for the public doctor-referral portal.
-//   payload   = referrerId (16 bytes) || expUnixSeconds (8 bytes, BE)
+//   payload   = referrerId (16 bytes) || expUnixSeconds (8 bytes, BE) || version (4 bytes, BE)
+//               (legacy 24-byte payloads — issued before versions existed — are read as version 0)
 //   signature = HMAC-SHA256(key=Jwt:Secret, DOMAIN || payload)
 //   wire      = base64url(payload) + "." + base64url(signature)
 // The DOMAIN tag domain-separates these from /track tokens — a tracking token's
 // signature will never validate as a referral token.
 public class ReferralLinkTokenService : IReferralLinkTokenService
 {
-    private const int PayloadSize = 24; // 16 (Guid) + 8 (exp)
+    private const int LegacyPayloadSize = 24; // 16 (Guid) + 8 (exp)         — version 0
+    private const int PayloadSize = 28;       // 16 (Guid) + 8 (exp) + 4 (version)
     private static readonly byte[] Domain = Encoding.ASCII.GetBytes("REFERRAL_LINK_V1");
     private static readonly TimeSpan DefaultTtl = TimeSpan.FromDays(365);
 
@@ -31,16 +33,17 @@ public class ReferralLinkTokenService : IReferralLinkTokenService
         _key = Encoding.UTF8.GetBytes(secret);
     }
 
-    public string Issue(Guid referrerId, TimeSpan? ttl = null)
+    public string Issue(Guid referrerId, int version = 0, TimeSpan? ttl = null)
     {
         var expUnix = DateTimeOffset.UtcNow.Add(ttl ?? DefaultTtl).ToUnixTimeSeconds();
         var payload = new byte[PayloadSize];
         referrerId.TryWriteBytes(payload.AsSpan(0, 16));
         BinaryPrimitives.WriteInt64BigEndian(payload.AsSpan(16, 8), expUnix);
+        BinaryPrimitives.WriteInt32BigEndian(payload.AsSpan(24, 4), version);
         return $"{B64(payload)}.{B64(Hmac(payload))}";
     }
 
-    public bool Validate(string token, Guid expectedReferrerId)
+    public bool Validate(string token, Guid expectedReferrerId, int currentVersion)
     {
         if (string.IsNullOrWhiteSpace(token)) return false;
         var parts = token.Split('.');
@@ -50,9 +53,14 @@ public class ReferralLinkTokenService : IReferralLinkTokenService
         try { payload = UnB64(parts[0]); sig = UnB64(parts[1]); }
         catch { return false; }
 
-        if (payload.Length != PayloadSize) return false;
+        if (payload.Length != PayloadSize && payload.Length != LegacyPayloadSize) return false;
         if (!CryptographicOperations.FixedTimeEquals(Hmac(payload), sig)) return false;
         if (new Guid(payload.AsSpan(0, 16)) != expectedReferrerId) return false;
+
+        // A token is only good while it matches the partner's CURRENT link version;
+        // a legacy (24-byte) token is version 0.
+        var tokenVersion = payload.Length == PayloadSize ? BinaryPrimitives.ReadInt32BigEndian(payload.AsSpan(24, 4)) : 0;
+        if (tokenVersion != currentVersion) return false;
 
         var exp = DateTimeOffset.FromUnixTimeSeconds(BinaryPrimitives.ReadInt64BigEndian(payload.AsSpan(16, 8)));
         return DateTimeOffset.UtcNow < exp;
