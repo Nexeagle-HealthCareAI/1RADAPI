@@ -125,6 +125,28 @@ public class SourceAnalyticsSummaryTests : BaseHandlerTest
         Assert.Equal(1, drA.Modalities["XRAY"]);
     }
 
+    [Fact]
+    public async Task WhatIsStillOwed_IsBrokenDownByScanType_AndAddsUpToTheUnpaidFigure()
+    {
+        var dr = AddReferrer("DR OWED");
+        Context.ReferralCommissions.AddRange(
+            new ReferralCommission { ReferrerId = dr.ReferrerId, ReferrerName = "DR OWED", HospitalId = HospitalId, Modality = "ct", CommissionAmount = 300m, Status = "UNPAID", TransactionDate = Day, ServiceDate = Day },
+            new ReferralCommission { ReferrerId = dr.ReferrerId, ReferrerName = "DR OWED", HospitalId = HospitalId, Modality = "CT", CommissionAmount = 200m, Status = "UNPAID", TransactionDate = Day, ServiceDate = Day },
+            new ReferralCommission { ReferrerId = dr.ReferrerId, ReferrerName = "DR OWED", HospitalId = HospitalId, Modality = "USG", CommissionAmount = 150m, Status = "UNPAID", TransactionDate = Day, ServiceDate = Day },
+            new ReferralCommission { ReferrerId = dr.ReferrerId, ReferrerName = "DR OWED", HospitalId = HospitalId, Modality = "USG", CommissionAmount = 400m, Status = "PAID", TransactionDate = Day, ServiceDate = Day },       // settled: not owed
+            new ReferralCommission { ReferrerId = dr.ReferrerId, ReferrerName = "DR OWED", HospitalId = HospitalId, Modality = "XRAY", CommissionAmount = -50m, Status = "UNPAID", TransactionDate = Day, ServiceDate = Day },     // a deficit nets off
+            new ReferralCommission { ReferrerId = dr.ReferrerId, ReferrerName = "DR OWED", HospitalId = HospitalId, Modality = "", CommissionAmount = 25m, Status = "UNPAID", TransactionDate = Day, ServiceDate = Day });          // no scan type recorded
+        await Context.SaveChangesAsync();
+
+        var node = Assert.Single(await Run(new GetReferralIntelligenceQuery(SummaryOnly: true)), n => n.SourceKey == dr.ReferrerId.ToString());
+
+        Assert.Equal(500m, node.UnpaidByModality!["CT"]);      // casing is folded
+        Assert.Equal(150m, node.UnpaidByModality["USG"]);      // the PAID 400 is not owed
+        Assert.Equal(-50m, node.UnpaidByModality["XRAY"]);
+        Assert.Equal(25m, node.UnpaidByModality["OTHER"]);
+        Assert.Equal(node.UnpaidCommission, node.UnpaidByModality.Values.Sum());
+    }
+
     // ── the drill-down ──────────────────────────────────────────────────────────
 
     [Fact]
