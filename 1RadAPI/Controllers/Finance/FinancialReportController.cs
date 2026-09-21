@@ -56,7 +56,7 @@ public class FinancialReportController : ControllerBase
             StartDate = startDate,
             EndDate = endDate
         });
-        var fileName = $"1Rad_Financials_{DateTime.Now:yyyyMMdd}.xlsx";
+        var fileName = $"1RadFlow_Financials_{DateTime.Now:yyyyMMdd}.xlsx";
         return File(result, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", fileName);
     }
 

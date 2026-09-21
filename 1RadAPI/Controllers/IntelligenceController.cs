@@ -32,7 +32,7 @@ public class IntelligenceController : ControllerBase
     public async Task<FileResult> GetIntelligenceExport([FromQuery] DateTime? startDate, [FromQuery] DateTime? endDate, [FromQuery] bool allTime = false)
     {
         var fileContent = await _mediator.Send(new ExportReferralIntelligenceQuery(startDate, endDate, allTime));
-        var fileName = $"1Rad_Intelligence_{DateTime.Now:yyyyMMdd_HHmm}.xlsx";
+        var fileName = $"1RadFlow_Intelligence_{DateTime.Now:yyyyMMdd_HHmm}.xlsx";
         return File(fileContent, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", fileName);
     }
 }
