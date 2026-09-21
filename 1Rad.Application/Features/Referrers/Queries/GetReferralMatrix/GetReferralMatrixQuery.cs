@@ -10,12 +10,14 @@ using Microsoft.EntityFrameworkCore;
 
 namespace _1Rad.Application.Features.Referrers.Queries.GetReferralMatrix;
 
+/// <param name="Kind">PARTNER | SELF | UNLINKED | UNATTRIBUTED - same vocabulary as the Source Analytics query.</param>
 public record MatrixRowDto(
     Guid ReferrerId,
     string Name,
     string Contact,
     int Total,
-    Dictionary<string, int> Counts
+    Dictionary<string, int> Counts,
+    string Kind = "PARTNER"
 );
 
 public record ReferralMatrixDto(
@@ -125,79 +127,60 @@ public class GetReferralMatrixQueryHandler : IRequestHandler<GetReferralMatrixQu
             };
         }
 
-        // The window above is in IST calendar terms; stored timestamps are UTC. Compare
-        // against the UTC instants of those IST boundaries, and bucket each visit by its
-        // IST wall-clock time below — using the UTC hour/day put an evening visit in the
-        // wrong slot (Morning/Afternoon/Evening) or on the next day's column.
+        // The window above is in IST calendar terms; stored timestamps are UTC. Compare against the
+        // UTC instants of those IST boundaries, and bucket each visit by its IST wall-clock time
+        // below - using the UTC hour/day put an evening visit in the wrong slot (Morning /
+        // Afternoon / Evening) or on the next day's column.
         var startUtc = IstDateRange.ToUtcStart(startDate);
         var endUtc = IstDateRange.ToUtcEndInclusive(endDate);
-        var query = _context.Appointments
+
+        var visits = await _context.Appointments
             .AsNoTracking()
-            .Include(a => a.Patient)
-            .ThenInclude(p => p.Referrer)
-            .Where(a => a.Patient.ReferrerId != null)
             // Cancelled visits don't count toward referral volume.
             .Where(a => a.Status != "CANCELLED")
-            .Where(a => a.DateTime >= startUtc && a.DateTime <= endUtc);
-
-        if (!string.IsNullOrWhiteSpace(request.SearchQuery))
-        {
-            var searchLow = request.SearchQuery.ToLower();
-            query = query.Where(a => a.Patient.Referrer.Name.ToLower().Contains(searchLow));
-        }
-
-        var appointments = await query
-            .Select(a => new
-            {
-                ReferrerId = a.Patient.ReferrerId,
-                ReferrerName = a.Patient.Referrer.Name,
-                ReferrerContact = a.Patient.Referrer.Contact,
-                a.DateTime
-            })
+            .Where(a => a.DateTime >= startUtc && a.DateTime <= endUtc)
+            .Select(a => new { a.DateTime, a.Status, a.ArrivedAt, a.ReferredBy, PatientReferrerId = a.Patient.ReferrerId })
             .ToListAsync(cancellationToken);
 
-        // Duplicates merged into a primary partner roll up under it (the Referrals
-        // screen does the same); Self / walk-in is not a partner and is left out.
-        var registry = await _context.Referrers.AsNoTracking()
-            .Select(r => new { r.ReferrerId, r.Name, r.Contact, r.MergedIntoId })
-            .ToListAsync(cancellationToken);
-        var refById = registry.ToDictionary(r => r.ReferrerId);
-        Guid Root(Guid id)
-        {
-            var seen = new HashSet<Guid>();
-            while (refById.TryGetValue(id, out var n) && n.MergedIntoId.HasValue && seen.Add(id)) id = n.MergedIntoId.Value;
-            return id;
-        }
+        // Same attribution and the same "the patient actually arrived" rule as Source Analytics, so
+        // the two tabs can never report different volumes for the same visits. Duplicates merged
+        // into a primary partner roll up under it; Self, unlinked names and visits with no
+        // referrer each get their own row instead of being dropped.
+        var attribution = new ReferralAttribution(
+            (await _context.Referrers.AsNoTracking()
+                .Select(r => new { r.ReferrerId, r.MergedIntoId, r.Name, r.Contact, r.Address, r.DeletedAt })
+                .ToListAsync(cancellationToken))
+            .Select(r => new ReferralAttribution.Entry(r.ReferrerId, r.MergedIntoId, r.Name, r.Contact, r.Address, r.DeletedAt)));
 
-        var rows = appointments
-            .Where(p => !NameNormalizer.SameName(p.ReferrerName, "Self"))
-            .GroupBy(p => Root(p.ReferrerId!.Value))
+        var searchLow = (request.SearchQuery ?? string.Empty).Trim().ToLowerInvariant();
+
+        var rows = visits
+            .Where(v => AppointmentAttendance.IsAttended(v.Status, v.ArrivedAt))
+            .Select(v => new { Source = attribution.Attribute(v.ReferredBy, v.PatientReferrerId), v.DateTime })
+            .Where(v => searchLow.Length == 0 || v.Source.DisplayName.ToLowerInvariant().Contains(searchLow))
+            .GroupBy(v => v.Source.Key)
             .Select(g =>
             {
+                var src = g.First().Source;
                 var counts = cols.ToDictionary(c => c, c => 0);
                 int total = 0;
-
-                foreach (var p in g)
+                foreach (var v in g)
                 {
-                    var key = getColKey(IstDateRange.ToIst(p.DateTime));
-                    if (key != null && counts.ContainsKey(key))
-                    {
-                        counts[key]++;
-                        total++;
-                    }
+                    var key = getColKey(IstDateRange.ToIst(v.DateTime));
+                    if (key != null && counts.ContainsKey(key)) { counts[key]++; total++; }
                 }
-
-                var primary = refById.TryGetValue(g.Key, out var pr) ? pr : null;
+                var root = src.Kind == SourceKind.Partner ? attribution.RootEntry(src.RootId) : null;
                 return new MatrixRowDto(
-                    g.Key,
-                    primary?.Name ?? g.First().ReferrerName,
-                    primary?.Contact ?? g.First().ReferrerContact ?? "N/A",
+                    src.Kind == SourceKind.Partner ? src.RootId : Guid.Empty,
+                    src.DisplayName,
+                    root?.Contact ?? string.Empty,
                     total,
-                    counts
-                );
+                    counts,
+                    src.Kind switch { SourceKind.Partner => "PARTNER", SourceKind.Self => "SELF", SourceKind.Unlinked => "UNLINKED", _ => "UNATTRIBUTED" });
             })
             .Where(r => r.Total > 0)
             .OrderByDescending(r => r.Total)
+            .ThenBy(r => r.Name)
             .ToList();
 
         return new ReferralMatrixDto(cols, rows);
