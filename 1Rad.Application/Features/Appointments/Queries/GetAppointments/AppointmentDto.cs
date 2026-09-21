@@ -36,7 +36,11 @@ public record AppointmentSummaryDto(
     DateTime? DeletedAt = null,
     decimal Amount = 0,
     decimal ReferralCutValue = 0,
-    int AssetCount = 0
+    int AssetCount = 0,
+    // Per-service lines for the visit — same shape as the single-record
+    // AppointmentDto.Services, so worklist rows can render per-service
+    // status/notes without a second fetch per row.
+    IReadOnlyList<AppointmentServiceDto>? Services = null
 );
 
 public record AppointmentDto(

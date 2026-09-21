@@ -20,7 +20,14 @@ public record GetAppointmentsQuery(
     int PageSize = 0,
     string? Cursor = null,
     string? Modality = null,
-    string? Doctor = null) : IRequest<PagedAppointmentResult>;
+    string? Doctor = null,
+    // Upper bound (inclusive, whole IST day) to pair with StartDate — lets a
+    // client ask for exactly one day, or a closed date range.
+    DateTime? EndDate = null,
+    // Worklist window: visits on/after this day, PLUS any older visit that is
+    // not yet in a finalized status (CANCELLED/DELIVERED). See
+    // AppointmentQueryExtensions.ApplyWorklistFilters.
+    DateTime? ActiveSince = null) : IRequest<PagedAppointmentResult>;
 
 public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery, PagedAppointmentResult>
 {
@@ -40,10 +47,23 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
                 return new PagedAppointmentResult();
             }
 
+            // For delta polling (UpdatedAfter): visits whose service lines
+            // changed since then, even if the parent row itself didn't.
+            IQueryable<Guid>? serviceChangedIds = null;
+            if (request.UpdatedAfter.HasValue)
+            {
+                var since = request.UpdatedAfter.Value;
+                var hospitalIdForServices = _context.UserContext.HospitalId;
+                serviceChangedIds = _context.AppointmentServices
+                    .AsNoTracking()
+                    .Where(s => s.HospitalId == hospitalIdForServices && s.UpdatedAt > since)
+                    .Select(s => s.AppointmentId);
+            }
+
             var query = _context.Appointments
                 .AsNoTracking()
                 .Include(a => a.Patient)
-                .ApplyWorklistFilters(request, _context.UserContext.HospitalId);
+                .ApplyWorklistFilters(request, _context.UserContext.HospitalId, serviceChangedIds);
 
             // ── Keyset cursor decode ─────────────────────────────────────────
             bool usePaging = request.PageSize > 0 && !request.IncludeDeleted && !request.UpdatedAfter.HasValue;
@@ -143,6 +163,40 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
                 var last = rawResults[summaryList.Count()].Appointment;
                 var raw = $"{last.DateTime.Ticks}|{last.AppointmentId}";
                 nextCursor = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(raw));
+            }
+
+            // Attach per-service lines (batched, one query for the whole page) so
+            // list rows carry the same Services shape the single-record fetch
+            // does. Previously the worklist DTO had none, so boards that show
+            // per-service pills/status only ever had them if a full record
+            // happened to have been fetched and cached earlier.
+            if (summaryList.Count > 0)
+            {
+                var pageIds = summaryList.Select(s => s.AppointmentId).ToList();
+                var servicesByAppointment = (await _context.AppointmentServices
+                        .AsNoTracking()
+                        .Where(s => pageIds.Contains(s.AppointmentId) && s.DeletedAt == null)
+                        .OrderBy(s => s.UpdatedAt)
+                        .Select(s => new
+                        {
+                            s.AppointmentId,
+                            Dto = new AppointmentServiceDto(
+                                s.Id, s.ServiceName, s.Modality, s.Amount, s.ReferralCutValue, s.Status,
+                                s.ScanStartedAt, s.ScanCompletedAt, s.ReportedAt, s.DeliveredAt, s.CancelledAt,
+                                s.TechnicianId, s.ServiceChargeId, s.UpdatedAt, s.TechnicianComments)
+                        })
+                        .ToListAsync(cancellationToken))
+                    .GroupBy(x => x.AppointmentId)
+                    .ToDictionary(g => g.Key, g => (IReadOnlyList<AppointmentServiceDto>)g.Select(x => x.Dto).ToList());
+
+                summaryList = summaryList
+                    .Select(s => s with
+                    {
+                        Services = servicesByAppointment.TryGetValue(s.AppointmentId, out var lines)
+                            ? lines
+                            : Array.Empty<AppointmentServiceDto>()
+                    })
+                    .ToList();
             }
 
             return new PagedAppointmentResult

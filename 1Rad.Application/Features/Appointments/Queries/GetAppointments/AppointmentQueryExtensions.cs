@@ -8,7 +8,8 @@ public static class AppointmentQueryExtensions
     public static IQueryable<Appointment> ApplyWorklistFilters(
         this IQueryable<Appointment> query,
         GetAppointmentsQuery request,
-        Guid hospitalId)
+        Guid hospitalId,
+        IQueryable<Guid>? serviceChangedAppointmentIds = null)
     {
         query = query.Where(a => a.HospitalId == hospitalId);
 
@@ -25,7 +26,14 @@ public static class AppointmentQueryExtensions
         if (request.UpdatedAfter.HasValue)
         {
             var since = request.UpdatedAfter.Value;
-            query = query.Where(a => a.UpdatedAt > since);
+            // A per-service edit (technician notes, a service's scan status)
+            // only bumps that AppointmentService row's own UpdatedAt, not the
+            // parent visit's — so a client polling for "what changed" by the
+            // parent's UpdatedAt alone would never see it. The handler passes
+            // in the visit ids whose service lines changed since `since`.
+            query = serviceChangedAppointmentIds != null
+                ? query.Where(a => a.UpdatedAt > since || serviceChangedAppointmentIds.Contains(a.AppointmentId))
+                : query.Where(a => a.UpdatedAt > since);
         }
 
         if (request.StartDate.HasValue)
@@ -33,6 +41,26 @@ public static class AppointmentQueryExtensions
             // A bare "YYYY-MM-DD" (see IstDateRange) — not to be confused with
             // UpdatedAfter above, which is already a precise UTC instant.
             query = query.Where(a => a.DateTime >= IstDateRange.ToUtcStart(request.StartDate.Value));
+        }
+
+        if (request.EndDate.HasValue)
+        {
+            // Inclusive of the whole IST day named by EndDate.
+            query = query.Where(a => a.DateTime <= IstDateRange.ToUtcEndInclusive(request.EndDate.Value));
+        }
+
+        if (request.ActiveSince.HasValue)
+        {
+            // "Everything still in play, plus anything recent" — the clinical
+            // worklists (Doctor/Technician boards) need visits from the last
+            // N days regardless of status AND any older visit that hasn't
+            // reached a finalized status yet, so an old STAT study nobody
+            // completed can't silently fall off the board.
+            var recentFrom = IstDateRange.ToUtcStart(request.ActiveSince.Value);
+            query = query.Where(a =>
+                a.DateTime >= recentFrom
+                || a.Status == null
+                || (a.Status.ToUpper() != "CANCELLED" && a.Status.ToUpper() != "DELIVERED"));
         }
 
         if (!string.IsNullOrEmpty(request.Modality) && request.Modality != "ALL")
