@@ -139,7 +139,7 @@ public class GetReferralMatrixQueryHandler : IRequestHandler<GetReferralMatrixQu
             // Cancelled visits don't count toward referral volume.
             .Where(a => a.Status != "CANCELLED")
             .Where(a => a.DateTime >= startUtc && a.DateTime <= endUtc)
-            .Select(a => new { a.DateTime, a.Status, a.ArrivedAt, a.ReferredBy, PatientReferrerId = a.Patient.ReferrerId })
+            .Select(a => new { a.DateTime, a.Status, a.ArrivedAt, a.ReferredBy, AppointmentReferrerId = a.ReferrerId, PatientReferrerId = a.Patient.ReferrerId })
             .ToListAsync(cancellationToken);
 
         // Same attribution and the same "the patient actually arrived" rule as Source Analytics, so
@@ -156,7 +156,7 @@ public class GetReferralMatrixQueryHandler : IRequestHandler<GetReferralMatrixQu
 
         var rows = visits
             .Where(v => AppointmentAttendance.IsAttended(v.Status, v.ArrivedAt))
-            .Select(v => new { Source = attribution.Attribute(v.ReferredBy, v.PatientReferrerId), v.DateTime })
+            .Select(v => new { Source = attribution.Attribute(v.ReferredBy, v.PatientReferrerId, v.AppointmentReferrerId), v.DateTime })
             .Where(v => searchLow.Length == 0 || v.Source.DisplayName.ToLowerInvariant().Contains(searchLow))
             .GroupBy(v => v.Source.Key)
             .Select(g =>

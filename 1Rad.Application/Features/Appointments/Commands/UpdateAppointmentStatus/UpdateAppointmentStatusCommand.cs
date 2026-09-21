@@ -318,10 +318,18 @@ public class UpdateAppointmentStatusCommandHandler : IRequestHandler<UpdateAppoi
             _context.Invoices.Add(invoice);
         }
 
-        // Resolve the referrer via the patient link set at booking.
+        // Resolve the referrer: the visit's own ReferrerId first, then the partner its
+        // ReferredBy name points at, and only then the patient's link. The commission must be
+        // credited to the same partner Source Analytics reports the visit under (same order as
+        // ReferralAttribution). It used to read only the patient's link, so a visit whose
+        // referrer was edited after booking paid the partner the PATIENT was first linked to.
         var patient = await _context.Patients
             .FirstOrDefaultAsync(p => p.PatientId == appointment.PatientId, ct);
-        Guid? referrerId = patient?.ReferrerId;
+        var visitReferrerId = appointment.ReferrerId
+            ?? await ReferrerLookup.FindIdByNameAsync(_context, appointment.HospitalId, appointment.ReferredBy, ct);
+        // Heal a visit that predates the id column so later reports/renames key on it.
+        if (appointment.ReferrerId == null && visitReferrerId != null) appointment.ReferrerId = visitReferrerId;
+        Guid? referrerId = visitReferrerId ?? patient?.ReferrerId;
         string? referrerName = appointment.ReferredBy;
         if (referrerId != null)
         {

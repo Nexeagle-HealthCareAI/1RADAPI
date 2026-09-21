@@ -348,6 +348,8 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
             Doctor = request.Doctor,
             Status = "scheduled",
             ReferredBy = referrer?.Name ?? NameNormalizer.Upper(request.ReferredBy),
+            // The partner's id, so a later rename of the partner cannot orphan this visit.
+            ReferrerId = referrer?.ReferrerId,
             ReferredContact = request.ReferredContact,
             // Per-appointment supporting doctor — only for an agent referral.
             SupportedByDoctor = request.ReferrerIsDoctor ? null : NameNormalizer.UpperOrNull(request.ReferrerSupportedByDoctor),

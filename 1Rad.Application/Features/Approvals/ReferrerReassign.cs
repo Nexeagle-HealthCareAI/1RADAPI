@@ -85,6 +85,7 @@ internal static class ReferrerReassign
 
         // Update the appointment's referral fields.
         appointment.ReferredBy = name;
+        appointment.ReferrerId = referrer.ReferrerId;
         if (!string.IsNullOrEmpty(contact)) appointment.ReferredContact = contact;
 
         // "Other person" (agent) → record the doctor they collect for. Doctors and

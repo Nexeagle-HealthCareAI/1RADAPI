@@ -23,9 +23,11 @@ public sealed record SourceRef(string Key, SourceKind Kind, string DisplayName, 
 /// land under different partners on different tabs.
 ///
 /// Rules, in order:
-///   1. The visit's own ReferredBy name wins. "Self" is the walk-in bucket; a name that
+///   0. The visit's own ReferrerId - the real key. It survives the partner being renamed
+///      (the name text on the visit does not), and it resolves to the partner's merge-root.
+///   1. Otherwise the visit's ReferredBy name: "Self" is the walk-in bucket; a name that
 ///      matches a partner record (live preferred over deleted) resolves to that partner's
-///      merge-root.
+///      merge-root. This is what rows without an id (imports, unmatched names) use.
 ///   2. Otherwise the patient's referrer link is used (ChangeReferrer re-points it, so it is
 ///      only a fallback).
 ///   3. A named referrer with no partner record is an UNLINKED source - kept separate and
@@ -77,9 +79,14 @@ public sealed class ReferralAttribution
         return root.ToString();
     }
 
-    public SourceRef Attribute(string? referredBy, Guid? patientReferrerId)
+    public SourceRef Attribute(string? referredBy, Guid? patientReferrerId, Guid? appointmentReferrerId = null)
     {
         var name = (referredBy ?? string.Empty).Trim();
+
+        // The visit's own key beats any text. An id that is not in this centre's registry
+        // (KeyForReferrer -> null) is ignored, exactly like a stale patient link.
+        if (appointmentReferrerId.HasValue && KeyForReferrer(appointmentReferrerId.Value) is { } idKey)
+            return FromKey(idKey);
 
         if (name.Length > 0)
         {

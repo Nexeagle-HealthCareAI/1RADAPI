@@ -92,8 +92,11 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
         if (toUtc.HasValue) appointmentsQuery = appointmentsQuery.Where(a => a.DateTime <= toUtc.Value);
         if (aliasIds != null && aliasNames != null)
         {
+            // A superset pre-filter (the exact partner is decided by attribution below): the
+            // visit's own ReferrerId, its name (rows with no id), or the patient's link.
             appointmentsQuery = appointmentsQuery.Where(a =>
-                (a.Patient.ReferrerId != null && aliasIds.Contains(a.Patient.ReferrerId.Value))
+                (a.ReferrerId != null && aliasIds.Contains(a.ReferrerId.Value))
+                || (a.Patient.ReferrerId != null && aliasIds.Contains(a.Patient.ReferrerId.Value))
                 || (a.ReferredBy != null && aliasNames.Contains(a.ReferredBy)));
         }
 
@@ -107,6 +110,7 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
                 a.Modality,
                 a.Service,
                 a.ReferredBy,
+                AppointmentReferrerId = a.ReferrerId,
                 PatientReferrerId = a.Patient.ReferrerId,
                 a.Patient.PatientId,
                 a.Patient.PatientIdentifier,
@@ -124,7 +128,7 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
             .Select(m => new
             {
                 Mission = m,
-                Source = attribution.Attribute(m.ReferredBy, m.PatientReferrerId),
+                Source = attribution.Attribute(m.ReferredBy, m.PatientReferrerId, m.AppointmentReferrerId),
                 Class = AppointmentAttendance.Classify(m.Status, m.ArrivedAt, m.DateTime, nowUtc),
             })
             .Where(x => filterKey == null || x.Source.Key == filterKey)

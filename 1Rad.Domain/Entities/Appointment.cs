@@ -26,6 +26,14 @@ public class Appointment : BaseEntity, IHospitalContext
     public string? Status { get; set; } // BOOKED, ARRIVED, IN_PROGRESS, COMPLETED, CANCELLED
     
     public string? ReferredBy { get; set; }
+    // The referring partner as a real key. ReferredBy is only the partner's NAME as it was
+    // when the visit was booked - renaming the partner used to orphan every earlier visit
+    // (they stopped matching any partner record). Reports resolve the partner from THIS id
+    // first and fall back to the name only for rows that have none (imports, hand-typed
+    // names that match no partner). Null for Self / walk-in and unlinked visits. Not a
+    // foreign key on purpose: a dangling id must never block anything, attribution simply
+    // falls through to the name. Backfilled by schema/94_appointment_referrer_id.sql.
+    public Guid? ReferrerId { get; set; }
     public string? ReferredContact { get; set; }
     // When ReferredBy is an agent (Referrer.IsDoctor = 0), the doctor THIS visit
     // is referred for. Stored per-appointment because an agent can refer for many

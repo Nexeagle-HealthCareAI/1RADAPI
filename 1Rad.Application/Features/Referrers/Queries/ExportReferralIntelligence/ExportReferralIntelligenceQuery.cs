@@ -69,6 +69,7 @@ public class ExportReferralIntelligenceQueryHandler : IRequestHandler<ExportRefe
             {
                 a.AppointmentId,
                 ReferredBy = a.ReferredBy,
+                a.ReferrerId,
                 PatientName = a.Patient != null ? (a.Patient.FullName ?? "Unknown") : "Unknown",
                 PatientID = a.DisplayId,
                 ParentModality = a.Modality,
@@ -89,11 +90,15 @@ public class ExportReferralIntelligenceQueryHandler : IRequestHandler<ExportRefe
         var idByName = new Dictionary<string, Guid>(StringComparer.OrdinalIgnoreCase);
         foreach (var r in registry.OrderBy(r => r.MergedIntoId != null).ThenBy(r => r.ReferrerId))
             if (!string.IsNullOrWhiteSpace(r.Name)) idByName.TryAdd(r.Name!.Trim(), r.ReferrerId);
-        string ReferrerLabel(string? referredBy)
+        string ReferrerLabel(string? referredBy, Guid? referrerId)
         {
             var name = (referredBy ?? string.Empty).Trim();
-            if (name.Length == 0) return "Direct / Walk-in";
-            if (!idByName.TryGetValue(name, out var id)) return name;
+            Guid id;
+            // The visit's own ReferrerId first: it still finds the partner after a rename,
+            // when the name text on the visit no longer matches any record.
+            if (referrerId.HasValue && byId.ContainsKey(referrerId.Value)) id = referrerId.Value;
+            else if (name.Length == 0) return "Direct / Walk-in";
+            else if (!idByName.TryGetValue(name, out id)) return name;
             var seen = new HashSet<Guid>();
             while (byId.TryGetValue(id, out var node) && node.MergedIntoId.HasValue && seen.Add(id)) id = node.MergedIntoId.Value;
             return byId.TryGetValue(id, out var root) && !string.IsNullOrWhiteSpace(root.Name) ? root.Name! : name;
@@ -117,7 +122,7 @@ public class ExportReferralIntelligenceQueryHandler : IRequestHandler<ExportRefe
             (serviceLines.TryGetValue(a.AppointmentId, out var lines) && lines.Count > 0)
                 ? lines.Select(l => new
                 {
-                    Referrer = ReferrerLabel(a.ReferredBy),
+                    Referrer = ReferrerLabel(a.ReferredBy, a.ReferrerId),
                     a.PatientName,
                     a.PatientID,
                     Modality = l.Modality,
@@ -128,7 +133,7 @@ public class ExportReferralIntelligenceQueryHandler : IRequestHandler<ExportRefe
                 })
                 : new[] { new
                 {
-                    Referrer = ReferrerLabel(a.ReferredBy),
+                    Referrer = ReferrerLabel(a.ReferredBy, a.ReferrerId),
                     a.PatientName,
                     a.PatientID,
                     Modality = a.ParentModality,
