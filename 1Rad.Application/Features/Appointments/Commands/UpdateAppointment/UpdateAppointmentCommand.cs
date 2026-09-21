@@ -209,7 +209,7 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             if (request.Village is not null) appointment.Patient.Village = NameNormalizer.Upper(request.Village);
             if (request.Block is not null) appointment.Patient.Block = NameNormalizer.Upper(request.Block);
             if (request.District is not null) appointment.Patient.District = NameNormalizer.Upper(request.District);
-            if (request.SourceOfInfo is not null) appointment.Patient.SourceOfInfo = request.SourceOfInfo;
+            if (request.SourceOfInfo is not null) appointment.Patient.SourceOfInfo = PatientSources.Canonicalize(request.SourceOfInfo);
         }
 
         // Load every live AppointmentService row on this visit. We reconcile

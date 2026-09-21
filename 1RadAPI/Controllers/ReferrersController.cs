@@ -1,4 +1,5 @@
 using _1Rad.Application.Features.Referrers.Queries.GetReferrers;
+using _1Rad.Application.Features.Referrers.Queries.GetPatientSourceBreakdown;
 using _1Rad.Application.Features.Referrers.Queries.GetReferralIntelligence;
 using _1Rad.Application.Features.Referrers.Queries.GetReferralMatrix;
 using _1Rad.Application.Features.Referrers.Queries.GetReferralCommissions;
@@ -158,6 +159,14 @@ public class ReferrersController : ControllerBase
     public async Task<IActionResult> GetIntelligence([FromQuery] DateTime? startDate, [FromQuery] DateTime? endDate, [FromQuery] Guid? referrerId)
     {
         var result = await _mediator.Send(new GetReferralIntelligenceQuery(startDate, endDate, referrerId));
+        return Ok(result);
+    }
+
+    /// <summary>How patients heard about the centre, totalled by channel (attended visits, IST days).</summary>
+    [HttpGet("acquisition-sources")]
+    public async Task<IActionResult> GetAcquisitionSources([FromQuery] DateTime? startDate, [FromQuery] DateTime? endDate)
+    {
+        var result = await _mediator.Send(new GetPatientSourceBreakdownQuery(startDate, endDate));
         return Ok(result);
     }
 

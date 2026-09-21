@@ -59,8 +59,15 @@ public class CreatePatientCommandHandler : IRequestHandler<CreatePatientCommand,
             existingPatient.Block = request.Block;
             existingPatient.District = request.District;
             existingPatient.Address = request.Address;
-            existingPatient.SourceOfInfo = request.SourceOfInfo;
-            existingPatient.ReferrerId = request.ReferrerId;
+            // Re-registering a known patient must not rewrite HOW THEY FIRST HEARD of the centre:
+            // the desk typically answers "Previous Patient" the second time, which used to replace
+            // the real acquisition channel (and a blank form wiped it). Fill it only when nothing
+            // is recorded yet; an explicit correction goes through Edit Patient. The same goes for
+            // the patient-level referrer link - a booking that names no referrer used to clear it.
+            // (Each visit carries its own referrer, so nothing here changes who a visit is credited to.)
+            if (string.IsNullOrWhiteSpace(existingPatient.SourceOfInfo))
+                existingPatient.SourceOfInfo = PatientSources.Canonicalize(request.SourceOfInfo);
+            existingPatient.ReferrerId ??= request.ReferrerId;
             existingPatient.NameNormalized = normalizedName;
 
             await _context.SaveChangesAsync(cancellationToken);
@@ -82,7 +89,7 @@ public class CreatePatientCommandHandler : IRequestHandler<CreatePatientCommand,
             Block = NameNormalizer.Upper(request.Block),
             District = NameNormalizer.Upper(request.District),
             Address = NameNormalizer.Upper(request.Address),
-            SourceOfInfo = request.SourceOfInfo,
+            SourceOfInfo = PatientSources.Canonicalize(request.SourceOfInfo),
             ReferrerId = request.ReferrerId,
             PatientIdentifier = $"PTID{(count + 1):D8}",
             HospitalId = hospitalId
