@@ -41,7 +41,7 @@ builder.Services.AddEndpointsApiExplorer();
 // Enhanced Swagger with Security Definitions
 builder.Services.AddSwaggerGen(c =>
 {
-    c.SwaggerDoc("v1", new OpenApiInfo { Title = "1Rad Clinical Hub API", Version = "v1" });
+    c.SwaggerDoc("v1", new OpenApiInfo { Title = "1Rad Flow Clinical Hub API", Version = "v1" });
     
     // Include XML Comments
     var xmlFile = $"{System.Reflection.Assembly.GetExecutingAssembly().GetName().Name}.xml";
@@ -229,7 +229,7 @@ app.UseResponseCompression();
 app.UseSwagger();
 app.UseSwaggerUI(c =>
 {
-    c.SwaggerEndpoint("/swagger/v1/swagger.json", "1Rad API V1");
+    c.SwaggerEndpoint("/swagger/v1/swagger.json", "1Rad Flow API V1");
     c.RoutePrefix = "swagger"; // Standard /swagger path
 });
 

@@ -18,7 +18,7 @@ using Microsoft.AspNetCore.RateLimiting;
 namespace _1RadAPI.Controllers;
 
 /// <summary>
-/// Handles all Authentication and Registration flows for the 1Rad Clinical Hub.
+/// Handles all Authentication and Registration flows for the 1Rad Flow Clinical Hub.
 /// </summary>
 [ApiController]
 [Route("api/v1/auth")]

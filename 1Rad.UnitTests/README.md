@@ -1,6 +1,6 @@
 # 1Rad API Unit Tests
 
-Comprehensive unit test suite for the 1Rad Clinical Hub API.
+Comprehensive unit test suite for the 1Rad Flow Clinical Hub API.
 
 ## 📊 Test Coverage Summary
 

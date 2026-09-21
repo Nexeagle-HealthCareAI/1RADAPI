@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "purpose": "Grounding knowledge base for RadAI, the in-app help assistant in the 1rad application. RadAI answers user questions about HOW TO USE the app, using ONLY the content in this file. It must never invent features, buttons, or steps not described here. When a question is not covered, RadAI says it is not sure and points the user to support.",
+    "purpose": "Grounding knowledge base for RadAI, the in-app help assistant in the 1Rad Flow application. RadAI answers user questions about HOW TO USE the app, using ONLY the content in this file. It must never invent features, buttons, or steps not described here. When a question is not covered, RadAI says it is not sure and points the user to support.",
     "how_to_use": "Inject the relevant parts of this file into the Flash system prompt (see assistant_system_prompt.md). For a small app the whole file fits in the prompt (cache it). As it grows, switch to retrieval: embed each entry in 'modules' and 'faqs' and fetch the top matches per question.",
     "version": "1.1",
     "maintenance": "GROW THIS FILE from real questions. Whenever a user asks something RadAI could not answer, add an entry. Whenever the app changes, update the affected module. Keep step numbers accurate to the live UI.",
@@ -9,9 +9,9 @@
     "expansion_note": "v1.1 added the imaging/PACS, DICOM Bridge + Worklist, AI reporting, staff & payroll, auth, roles and subscription areas. Earlier v1.0 front-desk/billing/approvals/reporting content is unchanged."
   },
   "app": {
-    "name": "1rad",
+    "name": "1Rad Flow",
     "type": "Diagnostic centre management application (appointments + billing + radiology reporting)",
-    "one_line": "1rad runs the front desk and finance of a diagnostic/radiology centre: booking appointments, billing patients, tracking referral commissions, and producing radiology reports.",
+    "one_line": "1Rad Flow runs the front desk and finance of a diagnostic/radiology centre: booking appointments, billing patients, tracking referral commissions, and producing radiology reports.",
     "primary_users": [
       "Front-desk / reception staff",
       "Centre admin",
@@ -79,7 +79,7 @@
     },
     {
       "term": "Accession Number",
-      "meaning": "A unique id stamped into each scan. 1rad uses the appointment's Display ID as the Accession Number so an arriving study matches the right appointment automatically."
+      "meaning": "A unique id stamped into each scan. 1Rad Flow uses the appointment's Display ID as the Accession Number so an arriving study matches the right appointment automatically."
     },
     {
       "term": "Orthanc",
@@ -87,7 +87,7 @@
     },
     {
       "term": "DICOM Bridge",
-      "meaning": "A background service installed at the centre that watches Orthanc and automatically uploads new studies into 1rad, matching each to a patient/appointment."
+      "meaning": "A background service installed at the centre that watches Orthanc and automatically uploads new studies into 1Rad Flow, matching each to a patient/appointment."
     },
     {
       "term": "Study",
@@ -375,7 +375,7 @@
     {
       "id": "radai",
       "label": "RadAI (this assistant)",
-      "summary": "The floating help assistant. Ask it how to do anything in 1rad by voice, by tapping a suggested question, or by typing.",
+      "summary": "The floating help assistant. Ask it how to do anything in 1Rad Flow by voice, by tapping a suggested question, or by typing.",
       "where": "Floating button, available on every screen.",
       "how_to": [
         "Tap the floating RadAI button.",
@@ -471,7 +471,7 @@
     {
       "id": "dicom_bridge",
       "label": "DICOM Bridge monitor",
-      "summary": "The Bridge automatically uploads studies from the centre's Orthanc server into 1rad. The monitor shows whether it is online and the recent uploads.",
+      "summary": "The Bridge automatically uploads studies from the centre's Orthanc server into 1Rad Flow. The monitor shows whether it is online and the recent uploads.",
       "where": "DICOM Bridge page (needs the PACS module).",
       "how_to": [
         "Open the DICOM Bridge page.",
@@ -908,7 +908,7 @@
     {
       "id": "what_is_ris_pacs",
       "q": "What are the RIS and PACS modules?",
-      "a": "They're the two parts of 1rad a centre can subscribe to. RIS handles appointments, billing, referrals and reporting. PACS handles imaging: the Studies worklist, the DICOM viewer and the DICOM Bridge. The menu only shows what your centre has."
+      "a": "They're the two parts of 1Rad Flow a centre can subscribe to. RIS handles appointments, billing, referrals and reporting. PACS handles imaging: the Studies worklist, the DICOM viewer and the DICOM Bridge. The menu only shows what your centre has."
     },
     {
       "id": "how_finalize_voice",
@@ -918,7 +918,7 @@
   ],
   "support_fallback": {
     "when": "Use this when the user's question is not answered by anything above, or is about a problem rather than how-to (errors, bugs, account access, billing disputes).",
-    "message": "I'm not sure about that one. For this, please contact your centre admin or the 1rad support team so they can help you directly.",
+    "message": "I'm not sure about that one. For this, please contact your centre admin or the 1Rad Flow support team so they can help you directly.",
     "never": "Never invent a feature, button, menu, or step that is not described in this file. If unsure, use the support fallback."
   },
   "suggested_chips": [

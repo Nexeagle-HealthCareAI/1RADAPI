@@ -22,7 +22,7 @@ public class HealthController : ControllerBase
         {
             Status = "Healthy",
             Timestamp = DateTime.UtcNow,
-            Message = "1Rad API is running and CORS is configured",
+            Message = "1Rad Flow API is running and CORS is configured",
             Environment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Unknown"
         });
     }
