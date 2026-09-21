@@ -39,7 +39,13 @@ public record ReferrerIntelligenceDto(
     int NewPatients = 0,
     int ReturningVisits = 0,
     // Cash actually collected against the attended visits' invoices.
-    decimal TotalCollected = 0
+    decimal TotalCollected = 0,
+    // Stable id of this source for the visits drill-down (a partner's id, "self", "unattributed"
+    // or "name:XYZ"). Unlike ReferrerId it is set for every kind of source.
+    string SourceKey = "",
+    // Service lines per modality across ALL the source's attended visits (a CT + USG visit counts
+    // once in each), so a summary row can draw the modality mix without any visit rows.
+    Dictionary<string, int>? Modalities = null
 );
 
 public record ReferredPatientDto(

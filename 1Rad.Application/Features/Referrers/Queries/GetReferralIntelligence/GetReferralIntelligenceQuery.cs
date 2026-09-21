@@ -10,10 +10,17 @@ using Microsoft.EntityFrameworkCore;
 
 namespace _1Rad.Application.Features.Referrers.Queries.GetReferralIntelligence;
 
+/// <param name="SummaryOnly">One row per source with every total but NO visit rows (Patients is empty). The screen loads this, then fetches a source's visits only when it is opened.</param>
+/// <param name="SourceKey">Restrict to one source (the SourceKey a summary row carries: a partner's id, "self", "unattributed" or "name:XYZ").</param>
+/// <param name="Skip">With Take: page through that source's visits (newest first). Totals still cover every visit of the source.</param>
 public record GetReferralIntelligenceQuery(
     DateTime? StartDate = null,
     DateTime? EndDate = null,
-    Guid? ReferrerId = null
+    Guid? ReferrerId = null,
+    bool SummaryOnly = false,
+    string? SourceKey = null,
+    int Skip = 0,
+    int? Take = null
 ) : IRequest<List<ReferrerIntelligenceDto>>;
 
 /// <summary>
@@ -71,12 +78,15 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
         string? filterKey = null;
         List<Guid>? aliasIds = null;
         List<string>? aliasNames = null;
-        if (request.ReferrerId.HasValue)
+        // A partner's SourceKey is its (root) id, so it filters exactly like ReferrerId.
+        var filterReferrerId = request.ReferrerId ?? (Guid.TryParse(request.SourceKey, out var keyAsId) ? keyAsId : (Guid?)null);
+        if (filterReferrerId.HasValue)
         {
-            filterKey = attribution.KeyForReferrer(request.ReferrerId.Value);
-            aliasIds = attribution.AliasIdsOf(request.ReferrerId.Value);
-            aliasNames = attribution.AliasNamesOf(request.ReferrerId.Value);
+            filterKey = attribution.KeyForReferrer(filterReferrerId.Value);
+            aliasIds = attribution.AliasIdsOf(filterReferrerId.Value);
+            aliasNames = attribution.AliasNamesOf(filterReferrerId.Value);
         }
+        if (!string.IsNullOrWhiteSpace(request.SourceKey)) filterKey = request.SourceKey.Trim();
 
         // Bare "YYYY-MM-DD" range -> IST day boundaries (see IstDateRange).
         DateTime? fromUtc = request.StartDate.HasValue ? IstDateRange.ToUtcStart(request.StartDate.Value) : null;
@@ -131,7 +141,7 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
                 Source = attribution.Attribute(m.ReferredBy, m.PatientReferrerId, m.AppointmentReferrerId),
                 Class = AppointmentAttendance.Classify(m.Status, m.ArrivedAt, m.DateTime, nowUtc),
             })
-            .Where(x => filterKey == null || x.Source.Key == filterKey)
+            .Where(x => filterKey == null || string.Equals(x.Source.Key, filterKey, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
         var missions = classified.Where(x => x.Class == AppointmentAttendance.Attended).ToList();
@@ -143,6 +153,21 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
         // ── Batched lookups for the attended visits ─────────────────────────────
         var apptIds = missions.Select(x => x.Mission.AppointmentId).ToList();
         var patientIds = missions.Select(x => x.Mission.PatientId).Distinct().ToList();
+
+        // Which attended visits get a full row: none for a summary, one page (newest first) when
+        // paging a source, otherwise all. TOTALS always cover every attended visit; only the rows
+        // (and the per-visit commission lookup behind them) are limited.
+        var pageByKey = missions
+            .GroupBy(x => x.Source.Key)
+            .ToDictionary(g => g.Key, g =>
+            {
+                if (request.SummaryOnly) return g.Take(0).ToList();
+                var ordered = g.OrderByDescending(x => x.Mission.DateTime)
+                    .ThenBy(x => x.Mission.AppointmentId)
+                    .Skip(Math.Max(0, request.Skip));
+                return (request.Take.HasValue ? ordered.Take(Math.Max(0, request.Take.Value)) : ordered).ToList();
+            });
+        var rowApptIds = pageByKey.Values.SelectMany(v => v).Select(x => x.Mission.AppointmentId).ToList();
 
         var invoicesByAppt = apptIds.Count == 0
             ? new Dictionary<Guid, (decimal Total, decimal Discount, decimal Paid)>()
@@ -180,12 +205,12 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
 
         // Live commission rows tied to these visits (any date - a visit's own rows are what its
         // per-row figures show), tagged with the source that owns them.
-        var visitCommissions = apptIds.Count == 0
+        var visitCommissions = rowApptIds.Count == 0
             ? new List<CommissionRow>()
             : (await _context.ReferralCommissions.AsNoTracking()
                     .Where(c => c.HospitalId == hospitalId && c.DeletedAt == null
                                 && c.Status != CommissionStatus.Cancelled && c.Status != "CANCELLED"
-                                && c.AppointmentId != null && apptIds.Contains(c.AppointmentId.Value))
+                                && c.AppointmentId != null && rowApptIds.Contains(c.AppointmentId.Value))
                     .Select(c => new { c.AppointmentId, c.ReferrerId, c.AppointmentServiceId, c.Modality, c.CommissionAmount, c.Status })
                     .ToListAsync(cancellationToken))
                 .Select(c => new CommissionRow(c.AppointmentId, attribution.KeyForReferrer(c.ReferrerId), c.AppointmentServiceId, c.Modality, c.CommissionAmount, c.Status))
@@ -229,10 +254,39 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
         {
             attendedByKey.TryGetValue(src.Key, out var attended);
             attended ??= new();
+            pageByKey.TryGetValue(src.Key, out var pageRows);
+            pageRows ??= new();
             notAttendedByKey.TryGetValue(src.Key, out var na);
             var root = src.Kind == SourceKind.Partner ? attribution.RootEntry(src.RootId) : null;
 
-            var rows = attended.Select(x =>
+            // ── Totals: every attended visit of this source, whatever page the rows cover ──
+            var billed = 0m; var discount = 0m; var collected = 0m; var newPatients = 0;
+            var modalities = new Dictionary<string, int>();
+            foreach (var v in attended)
+            {
+                var m = v.Mission;
+                if (invoicesByAppt.TryGetValue(m.AppointmentId, out var invoice))
+                {
+                    billed += invoice.Total; discount += invoice.Discount; collected += invoice.Paid;
+                }
+                if (firstVisitByPatient.TryGetValue(m.PatientId, out var firstId) && firstId == m.AppointmentId) newPatients++;
+
+                // One count per service line (a CT + USG visit counts once in each), or the visit's
+                // own modality when it has no lines - the same rule the screen used client-side.
+                if (serviceLinesByAppt.TryGetValue(m.AppointmentId, out var lines) && lines.Count > 0)
+                    foreach (var line in lines)
+                    {
+                        var mod = string.IsNullOrWhiteSpace(line.Modality) ? "OTHER" : line.Modality.ToUpperInvariant();
+                        modalities[mod] = modalities.GetValueOrDefault(mod) + 1;
+                    }
+                else
+                {
+                    var mod = string.IsNullOrWhiteSpace(m.Modality) ? "OTHER" : m.Modality;
+                    modalities[mod] = modalities.GetValueOrDefault(mod) + 1;
+                }
+            }
+
+            var rows = pageRows.Select(x =>
             {
                 var m = x.Mission;
                 // Only the rows this source owns on this visit.
@@ -292,32 +346,32 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
                     isFirst,
                     inv.Paid);
             })
-            .OrderByDescending(p => p.VisitAt)
             .ToList();
 
             moneyByGroup.TryGetValue(src.Key, out var money);
-            var newPatients = rows.Count(r => r.IsFirstVisit);
 
             return new ReferrerIntelligenceDto(
                 src.Kind == SourceKind.Partner ? src.RootId : Guid.Empty,
                 src.DisplayName,
                 root?.Contact ?? string.Empty,
                 root?.Address ?? string.Empty,
-                rows.Count,
+                attended.Count,
                 rows,
                 money.Total,
                 money.Paid,
                 money.Total - money.Paid,
-                rows.Sum(p => p.TotalAmount),
-                rows.Sum(p => p.DiscountAmount),
-                rows.Sum(p => p.TotalAmount) - money.Total,
+                billed,
+                discount,
+                billed - money.Total,
                 KindName(src.Kind),
                 na.Upcoming,
                 na.NoShow,
-                rows.Select(r => r.PatientId).Distinct().Count(),
+                attended.Select(x => x.Mission.PatientId).Distinct().Count(),
                 newPatients,
-                rows.Count - newPatients,
-                rows.Sum(p => p.PaidAmount));
+                attended.Count - newPatients,
+                collected,
+                src.Key,
+                modalities);
         })
         // A source only appears if it has something to show.
         // (A partner whose commission NETS to zero - e.g. 500 paid, 500 reversed - still has history.)

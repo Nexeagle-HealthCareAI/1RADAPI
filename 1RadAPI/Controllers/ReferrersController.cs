@@ -162,6 +162,38 @@ public class ReferrersController : ControllerBase
         return Ok(result);
     }
 
+    /// <summary>
+    /// Source Analytics summary: one row per source with every total (visits, money, new vs
+    /// returning, modality mix) and NO visit rows. Open a source with <c>intelligence/visits</c>.
+    /// </summary>
+    [HttpGet("intelligence/summary")]
+    public async Task<IActionResult> GetIntelligenceSummary([FromQuery] DateTime? startDate, [FromQuery] DateTime? endDate)
+    {
+        var result = await _mediator.Send(new GetReferralIntelligenceQuery(startDate, endDate, SummaryOnly: true));
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// One source's visits, newest first, a page at a time. Returns that source's row (totals cover
+    /// every visit) with <c>patients</c> holding just this page. A source with nothing in the range comes back as an empty row.
+    /// </summary>
+    [HttpGet("intelligence/visits")]
+    public async Task<IActionResult> GetIntelligenceVisits(
+        [FromQuery] string sourceKey,
+        [FromQuery] DateTime? startDate,
+        [FromQuery] DateTime? endDate,
+        [FromQuery] int skip = 0,
+        [FromQuery] int take = 100)
+    {
+        if (string.IsNullOrWhiteSpace(sourceKey)) return BadRequest(new { success = false, message = "sourceKey is required." });
+        // A page is capped so one call can never pull back a whole year of one partner's visits.
+        take = Math.Clamp(take, 1, 500);
+        skip = Math.Max(0, skip);
+        var result = await _mediator.Send(new GetReferralIntelligenceQuery(startDate, endDate, SourceKey: sourceKey, Skip: skip, Take: take));
+        var node = result.FirstOrDefault(n => string.Equals(n.SourceKey, sourceKey.Trim(), StringComparison.OrdinalIgnoreCase));
+        return Ok(node ?? new ReferrerIntelligenceDto(Guid.Empty, string.Empty, string.Empty, string.Empty, 0, new List<ReferredPatientDto>(), SourceKey: sourceKey.Trim()));
+    }
+
     /// <summary>How patients heard about the centre, totalled by channel (attended visits, IST days).</summary>
     [HttpGet("acquisition-sources")]
     public async Task<IActionResult> GetAcquisitionSources([FromQuery] DateTime? startDate, [FromQuery] DateTime? endDate)
