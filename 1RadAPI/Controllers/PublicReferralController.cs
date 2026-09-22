@@ -1,11 +1,15 @@
 using _1Rad.Application.Features.Referrers.Commands.RenewReferralLinks;
 using _1Rad.Application.Features.Referrers.Commands.UpdateDoctorProfile;
+using _1Rad.Application.Features.Referrers.Commands.SubmitReferralBookingRequest;
 using _1Rad.Application.Features.Referrers.Queries.GetDoctorPortal;
+using _1Rad.Application.Features.Referrers.Queries.GetPublicServiceMenu;
+using _1Rad.Application.Features.Referrers.Queries.GetDoctorBookingRequests;
 using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using System;
 
 namespace _1RadAPI.Controllers;
 
@@ -91,5 +95,53 @@ public class PublicReferralController : ControllerBase
         if (!ok) return NotFound(new { success = false, error = "Referrer not found." });
 
         return Ok(new { success = true });
+    }
+
+    // ── Book from the portal ─────────────────────────────────────────────────
+    // A patient the referring doctor wants booked. This does NOT create a real
+    // appointment (booking one needs a Lead Specialist the centre assigns) - it
+    // queues a request the front desk reviews. See ReferralBookingRequest.
+
+    [HttpGet("{referrerId:guid}/services")]
+    public async Task<IActionResult> GetServiceMenu(Guid referrerId, [FromQuery] string? token)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            return Unauthorized(new { success = false, error = "Missing link token." });
+        var state = await LinkStateAsync(token, referrerId);
+        if (state != ReferralLinkState.Valid) return LinkRejected(state);
+
+        var result = await _mediator.Send(new GetPublicServiceMenuQuery(referrerId));
+        return Ok(new { success = true, data = result });
+    }
+
+    public sealed record BookingRequestBody(
+        string PatientName, string? Mobile, string? Age, string? Gender,
+        string? Modality, string? ServiceName, DateTime? PreferredDate, string? Notes);
+
+    [HttpPost("{referrerId:guid}/booking-requests")]
+    public async Task<IActionResult> SubmitBookingRequest(Guid referrerId, [FromQuery] string? token, [FromBody] BookingRequestBody body)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            return Unauthorized(new { success = false, error = "Missing link token." });
+        var state = await LinkStateAsync(token, referrerId);
+        if (state != ReferralLinkState.Valid) return LinkRejected(state);
+
+        var id = await _mediator.Send(new SubmitReferralBookingRequestCommand(
+            referrerId, body?.PatientName ?? string.Empty, body?.Mobile, body?.Age, body?.Gender,
+            body?.Modality, body?.ServiceName, body?.PreferredDate, body?.Notes));
+
+        return Ok(new { success = true, id });
+    }
+
+    [HttpGet("{referrerId:guid}/booking-requests")]
+    public async Task<IActionResult> GetMyBookingRequests(Guid referrerId, [FromQuery] string? token)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            return Unauthorized(new { success = false, error = "Missing link token." });
+        var state = await LinkStateAsync(token, referrerId);
+        if (state != ReferralLinkState.Valid) return LinkRejected(state);
+
+        var result = await _mediator.Send(new GetDoctorBookingRequestsQuery(referrerId));
+        return Ok(new { success = true, data = result });
     }
 }

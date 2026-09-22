@@ -63,7 +63,13 @@ public record CreateAppointmentCommand(
     // Legacy per-booking payee fields (superseded by the payee-first model;
     // kept so older clients still bind without error).
     string? ReferralPayeeName = null,
-    string? ReferralPayeeContact = null
+    string? ReferralPayeeContact = null,
+    // Set when this booking is fulfilling a referring doctor's portal request (staff picked
+    // "Book" on it and this form was pre-filled from it). On success the request is marked
+    // SCHEDULED and linked to the new appointment, so the doctor sees it move off "pending" and
+    // the front desk's queue drops it. A request that is missing, or already decided, is not an
+    // error here - the appointment still books; the link-back is just skipped.
+    Guid? BookingRequestId = null
 ) : IRequest<Guid>;
 
 
@@ -400,6 +406,21 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
         catch (Exception ex)
         {
             throw new Exception($"UNEXPECTED SYSTEM ERROR: {ex.Message}", ex);
+        }
+
+        if (request.BookingRequestId.HasValue)
+        {
+            var bookingRequest = await _context.ReferralBookingRequests
+                .FirstOrDefaultAsync(r => r.Id == request.BookingRequestId.Value && r.Status == "PENDING", cancellationToken);
+            if (bookingRequest != null)
+            {
+                bookingRequest.Status = "SCHEDULED";
+                bookingRequest.ResultingAppointmentId = appointment.AppointmentId;
+                bookingRequest.DecidedByUserId = _context.UserContext.UserId;
+                bookingRequest.DecidedAt = DateTime.UtcNow;
+                bookingRequest.UpdatedAt = DateTime.UtcNow;
+                await _context.SaveChangesAsync(cancellationToken);
+            }
         }
 
         return appointment.AppointmentId;

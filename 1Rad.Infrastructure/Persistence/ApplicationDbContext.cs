@@ -72,6 +72,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<IdempotencyRecord> IdempotencyKeys => Set<IdempotencyRecord>();
     public DbSet<RadAiQuestionLog> RadAiQuestionLogs => Set<RadAiQuestionLog>();
     public DbSet<ReferrerLinkVersion> ReferrerLinkVersions => Set<ReferrerLinkVersion>();
+    public DbSet<ReferralBookingRequest> ReferralBookingRequests => Set<ReferralBookingRequest>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -100,6 +101,26 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.ReferrerId).ValueGeneratedNever();
             entity.Property(e => e.LastSentChannel).HasMaxLength(16);
             entity.Property(e => e.LastSentBaseUrl).HasMaxLength(300);
+        });
+
+        // A doctor-portal booking request (schema 95). No FKs to Referrers/Appointments on purpose -
+        // a referrer merge/delete or an appointment edit must never be blocked by, or cascade into,
+        // a request row; staff-side queries filter by HospitalId + Status instead.
+        modelBuilder.Entity<ReferralBookingRequest>(entity =>
+        {
+            entity.ToTable("ReferralBookingRequests", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.PatientName).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.Mobile).HasMaxLength(20);
+            entity.Property(e => e.Age).HasMaxLength(20);
+            entity.Property(e => e.Gender).HasMaxLength(20);
+            entity.Property(e => e.Modality).HasMaxLength(50);
+            entity.Property(e => e.ServiceName).HasMaxLength(255);
+            entity.Property(e => e.Notes).HasMaxLength(1000);
+            entity.Property(e => e.Status).IsRequired().HasMaxLength(20);
+            entity.Property(e => e.DeclineReason).HasMaxLength(500);
+            entity.HasIndex(e => new { e.HospitalId, e.Status, e.CreatedAt });
+            entity.HasIndex(e => new { e.ReferrerId, e.CreatedAt });
         });
 
         // User Configuration

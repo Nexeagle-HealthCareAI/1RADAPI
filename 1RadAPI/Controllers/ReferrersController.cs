@@ -22,6 +22,8 @@ using _1Rad.Application.Features.Referrers.Commands.UpdateReferralCommission;
 using _1Rad.Application.Features.Referrers.Commands.UpdateReferralCommissionStatus;
 using _1Rad.Application.Features.Referrers.Commands.MergeReferrers;
 using _1Rad.Application.Features.Referrers.Commands.UnmergeReferrer;
+using _1Rad.Application.Features.Referrers.Commands.DeclineBookingRequest;
+using _1Rad.Application.Features.Referrers.Queries.GetBookingRequests;
 using _1Rad.Domain.Constants;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
@@ -304,6 +306,27 @@ public class ReferrersController : ControllerBase
         var result = await _mediator.Send(new UnmergeReferrerCommand(id));
         return Ok(result);
     }
+
+    // ── Doctor-portal booking requests (front desk side) ────────────────────────
+    // A referring doctor's booking request, submitted from their portal link. See
+    // PublicReferralController for the doctor-facing submit/list endpoints, and
+    // ReferralBookingRequest's doc comment for why this isn't just a plain Appointment.
+
+    [HttpGet("booking-requests")]
+    public async Task<IActionResult> GetBookingRequests([FromQuery] bool includeDecided = true)
+    {
+        var result = await _mediator.Send(new GetBookingRequestsQuery(includeDecided));
+        return Ok(result);
+    }
+
+    [HttpPost("booking-requests/{id:guid}/decline")]
+    public async Task<IActionResult> DeclineBookingRequest(Guid id, [FromBody] DeclineBookingRequestBody? body)
+    {
+        await _mediator.Send(new DeclineBookingRequestCommand(id, body?.Reason));
+        return Ok(new { success = true });
+    }
+
+    public sealed record DeclineBookingRequestBody(string? Reason);
 }
 
 /// <summary>Request body for PATCH /commissions/{id}/status.</summary>
