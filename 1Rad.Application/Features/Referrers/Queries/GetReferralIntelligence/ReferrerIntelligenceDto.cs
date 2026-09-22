@@ -45,7 +45,9 @@ public record ReferrerIntelligenceDto(
     string SourceKey = "",
     // Service lines per modality across ALL the source's attended visits (a CT + USG visit counts
     // once in each), so a summary row can draw the modality mix without any visit rows.
-    Dictionary<string, int>? Modalities = null
+    Dictionary<string, int>? Modalities = null,
+    // Commission still owed to this source, by scan type. Adds up to UnpaidCommission (same rows).
+    Dictionary<string, decimal>? UnpaidByModality = null
 );
 
 public record ReferredPatientDto(

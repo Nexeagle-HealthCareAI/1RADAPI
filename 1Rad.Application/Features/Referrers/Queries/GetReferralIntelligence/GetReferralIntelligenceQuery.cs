@@ -230,16 +230,27 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
         if (toUtc.HasValue) moneyQuery = moneyQuery.Where(c => c.ServiceDate <= toUtc.Value);
         if (aliasIds != null) moneyQuery = moneyQuery.Where(c => aliasIds.Contains(c.ReferrerId));
 
-        var moneyByGroup = (await moneyQuery
-                .Select(c => new { c.ReferrerId, c.CommissionAmount, c.Status })
+        var moneyRows = (await moneyQuery
+                .Select(c => new { c.ReferrerId, c.CommissionAmount, c.Status, c.Modality })
                 .ToListAsync(cancellationToken))
-            .Select(c => new { Key = attribution.KeyForReferrer(c.ReferrerId), c.CommissionAmount, c.Status })
+            .Select(c => new { Key = attribution.KeyForReferrer(c.ReferrerId), c.CommissionAmount, c.Status, c.Modality })
             .Where(c => c.Key != null && c.Key != ReferralAttribution.SelfKey)
+            .ToList();
+        var moneyByGroup = moneyRows
             .GroupBy(c => c.Key!)
             .ToDictionary(
                 g => g.Key,
                 g => (Total: g.Sum(x => x.CommissionAmount),
                       Paid: g.Where(x => CommissionStatus.IsPaid(x.Status)).Sum(x => x.CommissionAmount)));
+        // What is still owed, by scan type - from the SAME commission rows as the totals above, so the
+        // breakdown always adds up to the source's unpaid figure (a per-service row carries its own modality).
+        var unpaidByModalityByGroup = moneyRows
+            .Where(c => !CommissionStatus.IsPaid(c.Status) && c.CommissionAmount != 0m)
+            .GroupBy(c => c.Key!)
+            .ToDictionary(
+                g => g.Key,
+                g => g.GroupBy(x => string.IsNullOrWhiteSpace(x.Modality) ? "OTHER" : x.Modality!.Trim().ToUpperInvariant())
+                      .ToDictionary(m => m.Key, m => m.Sum(x => x.CommissionAmount)));
 
         // ── Assemble per-source nodes ───────────────────────────────────────────
         var sourceByKey = new Dictionary<string, SourceRef>();
@@ -371,7 +382,8 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
                 attended.Count - newPatients,
                 collected,
                 src.Key,
-                modalities);
+                modalities,
+                unpaidByModalityByGroup.GetValueOrDefault(src.Key) ?? new Dictionary<string, decimal>());
         })
         // A source only appears if it has something to show.
         // (A partner whose commission NETS to zero - e.g. 500 paid, 500 reversed - still has history.)
