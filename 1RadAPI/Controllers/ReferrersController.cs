@@ -38,6 +38,14 @@ namespace _1RadAPI.Controllers;
 [_1RadAPI.Authorization.RequiresModule(_1Rad.Domain.Constants.ModuleConstants.Ris)]
 public class ReferrersController : ControllerBase
 {
+    // Who may do what. The web screens already gate by role, but the API is the real boundary:
+    // partner management and the referral reports are an admin/finance concern, and the front desk
+    // only needs the partner list, to add a partner while registering, and the doctor-request queue.
+    private const string AdminRoles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator}";
+    private const string FinanceRoles = $"{AdminRoles},{RoleConstants.Accountant}";
+    private const string FrontDeskRoles = $"{AdminRoles},{RoleConstants.Receptionist}";
+    private const string PartnerListRoles = $"{FrontDeskRoles},{RoleConstants.Accountant}";
+
     private readonly IMediator _mediator;
     private readonly IReferralLinkTokenService _referralTokens;
     private readonly IApplicationDbContext _context;
@@ -49,6 +57,7 @@ public class ReferrersController : ControllerBase
         _context = context;
     }
 
+    [Authorize(Roles = PartnerListRoles)]
     [HttpGet]
     public async Task<IActionResult> Get(
         [FromQuery] string? search,
@@ -59,6 +68,7 @@ public class ReferrersController : ControllerBase
         return Ok(result);
     }
 
+    [Authorize(Roles = FrontDeskRoles)]
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateReferrerCommand command)
     {
@@ -67,6 +77,7 @@ public class ReferrersController : ControllerBase
     }
 
     // Bulk-add partners from the inline multi-add grid or an Excel upload.
+    [Authorize(Roles = AdminRoles)]
     [HttpPost("bulk")]
     public async Task<IActionResult> CreateBulk([FromBody] CreateReferrersBulkCommand command)
     {
@@ -79,6 +90,7 @@ public class ReferrersController : ControllerBase
     // A link is only ever minted for a live partner of the CALLER's centre — the token
     // is a bearer credential for that partner's earnings, so signing one for an
     // arbitrary id (another centre's partner, a deleted one) is refused.
+    [Authorize(Roles = AdminRoles)]
     [HttpGet("{id:guid}/share-link")]
     public async Task<IActionResult> ShareLink(Guid id)
     {
@@ -91,6 +103,7 @@ public class ReferrersController : ControllerBase
 
     // Mint tokens for several referrers at once (bulk copy / WhatsApp).
     public sealed record ShareLinksBody(List<Guid> ReferrerIds);
+    [Authorize(Roles = AdminRoles)]
     [HttpPost("share-links")]
     public async Task<IActionResult> ShareLinks([FromBody] ShareLinksBody body)
     {
@@ -107,6 +120,7 @@ public class ReferrersController : ControllerBase
 
     // Per-partner link state for the Doctor Links tab: when a link was last sent, over
     // which channel, when it expires, and whether it renews automatically.
+    [Authorize(Roles = AdminRoles)]
     [HttpGet("link-status")]
     public async Task<IActionResult> GetLinkStatus()
     {
@@ -117,6 +131,7 @@ public class ReferrersController : ControllerBase
     // Pull back every portal link ever issued for this partner (and any partner merged
     // into them): a forwarded message, a lost phone, a doctor who left. Old links stop
     // working immediately; links minted afterwards (copy / email / WhatsApp) work.
+    [Authorize(Roles = AdminRoles)]
     [HttpPost("{id:guid}/revoke-links")]
     public async Task<IActionResult> RevokeLinks(Guid id)
     {
@@ -125,6 +140,7 @@ public class ReferrersController : ControllerBase
     }
 
     // Email each named referrer their personal portal link.
+    [Authorize(Roles = AdminRoles)]
     [HttpPost("send-links")]
     public async Task<IActionResult> SendLinks([FromBody] SendReferralLinksCommand command)
     {
@@ -134,6 +150,7 @@ public class ReferrersController : ControllerBase
 
     // WhatsApp each named referrer their personal portal link via NexEagle's
     // WhatsApp Business API (one-click send, no app hand-off).
+    [Authorize(Roles = AdminRoles)]
     [HttpPost("send-links-whatsapp")]
     public async Task<IActionResult> SendLinksWhatsApp([FromBody] SendReferralLinksWhatsAppCommand command)
     {
@@ -141,6 +158,7 @@ public class ReferrersController : ControllerBase
         return Ok(result);
     }
 
+    [Authorize(Roles = AdminRoles)]
     [HttpPut("{id}")]
     public async Task<IActionResult> UpdateReferrer(Guid id, [FromBody] UpdateReferrerCommand command)
     {
@@ -149,6 +167,7 @@ public class ReferrersController : ControllerBase
         return Ok(result);
     }
 
+    [Authorize(Roles = AdminRoles)]
     [HttpDelete("{id}")]
     public async Task<IActionResult> DeleteReferrer(Guid id)
     {
@@ -157,6 +176,7 @@ public class ReferrersController : ControllerBase
         return Ok(new { success = true });
     }
 
+    [Authorize(Roles = AdminRoles)]
     [HttpGet("intelligence")]
     public async Task<IActionResult> GetIntelligence([FromQuery] DateTime? startDate, [FromQuery] DateTime? endDate, [FromQuery] Guid? referrerId)
     {
@@ -168,6 +188,7 @@ public class ReferrersController : ControllerBase
     /// Source Analytics summary: one row per source with every total (visits, money, new vs
     /// returning, modality mix) and NO visit rows. Open a source with <c>intelligence/visits</c>.
     /// </summary>
+    [Authorize(Roles = AdminRoles)]
     [HttpGet("intelligence/summary")]
     public async Task<IActionResult> GetIntelligenceSummary([FromQuery] DateTime? startDate, [FromQuery] DateTime? endDate)
     {
@@ -179,6 +200,7 @@ public class ReferrersController : ControllerBase
     /// One source's visits, newest first, a page at a time. Returns that source's row (totals cover
     /// every visit) with <c>patients</c> holding just this page. A source with nothing in the range comes back as an empty row.
     /// </summary>
+    [Authorize(Roles = AdminRoles)]
     [HttpGet("intelligence/visits")]
     public async Task<IActionResult> GetIntelligenceVisits(
         [FromQuery] string sourceKey,
@@ -197,6 +219,7 @@ public class ReferrersController : ControllerBase
     }
 
     /// <summary>How patients heard about the centre, totalled by channel (attended visits, IST days).</summary>
+    [Authorize(Roles = AdminRoles)]
     [HttpGet("acquisition-sources")]
     public async Task<IActionResult> GetAcquisitionSources([FromQuery] DateTime? startDate, [FromQuery] DateTime? endDate)
     {
@@ -204,6 +227,7 @@ public class ReferrersController : ControllerBase
         return Ok(result);
     }
 
+    [Authorize(Roles = AdminRoles)]
     [HttpGet("matrix")]
     public async Task<IActionResult> GetMatrix(
         [FromQuery] string period, 
@@ -216,7 +240,7 @@ public class ReferrersController : ControllerBase
     }
 
     [HttpPost("commissions")]
-    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Accountant}")]
+    [Authorize(Roles = FinanceRoles)]
     public async Task<IActionResult> RecordCommission([FromBody] RecordReferralCommissionCommand command)
     {
         var result = await _mediator.Send(command);
@@ -224,7 +248,7 @@ public class ReferrersController : ControllerBase
     }
 
     [HttpPost("commissions/batch")]
-    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Accountant}")]
+    [Authorize(Roles = FinanceRoles)]
     public async Task<IActionResult> RecordCommissions([FromBody] RecordReferralCommissionsCommand command)
     {
         var result = await _mediator.Send(command);
@@ -236,7 +260,7 @@ public class ReferrersController : ControllerBase
     // connection left the payout half-recorded). Rows it won't pay come back in
     // `skipped` with a reason; re-submitting is safe (already-paid rows skip).
     [HttpPost("commissions/pay")]
-    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Accountant}")]
+    [Authorize(Roles = FinanceRoles)]
     public async Task<IActionResult> PayCommissions([FromBody] PayReferralCommissionsCommand command)
     {
         var result = await _mediator.Send(command);
@@ -247,13 +271,14 @@ public class ReferrersController : ControllerBase
     // negative rows and books the compensating write-off). The amount is computed
     // server-side from live rows; a repeat call is refused because nothing is open.
     [HttpPost("{id:guid}/write-off-deficit")]
-    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Accountant}")]
+    [Authorize(Roles = FinanceRoles)]
     public async Task<IActionResult> WriteOffDeficit(Guid id)
     {
         var result = await _mediator.Send(new WriteOffReferralDeficitCommand(id));
         return Ok(result);
     }
 
+    [Authorize(Roles = FinanceRoles)]
     [HttpGet("commissions")]
     public async Task<IActionResult> GetCommissions(
         [FromQuery] DateTime? startDate,
@@ -266,6 +291,7 @@ public class ReferrersController : ControllerBase
         return Ok(result);
     }
 
+    [Authorize(Roles = FinanceRoles)]
     [HttpGet("ledger")]
     public async Task<IActionResult> GetLedger([FromQuery] DateTime? startDate, [FromQuery] DateTime? endDate, [FromQuery] Guid? referrerId)
     {
@@ -274,7 +300,7 @@ public class ReferrersController : ControllerBase
     }
 
     [HttpPut("commissions/{id}")]
-    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Accountant}")]
+    [Authorize(Roles = FinanceRoles)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateReferralCommissionCommand command)
     {
         if (id != command.CommissionId) return BadRequest("Identity mismatch.");
@@ -283,7 +309,7 @@ public class ReferrersController : ControllerBase
     }
 
     [HttpPatch("commissions/{id}/status")]
-    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Accountant}")]
+    [Authorize(Roles = FinanceRoles)]
     public async Task<IActionResult> UpdateStatus(Guid id, [FromBody] CommissionStatusUpdateDto dto)
     {
         var result = await _mediator.Send(new UpdateReferralCommissionStatusCommand(
@@ -293,6 +319,7 @@ public class ReferrersController : ControllerBase
         return Ok(result);
     }
 
+    [Authorize(Roles = AdminRoles)]
     [HttpPost("merge")]
     public async Task<IActionResult> Merge([FromBody] MergeReferrersCommand command)
     {
@@ -300,6 +327,7 @@ public class ReferrersController : ControllerBase
         return Ok(result);
     }
 
+    [Authorize(Roles = AdminRoles)]
     [HttpPost("{id}/unmerge")]
     public async Task<IActionResult> Unmerge(Guid id)
     {
@@ -312,6 +340,7 @@ public class ReferrersController : ControllerBase
     // PublicReferralController for the doctor-facing submit/list endpoints, and
     // ReferralBookingRequest's doc comment for why this isn't just a plain Appointment.
 
+    [Authorize(Roles = FrontDeskRoles)]
     [HttpGet("booking-requests")]
     public async Task<IActionResult> GetBookingRequests([FromQuery] bool includeDecided = true)
     {
@@ -319,6 +348,7 @@ public class ReferrersController : ControllerBase
         return Ok(result);
     }
 
+    [Authorize(Roles = FrontDeskRoles)]
     [HttpPost("booking-requests/{id:guid}/decline")]
     public async Task<IActionResult> DeclineBookingRequest(Guid id, [FromBody] DeclineBookingRequestBody? body)
     {

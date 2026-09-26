@@ -87,6 +87,22 @@ builder.Services.AddRateLimiter(options =>
         opt.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
     });
 
+    // Doctor-portal writes come from an anonymous capability link. Partition by the partner the link
+    // is for (and the action), so one leaked or scripted link cannot flood the front-desk queue or
+    // keep triggering renewal messages. Not by client IP: there is no forwarded-headers setup, so
+    // behind the reverse proxy every caller would look like the same address.
+    options.AddPolicy("ReferralPortalWrite", httpContext =>
+    {
+        var route = httpContext.Request.RouteValues;
+        var key = $"{route["action"]}:{route["referrerId"]}".ToLowerInvariant();
+        return RateLimitPartition.GetFixedWindowLimiter(key, _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 20,
+            Window = TimeSpan.FromHours(1),
+            QueueLimit = 0,
+        });
+    });
+
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 });
 

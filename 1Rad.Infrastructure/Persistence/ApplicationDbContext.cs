@@ -857,7 +857,12 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             // entity.Property(e => e.PatientName).IsRequired().HasMaxLength(255); 
             entity.Property(e => e.CommissionAmount).HasPrecision(18, 2);
             entity.Property(e => e.AccumulatedTotal).HasPrecision(18, 2);
-            entity.Property(e => e.Status).IsRequired().HasMaxLength(50).HasDefaultValue("Pending");
+            // Status is the concurrency token: paying, cancelling, writing off and netting a deficit all
+            // work by changing it, so a payout that raced another one (two tabs, two accountants) fails
+            // its UPDATE instead of paying the same row twice or netting the same deficit twice. A
+            // rowversion column would also conflict-check every AccumulatedTotal re-stamp, which the
+            // invoicing and payment flows run without any retry.
+            entity.Property(e => e.Status).IsRequired().HasMaxLength(50).HasDefaultValue("Pending").IsConcurrencyToken();
             entity.Property(e => e.ReferenceNumber).HasMaxLength(100);
             entity.Property(e => e.Modality).HasMaxLength(50);
 

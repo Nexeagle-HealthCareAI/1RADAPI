@@ -9,6 +9,7 @@ using _1Rad.Application.Interfaces;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using System;
 
 namespace _1RadAPI.Controllers;
@@ -71,6 +72,7 @@ public class PublicReferralController : ControllerBase
     // An EXPIRED link asks for a fresh one. The new link is sent only to the WhatsApp number /
     // email the centre already has for this doctor (never to an address in the request), and
     // the request carries no portal URL - see RenewReferralLinkSelfServeCommand.
+    [EnableRateLimiting("ReferralPortalWrite")]
     [HttpPost("{referrerId:guid}/renew")]
     public async Task<IActionResult> Renew(Guid referrerId, [FromQuery] string? token)
     {
@@ -118,6 +120,7 @@ public class PublicReferralController : ControllerBase
         string PatientName, string? Mobile, string? Age, string? Gender,
         string? Modality, string? ServiceName, DateTime? PreferredDate, string? Notes);
 
+    [EnableRateLimiting("ReferralPortalWrite")]
     [HttpPost("{referrerId:guid}/booking-requests")]
     public async Task<IActionResult> SubmitBookingRequest(Guid referrerId, [FromQuery] string? token, [FromBody] BookingRequestBody body)
     {
