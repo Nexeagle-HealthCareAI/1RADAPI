@@ -52,19 +52,21 @@ public record ReferrerIntelligenceDto(
 
 public record ReferredPatientDto(
     Guid PatientId,
-    string PatientIdentifier,
-    string Name,
-    string Mobile,
-    string Address,
-    string Age,
-    string Gender,
-    string Modality,
-    string Service,
+    // Nullable because the columns are: a patient with no mobile / age / gender, or a visit with no
+    // modality or service, really does come back as JSON null (and a summary never reads them at all).
+    string? PatientIdentifier,
+    string? Name,
+    string? Mobile,
+    string? Address,
+    string? Age,
+    string? Gender,
+    string? Modality,
+    string? Service,
     string SourceOfInfo,
     // The visit's date in IST (yyyy-MM-dd). It used to be the UTC date, which put a
     // visit after 18:30 IST on the wrong day.
     string RegistrationDate,
-    string Status,
+    string? Status,
     Guid? AppointmentId = null,
     decimal CommissionAmount = 0,
     string CommissionStatus = "Unpaid",

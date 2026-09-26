@@ -110,6 +110,11 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
                 || (a.ReferredBy != null && aliasNames.Contains(a.ReferredBy)));
         }
 
+        // A summary is re-read by the Referrals page every 90 seconds and needs only what attribution,
+        // attendance and the totals use. The patient's name, contact and the other display fields come
+        // back NULL from SQL for it, so a refresh does not pull every attended visit's personal details
+        // for rows nobody will see.
+        var withRows = !request.SummaryOnly;
         var rawMissions = await appointmentsQuery
             .Select(a => new
             {
@@ -118,18 +123,18 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
                 a.Status,
                 a.ArrivedAt,
                 a.Modality,
-                a.Service,
+                Service = withRows ? a.Service : null,
                 a.ReferredBy,
                 AppointmentReferrerId = a.ReferrerId,
                 PatientReferrerId = a.Patient.ReferrerId,
                 a.Patient.PatientId,
-                a.Patient.PatientIdentifier,
-                a.Patient.FullName,
-                a.Patient.Mobile,
-                a.Patient.Address,
-                a.Patient.Age,
-                a.Patient.Gender,
-                a.Patient.SourceOfInfo,
+                PatientIdentifier = withRows ? a.Patient.PatientIdentifier : null,
+                FullName = withRows ? a.Patient.FullName : null,
+                Mobile = withRows ? a.Patient.Mobile : null,
+                Address = withRows ? a.Patient.Address : null,
+                Age = withRows ? a.Patient.Age : null,
+                Gender = withRows ? a.Patient.Gender : null,
+                SourceOfInfo = withRows ? a.Patient.SourceOfInfo : null,
             })
             .ToListAsync(cancellationToken);
 
@@ -185,7 +190,7 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
             : (await _context.AppointmentServices.AsNoTracking()
                     .Where(s => apptIds.Contains(s.AppointmentId) && s.DeletedAt == null)
                     .OrderBy(s => s.UpdatedAt)
-                    .Select(s => new RawServiceLine(s.AppointmentId, s.Id, s.ServiceName ?? string.Empty, s.Modality ?? "UNKNOWN"))
+                    .Select(s => new RawServiceLine(s.AppointmentId, s.Id, withRows ? (s.ServiceName ?? string.Empty) : string.Empty, s.Modality ?? "UNKNOWN"))
                     .ToListAsync(cancellationToken))
                 .GroupBy(s => s.AppointmentId)
                 .ToDictionary(g => g.Key, g => g.ToList());

@@ -75,6 +75,54 @@ public class ReferralBookingRequestTests : BaseHandlerTest
             CancellationToken.None));
     }
 
+    [Theory]
+    [InlineData("PatientName", 256)]
+    [InlineData("Mobile", 21)]
+    [InlineData("Age", 21)]
+    [InlineData("Gender", 21)]
+    [InlineData("Modality", 51)]
+    [InlineData("ServiceName", 256)]
+    [InlineData("Notes", 1001)]
+    public async Task AnOverLongField_IsRefusedWithAMessage_AndNothingIsQueued(string field, int length)
+    {
+        var dr = AddReferrer();
+        await Context.SaveChangesAsync();
+
+        // A digit string for the phone, plain text for everything else.
+        var tooLong = field == "Mobile" ? new string('9', length) : new string('x', length);
+        var command = new SubmitReferralBookingRequestCommand(
+            dr.ReferrerId,
+            field == "PatientName" ? tooLong : "Asha Devi",
+            field == "Mobile" ? tooLong : null,
+            field == "Age" ? tooLong : null,
+            field == "Gender" ? tooLong : null,
+            field == "Modality" ? tooLong : null,
+            field == "ServiceName" ? tooLong : null,
+            null,
+            field == "Notes" ? tooLong : null);
+
+        await Assert.ThrowsAsync<ValidationException>(() =>
+            new SubmitReferralBookingRequestCommandHandler(Context).Handle(command, CancellationToken.None));
+        Assert.Empty(Context.ReferralBookingRequests);
+    }
+
+    [Fact]
+    public async Task ValuesExactlyAtTheLimit_AreAccepted()
+    {
+        var dr = AddReferrer();
+        await Context.SaveChangesAsync();
+
+        var id = await new SubmitReferralBookingRequestCommandHandler(Context).Handle(
+            new SubmitReferralBookingRequestCommand(
+                dr.ReferrerId, new string('n', 255), new string('9', 20), new string('a', 20), new string('g', 20),
+                new string('m', 50), new string('s', 255), null, new string('x', 1000)),
+            CancellationToken.None);
+
+        var saved = Context.ReferralBookingRequests.Single(r => r.Id == id);
+        Assert.Equal(1000, saved.Notes!.Length);
+        Assert.Equal(255, saved.PatientName.Length);
+    }
+
     [Fact]
     public async Task APastPreferredDate_IsDropped_RatherThanTrusted()
     {

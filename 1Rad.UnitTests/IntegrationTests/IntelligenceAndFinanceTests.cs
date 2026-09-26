@@ -103,6 +103,17 @@ public class IntelligenceAndFinanceTests
                 HospitalId = _hospitalId
             };
             _context.Appointments.Add(appointment);
+
+            // One service line per visit. The outlook counts scans per modality from AppointmentServices
+            // (a CT + USG visit is one mission but two scans), not from the appointment's scalar Modality,
+            // so a fixture without lines has no modalities to report.
+            _context.AppointmentServices.Add(new AppointmentService
+            {
+                AppointmentId = appointment.AppointmentId,
+                ServiceName = "Radiology",
+                Modality = appointment.Modality,
+                HospitalId = _hospitalId
+            });
         }
 
         _context.SaveChangesAsync().Wait();
