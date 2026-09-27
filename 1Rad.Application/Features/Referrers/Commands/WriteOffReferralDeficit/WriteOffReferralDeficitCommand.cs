@@ -65,12 +65,14 @@ public class WriteOffReferralDeficitCommandHandler : IRequestHandler<WriteOffRef
             throw new BusinessRuleViolationException("Nothing to write off — this partner has no outstanding deficit.");
 
         var now = DateTime.UtcNow;
+        var actor = await CommissionActor.ResolveAsync(_context, ct);
         var deficit = open.Sum(c => -c.CommissionAmount);
         var rootName = byId[root].Name ?? "Unknown";
 
         foreach (var c in open)
         {
             c.Status = CommissionStatus.Cancelled;
+            c.UpdatedBy = actor;
             c.Remarks = (c.Remarks ?? string.Empty) + $" [Written off {now:yyyy-MM-dd} — centre absorbed the deficit]";
             c.UpdatedAt = now;
         }
@@ -85,17 +87,35 @@ public class WriteOffReferralDeficitCommandHandler : IRequestHandler<WriteOffRef
             Status = CommissionStatus.Paid,
             PaymentDate = now,
             PayeeName = "CENTRE ABSORBED",
+            CreatedBy = actor,
+            UpdatedBy = actor,
             TransactionDate = now,
             ServiceDate = now,
             Remarks = $"DEFICIT WRITE-OFF (₹{deficit:0.##}) — centre absorbed",
             UpdatedAt = now,
         });
 
-        await _context.SaveChangesAsync(ct);
+        try
+        {
+            await _context.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // A payout netted (or another write-off cancelled) one of these rows since we read them.
+            throw new ConflictException("This partner's deficit was just changed by someone else (a payout or another write-off). Refresh and check what is still outstanding.");
+        }
+
         await ReferralLedger.RecomputeAccumulatedTotal(_context, root, hospitalId, ct);
         foreach (var id in open.Select(c => c.ReferrerId).Distinct().Where(id => id != root))
             await ReferralLedger.RecomputeAccumulatedTotal(_context, id, hospitalId, ct);
-        await _context.SaveChangesAsync(ct);
+        try
+        {
+            await _context.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // The write-off is committed; the running total is derived and re-stamped on the next change.
+        }
 
         return new WriteOffReferralDeficitResult(deficit, open.Count);
     }

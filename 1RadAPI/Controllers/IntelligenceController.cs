@@ -1,5 +1,6 @@
 using _1Rad.Application.Features.Appointments.Queries.GetStrategicOutlook;
 using _1Rad.Application.Features.Referrers.Queries.ExportReferralIntelligence;
+using _1Rad.Domain.Constants;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -28,6 +29,8 @@ public class IntelligenceController : ControllerBase
         return Ok(await _mediator.Send(new GetStrategicOutlookQuery(referenceDate, startDate, endDate)));
     }
 
+    // Full patient-level referral workbook - an admin report, like the Referrals page it feeds.
+    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator}")]
     [HttpGet("export")]
     public async Task<FileResult> GetIntelligenceExport([FromQuery] DateTime? startDate, [FromQuery] DateTime? endDate, [FromQuery] bool allTime = false)
     {

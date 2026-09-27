@@ -75,7 +75,8 @@ public class UpdateReferralCommissionStatusCommandHandler : IRequestHandler<Upda
             if (!string.IsNullOrWhiteSpace(request.PayeeEmail))   commission.PayeeEmail   = request.PayeeEmail;
             if (!string.IsNullOrWhiteSpace(request.PayeeAddress)) commission.PayeeAddress = request.PayeeAddress;
         }
-        if (!string.IsNullOrWhiteSpace(request.UpdatedBy)) commission.UpdatedBy = request.UpdatedBy;
+        // Recorded from the signed-in account. request.UpdatedBy is client-supplied, so it is ignored.
+        commission.UpdatedBy = await CommissionActor.ResolveAsync(_context, cancellationToken);
         commission.UpdatedAt = DateTime.UtcNow;
 
         await _context.SaveChangesAsync(cancellationToken);

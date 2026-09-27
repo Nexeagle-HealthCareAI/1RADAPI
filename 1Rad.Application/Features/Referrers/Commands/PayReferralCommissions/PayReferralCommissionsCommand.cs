@@ -66,6 +66,14 @@ public class PayReferralCommissionsCommandHandler : IRequestHandler<PayReferralC
         if (payeeName.Length == 0)
             throw new ValidationException("Paid To (name) is required to record a payout.");
 
+        // Free text from the payout form, into fixed-width columns: refuse it with a message rather than
+        // let the database reject it as a masked error after the whole payout has been prepared.
+        RequireMaxLength(paidBy, 200, "Paid By");
+        RequireMaxLength(payeeName, 200, "Paid To (name)");
+        RequireMaxLength(request.PayeeContact?.Trim(), 40, "Payee contact");
+        RequireMaxLength(request.PayeeEmail?.Trim(), 200, "Payee email");
+        RequireMaxLength(request.PayeeAddress?.Trim(), 500, "Payee address");
+
         var ids = (request.CommissionIds ?? new List<Guid>()).Distinct().ToList();
         if (ids.Count == 0)
             throw new ValidationException("Select at least one commission to pay.");
@@ -86,6 +94,7 @@ public class PayReferralCommissionsCommandHandler : IRequestHandler<PayReferralC
         var paid = new List<Guid>();
         var skipped = new List<SkippedCommission>();
         var now = DateTime.UtcNow;
+        var actor = await CommissionActor.ResolveAsync(_context, ct);
         decimal total = 0m;
 
         foreach (var id in ids)
@@ -124,6 +133,7 @@ public class PayReferralCommissionsCommandHandler : IRequestHandler<PayReferralC
             c.PaymentDate = now;
             c.PaidBy = paidBy;
             c.PayeeName = payeeName;
+            c.UpdatedBy = actor;
             if (!string.IsNullOrWhiteSpace(request.PayeeContact)) c.PayeeContact = request.PayeeContact.Trim();
             if (!string.IsNullOrWhiteSpace(request.PayeeEmail)) c.PayeeEmail = request.PayeeEmail.Trim();
             if (!string.IsNullOrWhiteSpace(request.PayeeAddress)) c.PayeeAddress = request.PayeeAddress.Trim();
@@ -136,20 +146,45 @@ public class PayReferralCommissionsCommandHandler : IRequestHandler<PayReferralC
         decimal recovered = 0m;
         var splitReferrers = new HashSet<Guid>();
         if (paid.Count > 0 && request.NetDeficits)
-            recovered = await RecoverDeficitsAsync(rows.Where(c => paid.Contains(c.Id)).ToList(), paidBy, payeeName, now, hospitalId, splitReferrers, ct);
+            recovered = await RecoverDeficitsAsync(rows.Where(c => paid.Contains(c.Id)).ToList(), paidBy, payeeName, actor, now, hospitalId, splitReferrers, ct);
 
         if (paid.Count > 0)
-            await _context.SaveChangesAsync(ct);
+        {
+            try
+            {
+                await _context.SaveChangesAsync(ct);
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                // Status is the concurrency token: another payout, write-off or edit reached one of these
+                // rows (or a deficit being netted) between our read and this save. Nothing of ours was written.
+                throw new ConflictException("Another payout just changed some of these commissions. Refresh the Referral Hub to see what is still unpaid, then try again.");
+            }
+        }
 
         // A split adds a row (its running total starts at 0) — re-base those partners.
         if (splitReferrers.Count > 0)
         {
             foreach (var referrerId in splitReferrers)
                 await ReferralLedger.RecomputeAccumulatedTotal(_context, referrerId, hospitalId, ct);
-            await _context.SaveChangesAsync(ct);
+            try
+            {
+                await _context.SaveChangesAsync(ct);
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                // The payout above is already committed; a running total is only a derived figure and is
+                // re-stamped by the next commission change, so it must not fail a completed payout.
+            }
         }
 
         return new PayReferralCommissionsResult(paid, skipped, total, recovered, total - recovered);
+    }
+
+    private static void RequireMaxLength(string? value, int max, string label)
+    {
+        if (value != null && value.Length > max)
+            throw new ValidationException($"{label} is too long (at most {max} characters).");
     }
 
     /// <summary>
@@ -158,7 +193,7 @@ public class PayReferralCommissionsCommandHandler : IRequestHandler<PayReferralC
     /// netted against the primary's payout. Returns the amount recovered.
     /// </summary>
     private async Task<decimal> RecoverDeficitsAsync(
-        List<Domain.Entities.ReferralCommission> paidRows, string paidBy, string payeeName, DateTime now, Guid hospitalId, HashSet<Guid> splitReferrers, CancellationToken ct)
+        List<Domain.Entities.ReferralCommission> paidRows, string paidBy, string payeeName, string actor, DateTime now, Guid hospitalId, HashSet<Guid> splitReferrers, CancellationToken ct)
     {
         var registry = await _context.Referrers.AsNoTracking()
             .Where(r => r.HospitalId == hospitalId)
@@ -212,6 +247,7 @@ public class PayReferralCommissionsCommandHandler : IRequestHandler<PayReferralC
                         Status = CommissionStatus.Unpaid,
                         TransactionDate = d.TransactionDate,
                         ServiceDate = d.ServiceDate,
+                        UpdatedBy = actor,
                         Remarks = $"[Remainder of a deficit after ₹{take:0.##} was recovered from a payout on {now:yyyy-MM-dd}] " + d.Remarks,
                     });
                     d.CommissionAmount = -take;
@@ -222,6 +258,7 @@ public class PayReferralCommissionsCommandHandler : IRequestHandler<PayReferralC
                 d.PaymentDate = now;
                 d.PaidBy = paidBy;
                 d.PayeeName = payeeName;
+                d.UpdatedBy = actor;
                 d.Remarks = (d.Remarks ?? string.Empty) + $" [Recovered ₹{take:0.##} by netting against a payout on {now:yyyy-MM-dd}]";
                 d.UpdatedAt = now;
 
