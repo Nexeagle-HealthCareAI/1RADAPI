@@ -16,9 +16,15 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # REQUIRED SECRETS  (repo → Settings → Secrets → Actions)
 # ─────────────────────────────────────────────────────────────────────────────
-#   (GHCR_TOKEN is no longer used — image push/pull authenticates with the built-in GITHUB_TOKEN.
-#    The old PAT hit its 90-day expiry on 2026-09-22 and every deploy failed at the registry login
-#    with "denied: denied"; a workflow token can't expire out from under the pipeline.)
+#   GHCR_TOKEN          GitHub PAT  (write:packages + repo scopes)
+#   (2026-09-24 switched this to the built-in GITHUB_TOKEN after the PAT's 90-day expiry broke the
+#    registry login; reverted 2026-09-28 — the GHCR package never got the "grant this repository
+#    Actions access" setting the switch needed, so every Stage 2 push failed with
+#    "denied: permission_denied: read_package" for 4 days straight. GHCR_TOKEN is what 1HMSAPI
+#    (sibling repo, same registry) uses successfully, so back to that until the package-access
+#    grant happens — at which point GITHUB_TOKEN can be restored. Rotate before 2026-12-26 (90 days
+#    from this token's 2026-09-27 creation) or set a calendar reminder; a token nearing expiry
+#    fails here the same way it did before.)
 #   DEV_SSH_HOST        151.185.45.77
 #   DEV_SSH_USER        root
 #   DEV_SSH_PASSWORD    VM root password
@@ -45,13 +51,6 @@ on:
 concurrency:
   group: api-cicd-${{ github.ref }}
   cancel-in-progress: false
-
-# GITHUB_TOKEN is the registry credential (see the note in the header). packages:write lets Stage 2 push the
-# image; the deploy stages hand the same token to the VMs for their `docker pull`. The 1rad-api package must
-# allow this repository access (Package settings → Manage Actions access) or the push is refused.
-permissions:
-  contents: read
-  packages: write
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/1rad-api
@@ -132,7 +131,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.GHCR_TOKEN }}
 
       - name: Extract image metadata (tags & labels)
         id: meta
@@ -217,7 +216,7 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
         env:
           IMAGE: ${{ env.IMAGE_NAME }}:${{ needs.docker.outputs.image_tag }}
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # name kept for the script below; value is the built-in token
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
           ACTOR: ${{ github.actor }}
           # Secrets (sensitive)
           DB_CONN: ${{ secrets.DEV_DB_CONNECTION }}
@@ -331,7 +330,7 @@ jobs:
 #   GEMINI_KEY             (shared with dev)
 #   PROD_STORAGE_ACCESS_KEY  E2E Object Storage access key for nexeagle-prod bucket
 #   PROD_STORAGE_SECRET_KEY  E2E Object Storage secret key for nexeagle-prod bucket
-#   (GHCR_TOKEN retired — GITHUB_TOKEN is used for the registry)
+#   GHCR_TOKEN             (already set)
 # Required VARIABLES (Settings → Secrets and variables → Actions → Variables):
 #   STORAGE_ENDPOINT, PROD_STORAGE_BUCKET, STORAGE_REGION
 # ─────────────────────────────────────────────────────────────────────────────
@@ -399,7 +398,7 @@ jobs:
 
       - name: Login to GHCR on Prod VM
         env:
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # name kept for the script below; value is the built-in token
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
           ACTOR:      ${{ github.actor }}
         run: |
           ssh -i /tmp/deploy_key \
