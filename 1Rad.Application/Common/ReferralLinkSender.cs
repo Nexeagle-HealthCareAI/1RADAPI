@@ -55,8 +55,11 @@ public sealed class ReferralLinkSender
         if (origin == null)
             return new LinkSendOutcome(false, channel, null, null, "A valid portal address is required to build the link.");
 
+        // A merged-away duplicate is refused the same as a deleted partner: its own portal link would
+        // still resolve (GetDoctorPortalQuery follows the merge), but minting or auto-renewing a FRESH
+        // one for a retired identity is what left two independently-live links open for one partner.
         var referrer = await _context.Referrers.AsNoTracking().IgnoreQueryFilters()
-            .Where(r => r.ReferrerId == referrerId && r.HospitalId == hospitalId && r.DeletedAt == null)
+            .Where(r => r.ReferrerId == referrerId && r.HospitalId == hospitalId && r.DeletedAt == null && r.MergedIntoId == null)
             .Select(r => new { r.Name, r.Email, r.Contact })
             .FirstOrDefaultAsync(ct);
         if (referrer == null)

@@ -225,6 +225,31 @@ public class ReferralLinkLifetimeTests : BaseHandlerTest
     }
 
     [Fact]
+    public async Task Send_RefusesAPartnerAlreadyMergedIntoAnother_TheirOwnLinkStillWorks_ANewOneDoesNot()
+    {
+        var tokens = Tokens();
+        var primary = AddPartner("DR PRIMARY");
+        var duplicate = AddPartner("DR DUPLICATE");
+        await Context.SaveChangesAsync();
+        duplicate.MergedIntoId = primary.ReferrerId;
+        await Context.SaveChangesAsync();
+        var sender = Sender(tokens);
+
+        // A fresh link cannot be minted/sent for the retired identity - it must be sent under
+        // the primary's own id from here on (the merged duplicate's OLD link, if any, still
+        // resolves via GetDoctorPortalQuery's merge walk; that is unaffected by this refusal).
+        var outcome = await sender.SendAsync(HospitalId, duplicate.ReferrerId, "whatsapp", Portal, true, CancellationToken.None);
+        Assert.False(outcome.Success);
+        Assert.True(outcome.PartnerMissing);
+        Assert.Empty(_smsLinks);
+        Assert.Empty(Context.ReferrerLinkVersions);
+
+        // The primary itself is unaffected.
+        var primaryOutcome = await sender.SendAsync(HospitalId, primary.ReferrerId, "whatsapp", Portal, true, CancellationToken.None);
+        Assert.True(primaryOutcome.Success);
+    }
+
+    [Fact]
     public async Task ManualSendCommands_KeepTheirResultShape_AndSwitchAutoRenewOn()
     {
         var tokens = Tokens();
