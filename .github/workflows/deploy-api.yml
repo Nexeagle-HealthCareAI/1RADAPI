@@ -177,7 +177,9 @@ jobs:
 # Required SECRETS  (Settings → Secrets and variables → Actions → Secrets):
 #   DEV_SSH_HOST, DEV_SSH_USER, DEV_SSH_PASSWORD,
 #   DEV_DB_CONNECTION, JWT_SECRET, SMTP_APP_PASSWORD, WHATSAPP_TOKEN,
-#   ANTHROPIC_KEY, GEMINI_KEY, STORAGE_ACCESS_KEY, STORAGE_SECRET_KEY
+#   ANTHROPIC_KEY, GEMINI_KEY, STORAGE_ACCESS_KEY, STORAGE_SECRET_KEY,
+#   CMS_SERVICE_KEY (shared with CMSAPI's ServiceAuth:RadServiceKey — optional,
+#   endpoint stays 401-disabled if empty)
 # Required VARIABLES  (… → Variables):
 #   STORAGE_ENDPOINT, STORAGE_BUCKET, STORAGE_REGION
 # ─────────────────────────────────────────────────────────────────────────────
@@ -227,6 +229,10 @@ jobs:
           GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
           STORAGE_ACCESS_KEY: ${{ secrets.DEV_STORAGE_ACCESS_KEY }}
           STORAGE_SECRET_KEY: ${{ secrets.DEV_STORAGE_SECRET_KEY }}
+          # CMS admin console reads this via HospitalsController's /admin/all -- same value CMSAPI
+          # sends as X-Service-Key. Empty = the endpoint stays disabled (401 on every call), not a
+          # boot-critical secret, so no fail-fast guard below.
+          CMS_SVC_KEY: ${{ secrets.CMS_SERVICE_KEY }}
           # Variables (non-secret config — editable in Settings → Variables)
           STORAGE_ENDPOINT: ${{ vars.DEV_STORAGE_ENDPOINT }}
           STORAGE_BUCKET: ${{ vars.DEV_STORAGE_BUCKET }}
@@ -239,7 +245,7 @@ jobs:
           command_timeout: 10m
           # Forward the values into the remote shell so we can write them with
           # printf (literal — no $/quote/heredoc-indent pitfalls).
-          envs: IMAGE,GHCR_TOKEN,ACTOR,DB_CONN,JWT_SECRET,SMTP_PW,WHATSAPP_TOKEN,ANTHROPIC_KEY,GEMINI_KEY,STORAGE_ACCESS_KEY,STORAGE_SECRET_KEY,STORAGE_ENDPOINT,STORAGE_BUCKET,STORAGE_REGION
+          envs: IMAGE,GHCR_TOKEN,ACTOR,DB_CONN,JWT_SECRET,SMTP_PW,WHATSAPP_TOKEN,ANTHROPIC_KEY,GEMINI_KEY,STORAGE_ACCESS_KEY,STORAGE_SECRET_KEY,CMS_SVC_KEY,STORAGE_ENDPOINT,STORAGE_BUCKET,STORAGE_REGION
           script: |
             set -e
 
@@ -270,6 +276,7 @@ jobs:
               printf 'Storage__Minio__SecretKey=%s\n' "$STORAGE_SECRET_KEY"
               printf 'Storage__Minio__Region=%s\n'  "$STORAGE_REGION"
               printf 'DesktopApp__InstallerUrl=%s\n' "${STORAGE_ENDPOINT%/}/$STORAGE_BUCKET/downloads/1Rad-Setup.exe"
+              printf 'ServiceAuth__CmsServiceKey=%s\n' "$CMS_SVC_KEY"
             } > /opt/myapp/dev.env
 
             echo "$GHCR_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
@@ -331,6 +338,7 @@ jobs:
 #   PROD_STORAGE_ACCESS_KEY  E2E Object Storage access key for nexeagle-prod bucket
 #   PROD_STORAGE_SECRET_KEY  E2E Object Storage secret key for nexeagle-prod bucket
 #   GHCR_TOKEN             (already set)
+#   CMS_SERVICE_KEY        (shared with dev; same value as CMSAPI's ServiceAuth:RadServiceKey)
 # Required VARIABLES (Settings → Secrets and variables → Actions → Variables):
 #   STORAGE_ENDPOINT, PROD_STORAGE_BUCKET, STORAGE_REGION
 # ─────────────────────────────────────────────────────────────────────────────
@@ -360,6 +368,7 @@ jobs:
           STORAGE_ENDPOINT:   ${{ vars.PROD_STORAGE_ENDPOINT }}
           STORAGE_BUCKET:     ${{ vars.PROD_STORAGE_BUCKET }}
           STORAGE_REGION:     ${{ vars.STORAGE_REGION }}
+          CMS_SVC_KEY:        ${{ secrets.CMS_SERVICE_KEY }}
         run: |
           : "${DB_CONN:?PROD_DB_CONNECTION secret is empty/missing}"
           : "${JWT_SECRET:?JWT_SECRET secret is empty/missing}"
@@ -379,6 +388,7 @@ jobs:
             printf 'Storage__Minio__SecretKey=%s\n' "$STORAGE_SECRET_KEY"
             printf 'Storage__Minio__Region=%s\n'    "$STORAGE_REGION"
             printf 'DesktopApp__InstallerUrl=%s\n'  "${STORAGE_ENDPOINT%/}/$STORAGE_BUCKET/downloads/1Rad-Setup.exe"
+            printf 'ServiceAuth__CmsServiceKey=%s\n' "$CMS_SVC_KEY"
           } > /tmp/prod.env
           echo "prod.env written ($(wc -l < /tmp/prod.env) lines)"
 

@@ -2,6 +2,7 @@ using _1Rad.Application.Features.Hospitals.Commands.CreateChain;
 using _1Rad.Application.Features.Hospitals.Queries.GetGroupHospitals;
 using _1Rad.Application.Features.Hospitals.Commands.UpdateHospitalDetails;
 using _1Rad.Application.Features.Hospitals.Queries.GetHospitalDetails;
+using _1Rad.Application.Features.Hospitals.Queries.GetAllHospitalsForAdmin;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -14,10 +15,12 @@ namespace _1RadAPI.Controllers;
 public class HospitalsController : ControllerBase
 {
     private readonly IMediator _mediator;
+    private readonly IConfiguration _configuration;
 
-    public HospitalsController(IMediator mediator)
+    public HospitalsController(IMediator mediator, IConfiguration configuration)
     {
         _mediator = mediator;
+        _configuration = configuration;
     }
 
     [HttpGet("{id}")]
@@ -73,6 +76,22 @@ public class HospitalsController : ControllerBase
     {
         var result = await _mediator.Send(new GetGroupHospitalsQuery());
         return Ok(result);
+    }
+
+    // [SERVICE-TO-SERVICE] Every registered diagnostic center + active staff roster, platform-wide,
+    // for CMS's admin console. Protected by a shared key header instead of a user JWT -- same
+    // convention as CMSAPI's EasyHmsSubscriptionPlansController/SymptomRouterController "/service"
+    // endpoints. Empty/missing configured key means this stays disabled (401 on every call).
+    [HttpGet("admin/all")]
+    [AllowAnonymous]
+    public async Task<IActionResult> GetAllForAdmin([FromHeader(Name = "X-Service-Key")] string? serviceKey)
+    {
+        var expectedKey = _configuration["ServiceAuth:CmsServiceKey"];
+        if (string.IsNullOrEmpty(expectedKey) || serviceKey != expectedKey)
+            return Unauthorized();
+
+        var result = await _mediator.Send(new GetAllHospitalsForAdminQuery());
+        return Ok(new { success = true, data = result });
     }
 }
 
