@@ -87,15 +87,17 @@ public class ReferrersController : ControllerBase
 
     // ── Doctor-portal share links (#3) ─────────────────────────────────────
     // Mint this referrer's signed portal-link token (for copy / WhatsApp).
-    // A link is only ever minted for a live partner of the CALLER's centre — the token
-    // is a bearer credential for that partner's earnings, so signing one for an
-    // arbitrary id (another centre's partner, a deleted one) is refused.
+    // A link is only ever minted for a live, un-merged partner of the CALLER's centre — the token
+    // is a bearer credential for that partner's earnings, so signing one for an arbitrary id
+    // (another centre's partner, a deleted one, or one already merged into another) is refused. A
+    // merged partner's OWN existing link still works (it resolves to the primary's data), but a
+    // fresh one is not minted for a retired identity.
     [Authorize(Roles = AdminRoles)]
     [HttpGet("{id:guid}/share-link")]
     public async Task<IActionResult> ShareLink(Guid id)
     {
         var hospitalId = _context.UserContext.HospitalId;
-        var exists = await _context.Referrers.AnyAsync(r => r.ReferrerId == id && r.HospitalId == hospitalId && r.DeletedAt == null);
+        var exists = await _context.Referrers.AnyAsync(r => r.ReferrerId == id && r.HospitalId == hospitalId && r.DeletedAt == null && r.MergedIntoId == null);
         if (!exists) return NotFound(new { success = false, error = "Partner not found." });
         var version = await ReferralLinkVersions.GetOneAsync(_context, id, HttpContext.RequestAborted);
         return Ok(new { success = true, referrerId = id, token = _referralTokens.Issue(id, version) });
@@ -110,7 +112,7 @@ public class ReferrersController : ControllerBase
         var requested = (body?.ReferrerIds ?? new List<Guid>()).Distinct().ToList();
         var hospitalId = _context.UserContext.HospitalId;
         var allowed = await _context.Referrers
-            .Where(r => requested.Contains(r.ReferrerId) && r.HospitalId == hospitalId && r.DeletedAt == null)
+            .Where(r => requested.Contains(r.ReferrerId) && r.HospitalId == hospitalId && r.DeletedAt == null && r.MergedIntoId == null)
             .Select(r => r.ReferrerId)
             .ToListAsync();
         var versions = await ReferralLinkVersions.GetAsync(_context, allowed, HttpContext.RequestAborted);
