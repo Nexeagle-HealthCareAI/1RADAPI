@@ -74,6 +74,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<StudyAnnotation> StudyAnnotations => Set<StudyAnnotation>();
     public DbSet<JobRun> JobRuns => Set<JobRun>();
+    public DbSet<IntegrationClient> IntegrationClients => Set<IntegrationClient>();
     public DbSet<ReferrerLinkVersion> ReferrerLinkVersions => Set<ReferrerLinkVersion>();
     public DbSet<ReferralBookingRequest> ReferralBookingRequests => Set<ReferralBookingRequest>();
 
@@ -93,6 +94,18 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.RunKey).IsRequired().HasMaxLength(50);
             entity.Property(e => e.ClaimedBy).HasMaxLength(200);
             entity.HasIndex(e => new { e.JobName, e.RunKey }).IsUnique();
+        });
+
+        // dbo.IntegrationClients (DB script 101) — API keys for DICOMweb / worklist / FHIR.
+        modelBuilder.Entity<IntegrationClient>(entity =>
+        {
+            entity.ToTable("IntegrationClients", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.KeyId).IsRequired().HasMaxLength(16);
+            entity.Property(e => e.SecretHash).IsRequired().HasMaxLength(64);
+            entity.Property(e => e.Scopes).IsRequired().HasMaxLength(400);
+            entity.HasIndex(e => e.KeyId).IsUnique();
         });
 
         // dbo.StudyAnnotations (DB script 98) — saved viewer measurements.

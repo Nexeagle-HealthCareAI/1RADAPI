@@ -128,6 +128,10 @@ public static class DependencyInjection
         services.AddHostedService<DicomExtractionWorker>();
         services.AddHostedService<DicomExtractionBackfillJob>();
 
+        // Standard interfaces (gap analysis P3-6): DICOMweb read + STOW ingest.
+        services.AddScoped<_1Rad.Infrastructure.Interop.DicomWebService>();
+        services.AddScoped<_1Rad.Infrastructure.Interop.DicomStowService>();
+
         services.AddHostedService<DailyFinancialReportJob>();
         services.AddHostedService<DailyReferralExcelReportJob>();
         services.AddHostedService<ReferralLinkRenewalJob>();

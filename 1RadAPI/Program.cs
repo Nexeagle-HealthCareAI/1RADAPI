@@ -135,11 +135,24 @@ if (Encoding.UTF8.GetByteCount(secretKey) < 32)
         $"Jwt:Secret is too short ({Encoding.UTF8.GetByteCount(secretKey)} bytes). " +
         "HMAC-SHA256 requires at least 32 bytes (256 bits) — use a longer random secret.");
 
+// Staff sign in with JWTs. Outside systems (DICOMweb viewers, the bridge's worklist
+// feed, an HIS reading FHIR) use a centre integration key instead — accepted only on
+// the integration endpoints. A policy scheme picks the handler per request.
 builder.Services.AddAuthentication(options =>
 {
-    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultScheme = _1RadAPI.Authorization.IntegrationKeyAuthenticationHandler.SelectorScheme;
+    options.DefaultAuthenticateScheme = _1RadAPI.Authorization.IntegrationKeyAuthenticationHandler.SelectorScheme;
+    options.DefaultChallengeScheme = _1RadAPI.Authorization.IntegrationKeyAuthenticationHandler.SelectorScheme;
 })
+.AddPolicyScheme(_1RadAPI.Authorization.IntegrationKeyAuthenticationHandler.SelectorScheme, "JWT or integration key", options =>
+{
+    options.ForwardDefaultSelector = ctx =>
+        _1RadAPI.Authorization.IntegrationKeyAuthenticationHandler.HasIntegrationCredentials(ctx.Request)
+            ? _1RadAPI.Authorization.IntegrationKeyAuthenticationHandler.SchemeName
+            : JwtBearerDefaults.AuthenticationScheme;
+})
+.AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, _1RadAPI.Authorization.IntegrationKeyAuthenticationHandler>(
+    _1RadAPI.Authorization.IntegrationKeyAuthenticationHandler.SchemeName, _ => { })
 .AddJwtBearer(options =>
 {
     options.TokenValidationParameters = new TokenValidationParameters
@@ -162,7 +175,14 @@ builder.Services.AddAuthentication(options =>
             if (!string.IsNullOrEmpty(token) && ctx.HttpContext.Request.Path.StartsWithSegments("/api/v1/live"))
                 ctx.Token = token;
             return Task.CompletedTask;
-        }
+        },
+        // DICOMweb clients such as Weasis only send Basic credentials after a Basic challenge.
+        OnChallenge = ctx =>
+        {
+            if (_1RadAPI.Authorization.IntegrationKeyAuthenticationHandler.IsIntegrationPath(ctx.HttpContext.Request.Path))
+                ctx.Response.Headers.Append("WWW-Authenticate", "Basic realm=\"1Rad integration\"");
+            return Task.CompletedTask;
+        },
     };
 });
 

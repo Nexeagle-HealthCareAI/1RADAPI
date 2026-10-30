@@ -4,22 +4,38 @@ Written 30 Oct 2026 with the P3 fixes. P3-1 to P3-5, P3-7 and P3-8 are implement
 this file covers the two items that are architecture work, with what is already done
 and the order to do the rest.
 
-## P3-6 — standard imaging and HIS interfaces
+## P3-6 — standard imaging and HIS interfaces (implemented 30 Oct 2026)
 
-Today 1Rad speaks only its own manifest API (`/Study/...`) plus the on-prem Orthanc
-bridge (repo `nexegale-dicom-bridge`, not in this folder). A hospital HIS, a third-party
-viewer or a modern modality cannot connect directly.
+All four phases are in the API. Outside systems authenticate with a **centre integration
+key** (Settings → Integrations, admins only; DB script 101 `IntegrationClients`). A key looks
+like `1rk_<id>_<secret>`, is shown once, is stored only as a SHA-256 hash, belongs to one
+centre, and opens **only** `/api/v1/dicomweb`, `/api/v1/worklist` and `/api/v1/fhir` for the
+scopes it was given (`dicomweb.read`, `dicomweb.write`, `worklist.read`, `fhir.read`). Send it
+as `Authorization: Bearer 1rk_…`, `X-Api-Key: 1rk_…`, or as the Basic-auth password (any
+user name). Revoking takes effect within a minute on every instance. Staff access tokens work
+on the same endpoints with their normal roles. The subscription lock applies to keys too.
 
-| Phase | What | Why first | Size |
-| --- | --- | --- | --- |
-| 1 | **DICOMweb read**: QIDO-RS (`/dicomweb/studies`, `/series`, `/instances` search) and WADO-RS (instances, metadata, frames) over `ImagingStudies` + `StudySliceIndexes` + the stored `.dcm`. Bearer auth, centre-scoped, `[RequiresModule(PACS)]`. | Lets OHIF/Weasis/any DICOMweb viewer read 1Rad studies, and unlocks Cornerstone's `wadors` loader — the progressive/HTJ2K partial-decode path `DICOM_PIPELINE_ARCHITECTURE.md` says is blocked (`.jhc` files are written but unused). | 2–3 weeks |
-| 2 | **STOW-RS ingest** (`POST /dicomweb/studies`) feeding the existing extraction worker. | Modalities/PACS that push DICOMweb no longer need the bridge's per-instance SAS dance. | 1–2 weeks |
-| 3 | **Modality worklist**: `GET /api/v1/worklist/mwl` (today's BOOKED/CONFIRMED services as MWL JSON); the bridge converts to Orthanc worklist files (DIMSE C-FIND stays on-prem). | Removes re-typing patient demographics at the modality — a frequent source of the "unmatched study" queue. | 1 week + bridge change |
-| 4 | **FHIR R4** facade: `Patient`, `ServiceRequest`, `ImagingStudy`, `DiagnosticReport` (signed reports only, PDF attachment — see P2-7). Follow the ABDM / NRCeS FHIR profiles. | Integration with NexEagle's own 1HMS (which already does ABDM) and outside HIS; HL7 v2 ORM/ORU only if a customer insists. | 3–4 weeks |
+| Phase | Endpoints | Notes |
+| --- | --- | --- |
+| 1 DICOMweb read | `GET /api/v1/dicomweb/studies`, `/series`, `/studies/{s}/series`, `/studies/{s}/instances`, `/studies/{s}/series/{se}/instances` (QIDO-RS); `GET /studies/{s}[/series/{se}[/instances/{i}]]` (WADO-RS, multipart `application/dicom`), `…/metadata` at each level, `…/instances/{i}/frames/{n,…}` | Served from `ImagingStudies` + `StudySliceIndexes` + the extracted `.dcm` blobs. Only Ready studies with a UID and at least one extracted instance are listed; server MPR planes are hidden; duplicate SOP uploads are served once. Instances are stored as HTJ2K lossless: `transfer-syntax=*` returns them as stored; no transfer syntax (PS3.18 default) decodes to Explicit VR Little Endian on the fly. Frames requested as `application/octet-stream; transfer-syntax=*` (what OHIF/Cornerstone send) come back compressed as stored — the `wadors` path `DICOM_PIPELINE_ARCHITECTURE.md` was waiting for. Full metadata is built once per series from the files and cached (15 min in memory, plus a `…/dicomweb-meta/…json` blob keyed by the exact slice set). QIDO search: StudyInstanceUID, PatientName (wildcards, `fuzzymatching=true`), PatientID, AccessionNumber, StudyDate (ranges), ModalitiesInStudy, StudyDescription, SeriesInstanceUID, SeriesDescription, limit/offset. No matches → 204. |
+| 2 STOW-RS | `POST /api/v1/dicomweb/studies[/{s}]` (`multipart/related; type="application/dicom"`, ≤1 GB per request) | Instances are staged and handed to the existing extraction queue. Requests for the same study within `DicomWeb:StowBatchSeconds` (20 s) join one batch, so a CT sent as 50 small requests is extracted once. Studies are created and matched (worklist UID → accession → MRN → unique name). Response: PS3.18 DICOM JSON with Referenced/Failed SOP sequences (200 / 202 / 409). Storage quota applies. Instances become retrievable when extraction finishes (seconds to a few minutes). |
+| 3 Modality worklist | `GET /api/v1/worklist/mwl?date=YYYYMMDD&modality=CT&days=1` | DICOM JSON, one item per booked service not yet scanned (IST day). Each item's Study Instance UID is `2.25.<service id>`; when images come back with it, `StudyMatchingService` links them to that exact service, appointment and patient. Accession = the appointment's display id (≤16 chars). The DIMSE C-FIND side stays on-prem: **bridge change still needed** — poll this endpoint every 1–2 min with a `worklist.read` key and write the items as Orthanc worklist files (`.wl`, e.g. with `json2dcm`/pydicom) into Orthanc's Worklists folder. |
+| 4 FHIR R4 (read-only) | `GET /api/v1/fhir/metadata` (no auth), `Patient`, `ServiceRequest` (one per booked service), `ImagingStudy` (with a contained DICOMweb Endpoint), `DiagnosticReport` (signed reports only: Preliminary / Final / Addended, PDF via a time-limited signed link) — read by id and search, `_count` ≤200 + `_offset` paging | `application/fhir+json`. Codes follow what ABDM/NRCeS use (SNOMED imaging category, LOINC 18748-4, v2-0074 RAD, DICOM modality codes) but resources do not claim NRCeS-profile conformance: 1Rad holds age as text and no ABHA id. HL7 v2 not built. |
 
-Notes: keep the original transfer syntax available for WADO-RS (`Accept` negotiation)
-because not every viewer decodes HTJ2K; reuse `AssetUrlSigner` for short-lived
-bulk-data URLs instead of proxying bytes through the API.
+Connecting a viewer (OHIF example): data source `dicomweb`, `qidoRoot` and `wadoRoot` =
+`https://<api>/api/v1/dicomweb`, `imageRendering: "wadors"`, `thumbnailRendering: "wadors"`,
+request header `Authorization: Bearer 1rk_…`. Browsers on another origin also need that origin
+in `Cors:AllowedOrigins`. Weasis / Orthanc DICOMweb client: URL as above, Basic auth with the
+key as password.
+
+Set `Interop:PublicApiBaseUrl` (e.g. `https://1rad-api.nexeagle.com`) so retrieve URLs and FHIR
+links use the public host; otherwise they come from the request / X-Forwarded headers.
+
+Not done: `/rendered` and `/thumbnail` (viewers fall back to frames), STOW of the JSON +
+bulk-data form, DIMSE inside the API (by design — the bridge does DIMSE), FHIR write, and an
+ABHA-linked Patient. The DICOMweb metadata cache blobs are not referenced by any row, so the
+orphan sweep may delete them after `OrphanMinAgeHours` when deletion is on; they are rebuilt on
+the next request.
 
 ## P3-9 — running more than one API instance
 
