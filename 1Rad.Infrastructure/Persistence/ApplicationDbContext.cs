@@ -73,6 +73,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<RadAiQuestionLog> RadAiQuestionLogs => Set<RadAiQuestionLog>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<StudyAnnotation> StudyAnnotations => Set<StudyAnnotation>();
+    public DbSet<JobRun> JobRuns => Set<JobRun>();
     public DbSet<ReferrerLinkVersion> ReferrerLinkVersions => Set<ReferrerLinkVersion>();
     public DbSet<ReferralBookingRequest> ReferralBookingRequests => Set<ReferralBookingRequest>();
 
@@ -82,6 +83,18 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
 
         // RadAI question log — capture for the "retrain" loop. Scoped to a
         // hospital by the global query filter at the end of this method.
+        // dbo.JobRuns (DB script 99) — one run per job slot across instances.
+        modelBuilder.Entity<JobRun>(entity =>
+        {
+            entity.ToTable("JobRuns", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).UseIdentityColumn();
+            entity.Property(e => e.JobName).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.RunKey).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.ClaimedBy).HasMaxLength(200);
+            entity.HasIndex(e => new { e.JobName, e.RunKey }).IsUnique();
+        });
+
         // dbo.StudyAnnotations (DB script 98) — saved viewer measurements.
         modelBuilder.Entity<StudyAnnotation>(entity =>
         {

@@ -1,3 +1,4 @@
+using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using ClosedXML.Excel;
 using Microsoft.EntityFrameworkCore;
@@ -25,17 +26,10 @@ public class DailyReferralExcelReportJob : BackgroundService
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            var now = DateTime.Now;
-            // Target time: 9:05 PM (21:05) - staggered slightly after the financial report
-            var nextRunTime = new DateTime(now.Year, now.Month, now.Day, 21, 5, 0);
-
-            if (now > nextRunTime)
-            {
-                nextRunTime = nextRunTime.AddDays(1);
-            }
-
-            var delay = nextRunTime - now;
-            _logger.LogInformation("Next Referral Audit scheduled for {NextRunTime} (in {DelayHours:F2} hours)", nextRunTime, delay.TotalHours);
+            // 21:05 India time (the container clock is UTC; see JobSchedule).
+            var delay = JobSchedule.DelayUntilIst(21, 5, DateTime.UtcNow);
+            var nextRunTime = DateTime.UtcNow + delay;
+            _logger.LogInformation("Next Referral Audit scheduled for {NextRunTime} UTC (in {DelayHours:F2} hours)", nextRunTime, delay.TotalHours);
 
             try
             {
@@ -64,10 +58,17 @@ public class DailyReferralExcelReportJob : BackgroundService
         var context = scope.ServiceProvider.GetRequiredService<IApplicationDbContext>();
         var emailService = scope.ServiceProvider.GetRequiredService<IEmailService>();
 
-        var today = DateTime.Today;
-        // Calculate start of the current week (Monday)
+        // IST calendar day and week (Monday start), as UTC windows (columns hold UTC).
+        var today = JobSchedule.IstToday(DateTime.UtcNow);
         var startOfWeek = today.AddDays(-(int)today.DayOfWeek + (int)DayOfWeek.Monday);
         if (today < startOfWeek) startOfWeek = startOfWeek.AddDays(-7);
+        var dayStartUtc = IstDateRange.ToUtcStart(today);
+        var dayEndUtc = dayStartUtc.AddDays(1);
+        var weekStartUtc = IstDateRange.ToUtcStart(startOfWeek);
+
+        // Several API instances each run this job; only one sends the emails.
+        if (!await JobSchedule.TryClaimAsync(context, "DailyReferralExcelReport", today.ToString("yyyy-MM-dd"), _logger, stoppingToken))
+            return;
 
         var hospitals = await context.Hospitals
             .IgnoreQueryFilters()
@@ -109,7 +110,7 @@ public class DailyReferralExcelReportJob : BackgroundService
                         .Include(a => a.Patient)
                         .Where(a => a.HospitalId == hospital.HospitalId && 
                                     a.Patient.ReferrerId == referrer.ReferrerId && 
-                                    a.DateTime.Date == today)
+                                    a.DateTime >= dayStartUtc && a.DateTime < dayEndUtc)
                         .Select(a => a.PatientId)
                         .Distinct()
                         .CountAsync(stoppingToken);
@@ -120,7 +121,7 @@ public class DailyReferralExcelReportJob : BackgroundService
                         .Include(a => a.Patient)
                         .Where(a => a.HospitalId == hospital.HospitalId && 
                                     a.Patient.ReferrerId == referrer.ReferrerId && 
-                                    a.DateTime.Date >= startOfWeek)
+                                    a.DateTime >= weekStartUtc && a.DateTime < dayEndUtc)
                         .Select(a => a.PatientId)
                         .Distinct()
                         .CountAsync(stoppingToken);
