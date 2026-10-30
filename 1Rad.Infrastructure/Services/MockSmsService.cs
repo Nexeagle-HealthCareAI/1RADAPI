@@ -23,4 +23,10 @@ public class MockSmsService : ISmsService
         _logger.LogInformation("Sending referral portal link to Dr. {Doctor} at {Mobile} via MockSmsService: {Link}", doctorName, mobile, link);
         return Task.CompletedTask;
     }
+
+    public Task SendReportReadyAsync(string mobile, string patientName, string centreName, string link)
+    {
+        _logger.LogInformation("Report-ready message to {Mobile} via MockSmsService: {Link}", mobile, link);
+        return Task.CompletedTask;
+    }
 }

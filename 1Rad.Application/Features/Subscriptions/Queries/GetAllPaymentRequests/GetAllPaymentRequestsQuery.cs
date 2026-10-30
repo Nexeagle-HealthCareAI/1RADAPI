@@ -19,5 +19,12 @@ public record PaymentRequestDto(
     // the admin can verify what they're approving.
     string? Modules,
     int StorageOverageGb,
-    decimal StorageOverageAmount
+    decimal StorageOverageAmount,
+    // What the reviewer checks against the bank statement (CMS approval screen).
+    string TransactionReference,
+    string PayerName,
+    string PayerContact,
+    DateTime PaidAt,
+    DateTime? ReviewedAt,
+    Guid? PlanId
 );

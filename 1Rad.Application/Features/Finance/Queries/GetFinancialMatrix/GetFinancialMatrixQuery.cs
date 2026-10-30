@@ -6,7 +6,7 @@ using _1Rad.Application.Features.Finance.Queries.GetFinancialMatrix.Calculators;
 
 namespace _1Rad.Application.Features.Finance.Queries.GetFinancialMatrix;
 
-public record GetFinancialMatrixQuery : IRequest<FinancialMatrixDto>
+public record GetFinancialMatrixQuery : IRequest<FinancialMatrixDto>, ICachedAnalyticsQuery
 {
     public DateTime? StartDate { get; init; }
     public DateTime? EndDate { get; init; }

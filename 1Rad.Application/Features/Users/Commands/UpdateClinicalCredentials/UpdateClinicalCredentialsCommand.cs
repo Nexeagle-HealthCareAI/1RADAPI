@@ -12,7 +12,12 @@ public record UpdateClinicalCredentialsCommand(
     Guid UserId,
     string? Specialization,
     string? Degree,
-    string? LicenseNo
+    string? LicenseNo,
+    // Who is asking (gap analysis P1-6). Callers may edit their own profile, or an
+    // admin may edit a user mapped to the admin's current centre.
+    Guid RequestingUserId = default,
+    Guid HospitalId = default,
+    bool RequesterIsAdmin = false
 ) : IRequest<UpdateClinicalCredentialsResponse>;
 
 public record UpdateClinicalCredentialsResponse(

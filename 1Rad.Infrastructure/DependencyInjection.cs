@@ -66,6 +66,9 @@ public static class DependencyInjection
         // (token-optimization layer). Backed by the AddMemoryCache below.
         services.AddSingleton<IRadAiResponseCache, RadAiResponseCache>();
         services.AddScoped<IEmailService, EmailService>();
+        services.AddScoped<IDistributedRateLimiter, SqlRateLimiter>();
+        // Reuses heavy analytics results while the centre's data is unchanged (P3-9).
+        services.AddTransient(typeof(MediatR.IPipelineBehavior<,>), typeof(AnalyticsCacheBehavior<,>));
         services.AddScoped<IJwtProvider, JwtProvider>();
         services.AddSingleton<ITrackingTokenService, TrackingTokenService>();
         services.AddSingleton<IStudyShareTokenService, StudyShareTokenService>();
@@ -74,6 +77,7 @@ public static class DependencyInjection
         services.AddSingleton(_1Rad.Application.Common.ReferralLinkOptions.From(configuration));
         // Mints + delivers + records a portal link (manual send, daily renewal, doctor self-service).
         services.AddScoped<_1Rad.Application.Common.ReferralLinkSender>();
+        services.AddScoped<_1Rad.Application.Common.IReportReadyNotifier, _1Rad.Application.Common.ReportReadyNotifier>();
 
         // Session management — the active-session cache is process-local;
         // when we scale to multi-instance, swap the IActiveSessionCache

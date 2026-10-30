@@ -71,6 +71,9 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<ApprovalRequest> ApprovalRequests => Set<ApprovalRequest>();
     public DbSet<IdempotencyRecord> IdempotencyKeys => Set<IdempotencyRecord>();
     public DbSet<RadAiQuestionLog> RadAiQuestionLogs => Set<RadAiQuestionLog>();
+    public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+    public DbSet<StudyAnnotation> StudyAnnotations => Set<StudyAnnotation>();
+    public DbSet<JobRun> JobRuns => Set<JobRun>();
     public DbSet<ReferrerLinkVersion> ReferrerLinkVersions => Set<ReferrerLinkVersion>();
     public DbSet<ReferralBookingRequest> ReferralBookingRequests => Set<ReferralBookingRequest>();
 
@@ -80,6 +83,40 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
 
         // RadAI question log — capture for the "retrain" loop. Scoped to a
         // hospital by the global query filter at the end of this method.
+        // dbo.JobRuns (DB script 99) — one run per job slot across instances.
+        modelBuilder.Entity<JobRun>(entity =>
+        {
+            entity.ToTable("JobRuns", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).UseIdentityColumn();
+            entity.Property(e => e.JobName).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.RunKey).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.ClaimedBy).HasMaxLength(200);
+            entity.HasIndex(e => new { e.JobName, e.RunKey }).IsUnique();
+        });
+
+        // dbo.StudyAnnotations (DB script 98) — saved viewer measurements.
+        modelBuilder.Entity<StudyAnnotation>(entity =>
+        {
+            entity.ToTable("StudyAnnotations", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.StudyKey).IsRequired().HasMaxLength(80);
+            entity.Property(e => e.AnnotationsJson).IsRequired();
+            entity.HasIndex(e => new { e.HospitalId, e.StudyKey }).IsUnique();
+        });
+
+        // dbo.AuditLogs (DB script 97) — see AuditTrail.
+        modelBuilder.Entity<AuditLog>(entity =>
+        {
+            entity.ToTable("AuditLogs", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).UseIdentityColumn();
+            entity.Property(e => e.EntityType).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.EntityId).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.Action).IsRequired().HasMaxLength(20);
+            entity.HasIndex(e => new { e.HospitalId, e.CreatedAt });
+        });
+
         modelBuilder.Entity<RadAiQuestionLog>(entity =>
         {
             entity.ToTable("RadAiQuestionLogs", "dbo");
@@ -1481,6 +1518,10 @@ UPDATE dbo.StudyAssets
                 entry.Entity.UpdatedAt = nowUtc;
             }
         }
+
+        // Who changed what (gap analysis P3-8): same transaction as the change.
+        var auditRows = AuditTrail.Collect(ChangeTracker, UserContext, nowUtc);
+        if (auditRows.Count > 0) AuditLogs.AddRange(auditRows);
 
         var result = await base.SaveChangesAsync(cancellationToken);
 

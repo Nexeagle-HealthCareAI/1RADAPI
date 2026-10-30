@@ -53,6 +53,10 @@ public class SubscriptionLifecycleJob : BackgroundService
             var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
             var now = DateTime.UtcNow;
 
+            // One instance per 6-hour block (gap analysis P3-9).
+            if (!await JobSchedule.TryClaimAsync(db, "SubscriptionLifecycle", JobSchedule.IntervalKey(now, (int)_interval.TotalHours), _logger, ct))
+                return;
+
             // Load all subscriptions (ignore global HospitalId filter for this admin job)
             var subscriptions = await db.HospitalSubscriptions
                 .IgnoreQueryFilters()

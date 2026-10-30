@@ -1,4 +1,5 @@
 using _1Rad.Application.Features.Referrers.Commands.RenewReferralLinks;
+using _1Rad.Application.Interfaces;
 using MediatR;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -29,16 +30,17 @@ public class ReferralLinkRenewalJob : BackgroundService
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            var now = DateTime.Now;
-            var next = new DateTime(now.Year, now.Month, now.Day, 10, 15, 0);
-            if (now > next) next = next.AddDays(1);
-
-            try { await Task.Delay(next - now, stoppingToken); }
+            // 10:15 India time (the container clock is UTC; see JobSchedule).
+            try { await Task.Delay(JobSchedule.DelayUntilIst(10, 15, DateTime.UtcNow), stoppingToken); }
             catch (OperationCanceledException) { break; }
 
             try
             {
                 using var scope = _serviceProvider.CreateScope();
+                // One instance renews (and re-sends WhatsApp/email links) per day.
+                var db = scope.ServiceProvider.GetRequiredService<IApplicationDbContext>();
+                var runKey = JobSchedule.IstToday(DateTime.UtcNow).ToString("yyyy-MM-dd");
+                if (!await JobSchedule.TryClaimAsync(db, "ReferralLinkRenewal", runKey, _logger, stoppingToken)) continue;
                 var mediator = scope.ServiceProvider.GetRequiredService<IMediator>();
                 var result = await mediator.Send(new RenewExpiringReferralLinksCommand(), stoppingToken);
                 _logger.LogInformation(

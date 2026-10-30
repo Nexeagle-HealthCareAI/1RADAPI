@@ -33,8 +33,13 @@ public class UpdateHospitalDetailsCommandHandler : IRequestHandler<UpdateHospita
         hospital.PAN = request.PAN;
         hospital.NABHNumber = request.NABHNumber;
         hospital.IsAutoBillingEnabled = request.IsAutoBillingEnabled;
-        hospital.Latitude = request.Latitude;
-        hospital.Longitude = request.Longitude;
+        // Only overwrite the GPS pin when the caller sent one: the Billing page's
+        // auto-billing toggle PUTs the hospital without lat/long and used to wipe it.
+        if (request.Latitude.HasValue && request.Longitude.HasValue)
+        {
+            hospital.Latitude = request.Latitude;
+            hospital.Longitude = request.Longitude;
+        }
 
         try
         {

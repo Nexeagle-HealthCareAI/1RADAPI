@@ -13,7 +13,7 @@ public record GetStrategicOutlookQuery(
     DateTime? ReferenceDate = null,
     DateTime? StartDate = null,
     DateTime? EndDate = null
-) : IRequest<StrategicOutlookDto>;
+) : IRequest<StrategicOutlookDto>, ICachedAnalyticsQuery;
 
 public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlookQuery, StrategicOutlookDto>
 {

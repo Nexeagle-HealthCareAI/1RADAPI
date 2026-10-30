@@ -3,7 +3,10 @@ using _1Rad.Application.Features.Hospitals.Queries.GetGroupHospitals;
 using _1Rad.Application.Features.Hospitals.Commands.UpdateHospitalDetails;
 using _1Rad.Application.Features.Hospitals.Queries.GetHospitalDetails;
 using _1Rad.Application.Features.Hospitals.Queries.GetAllHospitalsForAdmin;
+using _1Rad.Application.Interfaces;
+using _1Rad.Domain.Constants;
 using MediatR;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -14,26 +17,49 @@ namespace _1RadAPI.Controllers;
 [Route("api/v1/[controller]")]
 public class HospitalsController : ControllerBase
 {
+    private const string AdminRoles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator}";
+    // Accountant toggles auto-billing from the Billing page (useExpenseActions).
+    private const string HospitalEditRoles = $"{AdminRoles},{RoleConstants.Accountant}";
+
     private readonly IMediator _mediator;
     private readonly IConfiguration _configuration;
+    private readonly IUserContext _userContext;
+    private readonly IApplicationDbContext _db;
 
-    public HospitalsController(IMediator mediator, IConfiguration configuration)
+    public HospitalsController(IMediator mediator, IConfiguration configuration, IUserContext userContext, IApplicationDbContext db)
     {
         _mediator = mediator;
         _configuration = configuration;
+        _userContext = userContext;
+        _db = db;
+    }
+
+    // Gap analysis P1-6: GET/PUT took any hospital id (cross-tenant read/write).
+    // A caller may only touch centres they are mapped to. Checked against the DB rather
+    // than the token's "hubs" claim so a centre created a moment ago (POST chain) is
+    // editable before the access token is re-minted.
+    private async Task<bool> CanAccessHospitalAsync(Guid id)
+    {
+        if (id == Guid.Empty || _userContext.UserId == Guid.Empty) return false;
+        if (_userContext.AuthorizedHospitalIds.Contains(id)) return true;
+        return await _db.UserHospitalMappings
+            .AnyAsync(m => m.UserId == _userContext.UserId && m.HospitalId == id);
     }
 
     [HttpGet("{id}")]
     public async Task<IActionResult> GetHospital(Guid id)
     {
+        if (!await CanAccessHospitalAsync(id)) return Forbid();
         var result = await _mediator.Send(new GetHospitalDetailsQuery(id));
         if (result == null) return NotFound();
         return Ok(result);
     }
 
     [HttpPut("{id}")]
+    [Authorize(Roles = HospitalEditRoles)]
     public async Task<IActionResult> UpdateHospital(Guid id, [FromBody] UpdateHospitalDetailsRequest request)
     {
+        if (!await CanAccessHospitalAsync(id)) return Forbid();
         var result = await _mediator.Send(new UpdateHospitalDetailsCommand(
             id,
             request.HospitalName,
@@ -51,6 +77,7 @@ public class HospitalsController : ControllerBase
     }
 
     [HttpPost("chain")]
+    [Authorize(Roles = AdminRoles)]
     public async Task<IActionResult> CreateChain([FromBody] CreateChainRequest request)
     {
         var userId = Guid.Parse(User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? Guid.Empty.ToString());

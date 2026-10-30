@@ -112,7 +112,7 @@ public class JwtProvider : IJwtProvider
         try
         {
             var handler = new JwtSecurityTokenHandler();
-            var secretKey = _configuration["Jwt:Secret"] ?? "a_very_long_and_secure_secret_key_for_1rad_api_development_2026";
+            var secretKey = (_configuration["Jwt:Secret"] ?? throw new InvalidOperationException("Jwt:Secret is not configured."));
             var key = Encoding.UTF8.GetBytes(secretKey);
 
             var validationParameters = new TokenValidationParameters
@@ -154,7 +154,7 @@ public class JwtProvider : IJwtProvider
 
     private string CreateToken(IEnumerable<Claim> claims, int expiryMinutes)
     {
-        var secretKey = _configuration["Jwt:Secret"] ?? "a_very_long_and_secure_secret_key_for_1rad_api_development_2026";
+        var secretKey = (_configuration["Jwt:Secret"] ?? throw new InvalidOperationException("Jwt:Secret is not configured."));
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey));
         var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
 

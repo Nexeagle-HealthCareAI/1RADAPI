@@ -34,7 +34,13 @@ public class GetAllPaymentRequestsQueryHandler : IRequestHandler<GetAllPaymentRe
                 pr.Amount,
                 pr.Modules,
                 pr.StorageOverageGb,
-                pr.StorageOverageAmount
+                pr.StorageOverageAmount,
+                pr.TransactionReference,
+                pr.PayerName,
+                pr.PayerContact,
+                pr.PaidAt,
+                pr.ReviewedAt,
+                pr.PlanId
             ))
             .ToListAsync(cancellationToken);
 
