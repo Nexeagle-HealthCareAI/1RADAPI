@@ -17,7 +17,7 @@ public static class CustomRoleRouteMap
     public static readonly IReadOnlyDictionary<string, string[]> PageToApiPrefixes =
         new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
         {
-            ["/admin-board"]       = new[] { "personnel", "hospitals", "customroles", "finance/registry", "intelligence", "prescription", "referrers/intelligence" },
+            ["/admin-board"]       = new[] { "personnel", "hospitals", "customroles", "finance/registry", "intelligence", "prescription", "referrers/intelligence", "audit-logs" },
             ["/appointment-board"] = new[] { "appointments", "patients", "referrers", "finance/invoices", "finance/payments", "finance/registry/quick-add", "finance/credit", "approvals" },
             ["/operations-board"]  = new[] { "appointments" },
             ["/billing"]           = new[] { "finance", "referrers" },

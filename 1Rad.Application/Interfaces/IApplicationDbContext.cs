@@ -49,6 +49,7 @@ public interface IApplicationDbContext
     DbSet<StaffLeaveRequest> StaffLeaveRequests { get; }
     DbSet<ApprovalRequest> ApprovalRequests { get; }
     DbSet<RadAiQuestionLog> RadAiQuestionLogs { get; }
+    DbSet<AuditLog> AuditLogs { get; }
     DbSet<ReferrerLinkVersion> ReferrerLinkVersions { get; }
     DbSet<ReferralBookingRequest> ReferralBookingRequests { get; }
     IUserContext UserContext { get; }
