@@ -26,7 +26,7 @@ public sealed record FhirReportRow(
     int AddendumCount, string? ServiceName);
 
 /// <summary>
-/// 1Rad rows as FHIR R4 resources (read-only facade, gap analysis P3-6 phase 4).
+/// 1Rad rows as FHIR R4 resources (gap analysis P3-6 phase 4): reads, plus Patient / ServiceRequest create.
 /// Codes follow what India's ABDM / NRCeS profiles use (SNOMED CT categories,
 /// LOINC report code, DICOM modality codes, v2-0074 "RAD"), so the resources drop
 /// into an ABDM health-information exchange with little rework. They are not
@@ -290,6 +290,124 @@ public static class FhirMapper
         return o;
     }
 
+    // ── Reading what an HIS sends (create) ──────────────────────────────────
+
+    public sealed record PatientInput(string? Name, string? Mrn, string? Mobile, string? Gender, string? Age, string? Address, string? District);
+
+    public static PatientInput ReadPatient(JsonObject p, DateTime todayUtc)
+    {
+        string? name = null;
+        if (p["name"] is JsonArray names && names.Count > 0 && names[0] is JsonObject n)
+        {
+            name = (string?)n["text"];
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                var given = n["given"] is JsonArray g ? string.Join(" ", g.Select(x => (string?)x).Where(x => !string.IsNullOrWhiteSpace(x))) : null;
+                name = string.Join(" ", new[] { given, (string?)n["family"] }.Where(x => !string.IsNullOrWhiteSpace(x)));
+            }
+        }
+
+        string? mobile = null;
+        if (p["telecom"] is JsonArray tel)
+            mobile = tel.OfType<JsonObject>().Where(t => (string?)t["system"] == "phone")
+                .Select(t => (string?)t["value"]).FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
+        if (mobile != null)
+        {
+            var digits = new string(mobile.Where(char.IsDigit).ToArray());
+            mobile = digits.Length > 10 ? digits.Substring(digits.Length - 10) : digits;
+        }
+
+        string? mrn = null;
+        if (p["identifier"] is JsonArray ids)
+            mrn = ids.OfType<JsonObject>()
+                .Where(i => i["type"]?["coding"] is JsonArray c && c.OfType<JsonObject>().Any(x => (string?)x["code"] == "MR"))
+                .Select(i => (string?)i["value"]).FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
+
+        var gender = ((string?)p["gender"])?.ToLowerInvariant() switch
+        {
+            "male" => "Male",
+            "female" => "Female",
+            "other" => "Other",
+            _ => null,
+        };
+
+        string? age = null;
+        if (DateTime.TryParse((string?)p["birthDate"], System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None, out var dob))
+        {
+            var today = (todayUtc + TimeSpan.FromHours(5.5)).Date;
+            var years = today.Year - dob.Year - (today < dob.Date.AddYears(today.Year - dob.Year) ? 1 : 0);
+            age = years >= 1 ? years.ToString() : $"{Math.Max(0, (today - dob.Date).Days / 30)} M";
+        }
+
+        string? address = null, district = null;
+        if (p["address"] is JsonArray addrs && addrs.Count > 0 && addrs[0] is JsonObject a)
+        {
+            address = (string?)a["text"];
+            if (string.IsNullOrWhiteSpace(address) && a["line"] is JsonArray lines)
+                address = string.Join(", ", lines.Select(l => (string?)l).Where(l => !string.IsNullOrWhiteSpace(l)));
+            district = (string?)a["district"] ?? (string?)a["city"];
+        }
+
+        return new PatientInput(name?.Trim(), mrn?.Trim(), string.IsNullOrEmpty(mobile) ? null : mobile, gender, age, address?.Trim(), district?.Trim());
+    }
+
+    public sealed record ServiceRequestInput(
+        string? SubjectReference, string? ServiceName, string? DicomModality, DateTime? OccurrenceUtc,
+        string Priority, string? Requester, string? Note);
+
+    public static ServiceRequestInput ReadServiceRequest(JsonObject r)
+    {
+        var code = r["code"] as JsonObject;
+        string? modality = null;
+        if (code?["coding"] is JsonArray codings)
+            modality = codings.OfType<JsonObject>()
+                .Where(c => (string?)c["system"] == DcmSystem)
+                .Select(c => (string?)c["code"]).FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
+        var serviceName = (string?)code?["text"];
+        if (string.IsNullOrWhiteSpace(serviceName) && code?["coding"] is JsonArray cs)
+            serviceName = cs.OfType<JsonObject>().Select(c => (string?)c["display"]).FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
+
+        DateTime? when = null;
+        var occ = (string?)r["occurrenceDateTime"];
+        if (occ != null && DateTimeOffset.TryParse(occ, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AssumeUniversal, out var dto))
+            when = dto.UtcDateTime;
+
+        var priority = ((string?)r["priority"])?.ToLowerInvariant() switch
+        {
+            "stat" => "STAT",
+            "urgent" or "asap" => "URGENT",
+            _ => "ROUTINE",
+        };
+
+        var note = r["note"] is JsonArray notes
+            ? string.Join(" ", notes.OfType<JsonObject>().Select(x => (string?)x["text"]).Where(x => !string.IsNullOrWhiteSpace(x)))
+            : null;
+
+        return new ServiceRequestInput(
+            (string?)r["subject"]?["reference"], serviceName?.Trim(), modality?.Trim().ToUpperInvariant(), when, priority,
+            ((string?)r["requester"]?["display"])?.Trim(), string.IsNullOrWhiteSpace(note) ? null : note.Trim());
+    }
+
+    /// <summary>A DICOM modality code as the label 1Rad uses on bookings.</summary>
+    public static string? RadModality(string? dicomCode) => (dicomCode ?? string.Empty).Trim().ToUpperInvariant() switch
+    {
+        "CT" => "CT",
+        "MR" => "MRI",
+        "US" => "USG",
+        "DX" or "CR" or "DR" => "X-RAY",
+        "MG" => "MAMMOGRAPHY",
+        "PT" => "PET",
+        "NM" => "NM",
+        "RF" => "FLUOROSCOPY",
+        "BMD" => "DEXA",
+        "PX" => "OPG",
+        "XA" => "ANGIOGRAPHY",
+        "ECG" => "ECG",
+        _ => null,
+    };
+
     // ── Bundles, CapabilityStatement, errors ────────────────────────────────
 
     public static JsonObject SearchBundle(string selfUrl, string baseUrl, IEnumerable<JsonObject> resources, int total, string? nextUrl)
@@ -330,13 +448,16 @@ public static class FhirMapper
     {
         JsonObject Resource(string type, params (string Name, string Type, string Doc)[] search)
         {
+            var canCreate = type is "Patient" or "ServiceRequest";
             var sp = new JsonArray();
             foreach (var (name, t, doc) in search)
                 sp.Add(new JsonObject { ["name"] = name, ["type"] = t, ["documentation"] = doc });
             return new JsonObject
             {
                 ["type"] = type,
-                ["interaction"] = new JsonArray(new JsonObject { ["code"] = "read" }, new JsonObject { ["code"] = "search-type" }),
+                ["interaction"] = canCreate
+                    ? new JsonArray(new JsonObject { ["code"] = "read" }, new JsonObject { ["code"] = "search-type" }, new JsonObject { ["code"] = "create" })
+                    : new JsonArray(new JsonObject { ["code"] = "read" }, new JsonObject { ["code"] = "search-type" }),
                 ["searchParam"] = sp,
             };
         }
@@ -355,7 +476,7 @@ public static class FhirMapper
             ["rest"] = new JsonArray(new JsonObject
             {
                 ["mode"] = "server",
-                ["documentation"] = "Read-only. Authenticate with a centre integration key (scope fhir.read) as 'Authorization: Bearer 1rk_…' or a 1Rad staff access token.",
+                ["documentation"] = "Read; plus create for Patient and ServiceRequest (scope fhir.write). Authenticate with a centre integration key (scope fhir.read) as 'Authorization: Bearer 1rk_…' or a 1Rad staff access token.",
                 ["security"] = new JsonObject { ["description"] = "Bearer token; data is limited to the key's centre." },
                 ["resource"] = new JsonArray(
                     Resource("Patient",

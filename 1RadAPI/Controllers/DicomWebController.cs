@@ -22,7 +22,8 @@ namespace _1RadAPI.Controllers;
 ///   WADO-RS  GET  studies/{s} | …/series/{se} | …/instances/{i}       (multipart application/dicom)
 ///                 …/metadata at each level                               (application/dicom+json)
 ///                 …/instances/{i}/frames/{n[,n…]}                         (multipart, as stored or uncompressed)
-///   STOW-RS  POST studies | studies/{s}                                  (multipart/related; type="application/dicom")
+///                 …/rendered, …/frames/{n}/rendered, …/thumbnail          (image/jpeg or image/png)
+///   STOW-RS  POST studies | studies/{s}       (multipart/related; type="application/dicom" or "application/dicom+json" + bulk data)
 ///
 /// Auth: a 1Rad staff access token, or a centre integration key with scope
 /// dicomweb.read / dicomweb.write (see IntegrationKeyAuthenticationHandler).
@@ -180,6 +181,65 @@ public class DicomWebController : ControllerBase
         return new EmptyResult();
     }
 
+    // ── WADO-RS: rendered and thumbnail ─────────────────────────────────────
+    // Query: quality=1..100, viewport=width,height, window=center,width[,function].
+    // Accept: image/jpeg (default) or image/png.
+
+    [HttpGet("studies/{study}/series/{series}/instances/{instance}/rendered")]
+    [IntegrationScope(IntegrationScopes.DicomWebRead)]
+    public Task<IActionResult> RenderedInstance(string study, string series, string instance, CancellationToken ct) =>
+        Rendered(study, series, instance, "1", ct);
+
+    [HttpGet("studies/{study}/series/{series}/instances/{instance}/frames/{frames}/rendered")]
+    [IntegrationScope(IntegrationScopes.DicomWebRead)]
+    public Task<IActionResult> RenderedFrame(string study, string series, string instance, string frames, CancellationToken ct) =>
+        Rendered(study, series, instance, frames, ct);
+
+    private async Task<IActionResult> Rendered(string study, string series, string instance, string frames, CancellationToken ct)
+    {
+        if (!int.TryParse(frames.Split(',')[0].Trim(), out var frame) || frame < 1 || frames.Contains(','))
+            return BadRequest(new { error = "Render one frame at a time (frames/{n}/rendered)." });
+        var options = RenderOptions();
+        if (options == null) return StatusCode(StatusCodes.Status406NotAcceptable);
+
+        var list = await _dicomWeb.ResolveAsync(study, series, instance, null, ct);
+        if (list == null || list.Count == 0) return NotFound();
+        var image = await _dicomWeb.RenderAsync(list[0], frame - 1, options, ct);
+        return image == null ? NotFound(new { error = "This frame can't be rendered as an image." }) : File(image, options.MediaType);
+    }
+
+    [HttpGet("studies/{study}/thumbnail")]
+    [IntegrationScope(IntegrationScopes.DicomWebRead)]
+    public Task<IActionResult> StudyThumbnail(string study, CancellationToken ct) => Thumbnail(study, null, null, ct);
+
+    [HttpGet("studies/{study}/series/{series}/thumbnail")]
+    [IntegrationScope(IntegrationScopes.DicomWebRead)]
+    public Task<IActionResult> SeriesThumbnail(string study, string series, CancellationToken ct) => Thumbnail(study, series, null, ct);
+
+    [HttpGet("studies/{study}/series/{series}/instances/{instance}/thumbnail")]
+    [IntegrationScope(IntegrationScopes.DicomWebRead)]
+    public Task<IActionResult> InstanceThumbnail(string study, string series, string instance, CancellationToken ct) =>
+        Thumbnail(study, series, instance, ct);
+
+    private async Task<IActionResult> Thumbnail(string study, string? series, string? instance, CancellationToken ct)
+    {
+        var options = RenderOptions();
+        if (options == null) return StatusCode(StatusCodes.Status406NotAcceptable);
+        var list = await _dicomWeb.ResolveAsync(study, series, instance, null, ct);
+        if (list == null || list.Count == 0) return NotFound();
+        var image = await _dicomWeb.ThumbnailAsync(list, options, ct);
+        if (image == null) return NotFound(new { error = "No thumbnail could be made for this image." });
+        Response.Headers.CacheControl = "private, max-age=3600";
+        return File(image, options.MediaType);
+    }
+
+    private DicomRenderer.RenderOptions? RenderOptions()
+    {
+        var media = DicomRenderer.MediaType(Request.Headers.Accept.ToString());
+        if (media == null) return null;
+        return DicomRenderer.ParseQuery(Request.Query["quality"], Request.Query["viewport"], Request.Query["window"], media);
+    }
+
     // ── STOW-RS ─────────────────────────────────────────────────────────────
 
     [HttpPost("studies")]
@@ -201,35 +261,60 @@ public class DicomWebController : ControllerBase
             return StatusCode(StatusCodes.Status415UnsupportedMediaType,
                 new { error = "Send multipart/related; type=\"application/dicom\"." });
 
-        var type = mediaType.Parameters.FirstOrDefault(p => p.Name.Equals("type", StringComparison.OrdinalIgnoreCase))?.Value.ToString().Trim('"');
-        if (!string.IsNullOrEmpty(type) && !type.Equals("application/dicom", StringComparison.OrdinalIgnoreCase))
+        var type = (mediaType.Parameters.FirstOrDefault(p => p.Name.Equals("type", StringComparison.OrdinalIgnoreCase))?.Value.ToString().Trim('"')
+                    ?? string.Empty).ToLowerInvariant();
+        var jsonForm = type == "application/dicom+json";
+        if (type.Length > 0 && type != "application/dicom" && !jsonForm)
             return StatusCode(StatusCodes.Status415UnsupportedMediaType,
-                new { error = "Only application/dicom instances are accepted (not the JSON + bulk data form)." });
+                new { error = "Send type=\"application/dicom\" or type=\"application/dicom+json\" (with bulk data parts)." });
 
         var boundary = HeaderUtilities.RemoveQuotes(mediaType.Boundary).Value;
         if (string.IsNullOrEmpty(boundary)) return BadRequest(new { error = "Missing multipart boundary." });
 
         var parts = new List<byte[]>();
+        var jsonParts = new List<string>();
+        var bulkParts = new List<DicomJsonStowAssembler.BulkPart>();
         long total = 0;
         var reader = new MultipartReader(boundary, Request.Body) { BodyLengthLimit = MaxStowBytes };
         MultipartSection? section;
         while ((section = await reader.ReadNextSectionAsync(ct)) != null)
         {
-            var partType = section.ContentType;
-            if (!string.IsNullOrEmpty(partType)
-                && !partType.Split(';')[0].Trim().Equals("application/dicom", StringComparison.OrdinalIgnoreCase))
-                continue; // not an instance — ignored (reported as nothing stored if it was all there was)
-
+            var partType = (section.ContentType ?? string.Empty).Split(';')[0].Trim().ToLowerInvariant();
             using var ms = new MemoryStream();
             await section.Body.CopyToAsync(ms, ct);
             total += ms.Length;
             if (total > MaxStowBytes)
                 return StatusCode(StatusCodes.Status413PayloadTooLarge, new { error = "Send at most 1 GB per request." });
-            parts.Add(ms.ToArray());
-        }
-        if (parts.Count == 0) return BadRequest(new { error = "No application/dicom parts in the request." });
 
-        var result = await _stow.StoreAsync(parts, study, _user.HospitalId, BaseUrl, ct);
+            if (partType is "" or "application/dicom")
+                parts.Add(ms.ToArray());
+            else if (partType is "application/dicom+json" or "application/json")
+                jsonParts.Add(Encoding.UTF8.GetString(ms.ToArray()));
+            else
+            {
+                string? location = null;
+                if (section.Headers != null && section.Headers.TryGetValue("Content-Location", out var loc)) location = loc.ToString();
+                bulkParts.Add(new DicomJsonStowAssembler.BulkPart(location, section.ContentType, ms.ToArray()));
+            }
+        }
+
+        var assembleFailures = 0;
+        if (jsonParts.Count > 0)
+        {
+            var assembled = DicomJsonStowAssembler.Assemble(jsonParts, bulkParts);
+            parts.AddRange(assembled.Files);
+            assembleFailures = assembled.Failed;
+            foreach (var e in assembled.Errors.Take(5)) _logger.LogWarning("[STOW] JSON dataset refused: {Error}", e);
+        }
+        if (parts.Count == 0)
+            return BadRequest(new
+            {
+                error = jsonForm
+                    ? "No dataset could be built from the DICOM JSON and bulk data parts (check BulkDataURI / Content-Location)."
+                    : "No application/dicom parts in the request.",
+            });
+
+        var result = await _stow.StoreAsync(parts, study, _user.HospitalId, BaseUrl, ct, assembleFailures);
         _logger.LogInformation("[STOW] centre {Hospital}: stored {Stored}, failed {Failed}", _user.HospitalId, result.Stored, result.Failed);
         return new ContentResult
         {

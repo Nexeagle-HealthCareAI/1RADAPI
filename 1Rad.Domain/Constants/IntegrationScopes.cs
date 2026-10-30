@@ -14,8 +14,10 @@ public static class IntegrationScopes
     public const string WorklistRead = "worklist.read";
     /// <summary>Read patients, orders, imaging studies and signed reports as FHIR R4.</summary>
     public const string FhirRead = "fhir.read";
+    /// <summary>Register patients and book imaging orders through FHIR (Patient / ServiceRequest create).</summary>
+    public const string FhirWrite = "fhir.write";
 
-    public static readonly IReadOnlyList<string> All = new[] { DicomWebRead, DicomWebWrite, WorklistRead, FhirRead };
+    public static readonly IReadOnlyList<string> All = new[] { DicomWebRead, DicomWebWrite, WorklistRead, FhirRead, FhirWrite };
 
     /// <summary>The principal type claim ("type") carried by an integration key sign-in.</summary>
     public const string PrincipalType = "integration";

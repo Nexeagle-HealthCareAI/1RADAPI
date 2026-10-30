@@ -8,6 +8,11 @@ using _1RadAPI.Authorization;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using MediatR;
+using _1Rad.Application.Features.Appointments;
+using _1Rad.Application.Features.Appointments.Commands.CreateAppointment;
+using _1Rad.Application.Features.Patients.Commands.CreatePatient;
+using _1Rad.Domain.Exceptions;
 
 namespace _1RadAPI.Controllers;
 
@@ -20,6 +25,8 @@ namespace _1RadAPI.Controllers;
 ///   GET api/v1/fhir/ServiceRequest[/{id}]            patient, identifier, occurrence, status
 ///   GET api/v1/fhir/ImagingStudy[/{id}]              patient, identifier, started
 ///   GET api/v1/fhir/DiagnosticReport[/{id}]          patient, based-on, issued, status (signed reports only)
+///   POST api/v1/fhir/Patient                         register (or find) a patient          — scope fhir.write
+///   POST api/v1/fhir/ServiceRequest                  book an imaging order for a patient    — scope fhir.write
 /// Paging: _count (≤200) and _offset; the Bundle carries a "next" link.
 ///
 /// Auth: a staff access token, or an integration key with scope fhir.read.
@@ -32,12 +39,14 @@ public class FhirController : ControllerBase
     private readonly IApplicationDbContext _db;
     private readonly IAssetUrlSigner _signer;
     private readonly IConfiguration _config;
+    private readonly ISender _mediator;
 
-    public FhirController(IApplicationDbContext db, IAssetUrlSigner signer, IConfiguration config)
+    public FhirController(IApplicationDbContext db, IAssetUrlSigner signer, IConfiguration config, ISender mediator)
     {
         _db = db;
         _signer = signer;
         _config = config;
+        _mediator = mediator;
     }
 
     private string ApiBase => InteropUrls.ApiBase(Request, _config);
@@ -273,6 +282,104 @@ public class FhirController : ControllerBase
                 s.AccessionNumber, s.Modality, s.StudyDate, s.StudyDescription, s.AppointmentServiceId, s.CreatedAt,
                 byStudy.TryGetValue(s.Id, out var series) ? series : Array.Empty<FhirSeriesRow>()))
             .ToList();
+    }
+
+    // ── Writes: an HIS registering a patient and ordering imaging ──────────
+    // Both go through the same commands as the front desk, so de-duplication,
+    // display ids, auto-billing and the duplicate-booking guard all apply.
+
+    private const string WriterRoles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Receptionist},{IntegrationScopes.Role}";
+
+    private async Task<JsonObject?> ReadBodyAsync(CancellationToken ct)
+    {
+        try
+        {
+            return await JsonNode.ParseAsync(Request.Body, cancellationToken: ct) as JsonObject;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
+        }
+    }
+
+    [HttpPost("Patient")]
+    [IntegrationScope(IntegrationScopes.FhirWrite)]
+    [Authorize(Roles = WriterRoles)]
+    public async Task<IActionResult> CreatePatient(CancellationToken ct)
+    {
+        var body = await ReadBodyAsync(ct);
+        if (body == null || (string?)body["resourceType"] != "Patient") return Invalid("Send a FHIR Patient resource.");
+
+        var input = FhirMapper.ReadPatient(body, DateTime.UtcNow);
+        if (string.IsNullOrWhiteSpace(input.Name)) return Invalid("Patient.name is required.");
+
+        // An existing patient with the same MRN at this centre is returned as is.
+        if (!string.IsNullOrWhiteSpace(input.Mrn))
+        {
+            var existing = await PatientRows(_db.Patients.AsNoTracking()
+                .Where(p => p.DeletedAt == null && p.PatientIdentifier == input.Mrn)).FirstOrDefaultAsync(ct);
+            if (existing != null) return Fhir(FhirMapper.Patient(existing));
+        }
+
+        var id = await _mediator.Send(new CreatePatientCommand(
+            input.Name, input.Mobile ?? string.Empty, input.Age ?? string.Empty, input.Gender ?? string.Empty,
+            string.Empty, string.Empty, input.District ?? string.Empty, input.Address ?? string.Empty, "HIS (FHIR)"), ct);
+
+        var row = await PatientRows(_db.Patients.AsNoTracking().Where(p => p.PatientId == id)).FirstAsync(ct);
+        Response.Headers.Location = $"{FhirBase}/Patient/{id}";
+        return Fhir(FhirMapper.Patient(row), 201);
+    }
+
+    [HttpPost("ServiceRequest")]
+    [IntegrationScope(IntegrationScopes.FhirWrite)]
+    [Authorize(Roles = WriterRoles)]
+    [RequiresModule(ModuleConstants.Ris)]
+    public async Task<IActionResult> CreateServiceRequest(CancellationToken ct)
+    {
+        var body = await ReadBodyAsync(ct);
+        if (body == null || (string?)body["resourceType"] != "ServiceRequest") return Invalid("Send a FHIR ServiceRequest resource.");
+
+        var order = FhirMapper.ReadServiceRequest(body);
+        var patientId = FhirSearch.ReferenceId(order.SubjectReference, "Patient");
+        if (patientId == null) return Invalid("ServiceRequest.subject must reference Patient/{id} (create the Patient first).");
+        if (!await _db.Patients.AnyAsync(p => p.PatientId == patientId.Value && p.DeletedAt == null, ct))
+            return Fhir(FhirMapper.OperationOutcome("not-found", $"Patient/{patientId} was not found."), 404);
+        if (string.IsNullOrWhiteSpace(order.ServiceName) && order.DicomModality == null)
+            return Invalid("ServiceRequest.code needs a text (the service name) or a DICOM modality coding.");
+
+        // Price and 1Rad modality from the centre's own service list when the name matches.
+        var wanted = (order.ServiceName ?? string.Empty).Trim().ToLower();
+        var charge = wanted.Length == 0 ? null : await _db.ServiceCharges.AsNoTracking()
+            .Where(c => c.ServiceName.ToLower() == wanted)
+            .Select(c => new { c.Id, c.ServiceName, c.Modality, c.Amount, c.ReferralCutValue })
+            .FirstOrDefaultAsync(ct);
+        var modality = charge?.Modality ?? FhirMapper.RadModality(order.DicomModality) ?? "OTHER";
+        var serviceName = charge?.ServiceName ?? order.ServiceName?.Trim() ?? modality;
+        var when = order.OccurrenceUtc ?? DateTime.UtcNow;
+
+        Guid appointmentId;
+        try
+        {
+            appointmentId = await _mediator.Send(new CreateAppointmentCommand(
+                patientId.Value, serviceName, modality, when, "BOOKED", string.Empty,
+                ReferredBy: order.Requester, Notes: order.Note,
+                Amount: charge?.Amount ?? 0, ReferralCutValue: charge?.ReferralCutValue,
+                Priority: order.Priority,
+                Services: new[] { new AppointmentServiceLine(serviceName, modality, charge?.Amount ?? 0, charge?.ReferralCutValue ?? 0, null, charge?.Id) }), ct);
+        }
+        catch (ConflictException ex)
+        {
+            return Fhir(FhirMapper.OperationOutcome("duplicate", ex.Message), 409);
+        }
+        catch (DomainException ex)
+        {
+            return Fhir(FhirMapper.OperationOutcome("business-rule", ex.Message), 422);
+        }
+
+        var row = await ServiceRows(Services().Where(sv => sv.AppointmentId == appointmentId)).FirstOrDefaultAsync(ct);
+        if (row == null) return Fhir(FhirMapper.OperationOutcome("exception", "Booked, but the order could not be read back."), 500);
+        Response.Headers.Location = $"{FhirBase}/ServiceRequest/{row.Id}";
+        return Fhir(FhirMapper.ServiceRequest(row), 201);
     }
 
     // ── DiagnosticReport (signed only) ──────────────────────────────────────

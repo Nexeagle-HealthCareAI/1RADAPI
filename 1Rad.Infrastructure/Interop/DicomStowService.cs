@@ -69,9 +69,12 @@ public sealed class DicomStowService
     /// POST /studies/{study}: instances of any other study are refused.
     /// </summary>
     public async Task<StowResult> StoreAsync(
-        IReadOnlyList<byte[]> parts, string? routeStudyUid, Guid hospitalId, string baseUrl, CancellationToken ct)
+        IReadOnlyList<byte[]> parts, string? routeStudyUid, Guid hospitalId, string baseUrl, CancellationToken ct,
+        int alreadyFailed = 0)
     {
         var failures = new List<Failure>();
+        // Datasets of the JSON + bulk data form that could not be rebuilt (no UIDs to report).
+        for (var k = 0; k < alreadyFailed; k++) failures.Add(new Failure(null, null, FailureCannotUnderstand));
         var stored = new List<(Parsed P, string Url)>();
 
         // 1. Parse every part (header only — pixels stay as bytes).

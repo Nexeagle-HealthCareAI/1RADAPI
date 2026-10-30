@@ -645,6 +645,58 @@ public sealed class DicomWebService
         return (parts, false);
     }
 
+    // ── WADO-RS: rendered and thumbnail ─────────────────────────────────────
+
+    /// <summary>Frame <paramref name="frameIndex"/> (0-based) as JPEG/PNG; null when it can't be rendered.</summary>
+    public async Task<byte[]?> RenderAsync(DicomWebInstance i, int frameIndex, DicomRenderer.RenderOptions options, CancellationToken ct)
+    {
+        var bytes = await DownloadAsync(i.BlobUrl, ct);
+        try
+        {
+            return DicomRenderer.Render(bytes, frameIndex, options);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "[DICOMWEB] render failed for {Sop} frame {Frame}", i.SopUid, frameIndex);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// A small picture for a study / series / instance: the middle image of the
+    /// largest series. Uses the JPEG preview extraction already wrote when there is
+    /// one, otherwise renders it at the viewport size (default 128 px).
+    /// </summary>
+    public async Task<byte[]?> ThumbnailAsync(List<DicomWebInstance> instances, DicomRenderer.RenderOptions options, CancellationToken ct)
+    {
+        if (instances.Count == 0) return null;
+        var series = instances.GroupBy(i => i.SeriesUid).OrderByDescending(g => g.Count()).First().ToList();
+        var pick = series[series.Count / 2];
+
+        if (options.MediaType == "image/jpeg" && options.ViewportWidth is null or <= 256 && options.ViewportHeight is null or <= 256)
+        {
+            var preview = Services.DicomExtractionService.PreviewUrlFromSlice(pick.BlobUrl);
+            if (preview != null)
+            {
+                try
+                {
+                    var b = await DownloadAsync(preview, ct);
+                    if (b.Length > 0) return b;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    _logger.LogDebug(ex, "[DICOMWEB] no stored preview for {Sop}", pick.SopUid);
+                }
+            }
+        }
+        return await RenderAsync(pick, 0, options with
+        {
+            ViewportWidth = options.ViewportWidth ?? 128,
+            ViewportHeight = options.ViewportHeight ?? 128,
+            Quality = Math.Min(options.Quality, 80),
+        }, ct);
+    }
+
     private async Task<byte[]> DownloadAsync(string url, CancellationToken ct)
     {
         await using var s = await _blob.DownloadFileAsync(url);

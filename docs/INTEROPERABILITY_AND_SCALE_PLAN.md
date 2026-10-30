@@ -31,10 +31,29 @@ key as password.
 Set `Interop:PublicApiBaseUrl` (e.g. `https://1rad-api.nexeagle.com`) so retrieve URLs and FHIR
 links use the public host; otherwise they come from the request / X-Forwarded headers.
 
-Not done: `/rendered` and `/thumbnail` (viewers fall back to frames), STOW of the JSON +
-bulk-data form, DIMSE inside the API (by design — the bridge does DIMSE), FHIR write, and an
-ABHA-linked Patient. The DICOMweb metadata cache blobs are not referenced by any row, so the
-orphan sweep may delete them after `OrphanMinAgeHours` when deletion is on; they are rebuilt on
+Second pass (30 Oct 2026):
+
+- **Rendered and thumbnail** — `…/instances/{i}/rendered`, `…/frames/{n}/rendered` and
+  `…/thumbnail` at study, series and instance level. JPEG (default) or PNG by `Accept`;
+  `quality`, `viewport=w,h` and `window=center,width` follow PS3.18. Grayscale goes through
+  rescale + linear VOI (MONOCHROME1 inverted); RGB / YBR_FULL colour is supported; palette
+  colour is not. Thumbnails reuse the JPEG preview extraction already wrote when there is one.
+- **STOW JSON + bulk data form** — `type="application/dicom+json"`: datasets are rebuilt into
+  Part 10 files with each `BulkDataURI` filled from the part with that `Content-Location`.
+  Pixel data in a part labelled with a compressed transfer syntax is stored encapsulated
+  (one part = one frame). Bulk values inside sequences are not resolved.
+- **FHIR create** (new scope `fhir.write`) — `POST Patient` (returns the existing patient
+  when the MRN matches; otherwise the front desk's de-duplication on mobile + name applies)
+  and `POST ServiceRequest` (books through the normal booking command: display id,
+  duplicate-booking guard → 409, auto-billing; price and modality from the centre's service
+  list when `code.text` matches a service name). 201 + `Location`.
+- **Worklist sync for Orthanc** — `tools/worklist-sync/worklist_sync.py` (Python, pydicom)
+  turns the worklist feed into Orthanc `.wl` files and removes them once scanned/cancelled.
+  Runs beside Orthanc as a service or cron job, so the bridge repo does not need a change.
+
+Still not built: DIMSE inside the API (by design), FHIR update/delete, an ABHA-linked
+Patient. The DICOMweb metadata cache blobs are not referenced by any row, so the orphan
+sweep may delete them after `OrphanMinAgeHours` when deletion is on; they are rebuilt on
 the next request.
 
 ## P3-9 — running more than one API instance
