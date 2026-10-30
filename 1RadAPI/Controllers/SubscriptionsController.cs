@@ -6,6 +6,8 @@ using _1Rad.Application.Features.Subscriptions.Queries.GetAllPaymentRequests;
 using _1Rad.Application.Features.Subscriptions.Queries.GetPlans;
 using _1Rad.Application.Features.Subscriptions.Queries.GetBillingEstimate;
 using _1Rad.Domain.Constants;
+using System.Security.Cryptography;
+using System.Text;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -18,10 +20,25 @@ namespace _1RadAPI.Controllers;
 public class SubscriptionsController : ControllerBase
 {
     private readonly IMediator _mediator;
+    private readonly IConfiguration _configuration;
 
-    public SubscriptionsController(IMediator mediator)
+    public SubscriptionsController(IMediator mediator, IConfiguration configuration)
     {
         _mediator = mediator;
+        _configuration = configuration;
+    }
+
+    // Gap analysis P0-2: the two platform-admin endpoints below used to need only a
+    // logged-in user of ANY centre, so a centre could approve its own payment. They now
+    // accept only the CMS service key (X-Service-Key == ServiceAuth:CmsServiceKey), the
+    // same convention as GET hospitals/admin/all. Empty key in config = disabled.
+    private bool HasValidServiceKey(string? serviceKey)
+    {
+        var expected = _configuration["ServiceAuth:CmsServiceKey"];
+        if (string.IsNullOrEmpty(expected) || string.IsNullOrEmpty(serviceKey)) return false;
+        var a = Encoding.UTF8.GetBytes(expected);
+        var b = Encoding.UTF8.GetBytes(serviceKey);
+        return a.Length == b.Length && CryptographicOperations.FixedTimeEquals(a, b);
     }
 
     /// <summary>
@@ -41,8 +58,10 @@ public class SubscriptionsController : ControllerBase
     /// [ADMIN ONLY] Fetch all payment requests across the platform.
     /// </summary>
     [HttpGet("admin/payment-requests")]
-    public async Task<IActionResult> GetAdminPaymentRequests()
+    [AllowAnonymous]
+    public async Task<IActionResult> GetAdminPaymentRequests([FromHeader(Name = "X-Service-Key")] string? serviceKey)
     {
+        if (!HasValidServiceKey(serviceKey)) return Unauthorized();
         var result = await _mediator.Send(new GetAllPaymentRequestsQuery());
         return Ok(new { success = true, data = result });
     }
@@ -62,8 +81,11 @@ public class SubscriptionsController : ControllerBase
     /// Protected: only accessible by super-admin or internal API key.
     /// </summary>
     [HttpPost("approve-payment/{requestId:guid}")]
-    public async Task<IActionResult> ApprovePayment(Guid requestId, [FromBody] ApprovePaymentBody body)
+    [AllowAnonymous]
+    public async Task<IActionResult> ApprovePayment(Guid requestId, [FromBody] ApprovePaymentBody body,
+        [FromHeader(Name = "X-Service-Key")] string? serviceKey)
     {
+        if (!HasValidServiceKey(serviceKey)) return Unauthorized();
         var result = await _mediator.Send(new ApprovePaymentRequestCommand(requestId, body.ReviewNote));
         return result.Success ? Ok(result) : BadRequest(new { error = result.Error });
     }

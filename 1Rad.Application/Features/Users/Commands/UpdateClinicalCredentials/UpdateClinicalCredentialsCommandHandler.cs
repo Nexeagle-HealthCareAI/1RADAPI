@@ -34,6 +34,18 @@ public class UpdateClinicalCredentialsCommandHandler
                 ErrorCode: "USER_NOT_FOUND");
         }
 
+        var isSelf = request.RequestingUserId != Guid.Empty && request.RequestingUserId == request.UserId;
+        var isAdminOfUsersCentre = request.RequesterIsAdmin && request.HospitalId != Guid.Empty &&
+            await _context.UserHospitalMappings.AnyAsync(
+                m => m.UserId == request.UserId && m.HospitalId == request.HospitalId, cancellationToken);
+        if (!isSelf && !isAdminOfUsersCentre)
+        {
+            return new UpdateClinicalCredentialsResponse(
+                Success: false,
+                Error: "You can only edit your own credentials or those of staff at your centre.",
+                ErrorCode: "FORBIDDEN");
+        }
+
         // Apply only the fields explicitly provided; empty strings clear the
         // value, null means "don't change". Frontend always sends all three.
         user.Specialization = string.IsNullOrWhiteSpace(request.Specialization) ? null : request.Specialization.Trim();

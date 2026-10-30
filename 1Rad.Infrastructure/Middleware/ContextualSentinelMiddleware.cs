@@ -1,6 +1,7 @@
 using System.Net;
 using System.Security.Claims;
 using _1Rad.Application.Interfaces;
+using _1Rad.Domain.Constants;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
@@ -93,12 +94,15 @@ public class ContextualSentinelMiddleware
                 {
                     var requestPath = context.Request.Path.Value?.TrimStart('/').ToLowerInvariant() ?? string.Empty;
 
-                    var hasCustomPermission = await db.UserHospitalMappings
+                    // Custom roles store web PAGE routes; translate them to the API
+                    // areas each page needs (CustomRoleRouteMap) before matching.
+                    var savedRoutes = await db.UserHospitalMappings
                         .Where(m => m.UserId == userId && m.HospitalId == currentHospitalId)
                         .SelectMany(m => m.CustomRoles)
                         .SelectMany(cr => cr.Permissions)
-                        .AnyAsync(p => requestPath.StartsWith(
-                            p.RoutePath.TrimStart('/').ToLowerInvariant()));
+                        .Select(p => p.RoutePath)
+                        .ToListAsync();
+                    var hasCustomPermission = CustomRoleRouteMap.Grants(savedRoutes, requestPath);
 
                     if (!hasCustomPermission)
                     {

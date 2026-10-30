@@ -1,3 +1,4 @@
+using _1Rad.Domain.Constants;
 using _1Rad.Application.Features.LeavePolicy.Commands.SaveLeavePolicy;
 using _1Rad.Application.Features.LeavePolicy.Queries.GetLeavePolicy;
 using _1Rad.Application.Interfaces;
@@ -7,7 +8,8 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace _1RadAPI.Controllers;
 
-[Authorize]
+// Gap analysis P1: the UI shows /staff only to admins; the API let any role edit pay and attendance.
+[Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator}")]
 [ApiController]
 [Route("api/v1/leave-policy")]
 public class LeavePolicyController : ControllerBase

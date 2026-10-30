@@ -123,7 +123,8 @@ public class ApprovePaymentRequestHandler : IRequestHandler<ApprovePaymentReques
             EndDate = endDate,
             Status = "Active",
             IsLocked = false,
-            ActivatedByUserId = _userContext.UserId,
+            // Service-key approvals (CMS / ops) carry no user — store null, not Guid.Empty.
+            ActivatedByUserId = _userContext.UserId == Guid.Empty ? null : _userContext.UserId,
             ActivatedAt = now,
             CreatedAt = now
         };
@@ -133,7 +134,7 @@ public class ApprovePaymentRequestHandler : IRequestHandler<ApprovePaymentReques
         // 5. Approve the payment request
         paymentRequest.Status = "Approved";
         paymentRequest.ReviewNote = request.ReviewNote;
-        paymentRequest.ReviewedByUserId = _userContext.UserId;
+        paymentRequest.ReviewedByUserId = _userContext.UserId == Guid.Empty ? null : _userContext.UserId;
         paymentRequest.ReviewedAt = now;
 
         await _db.SaveChangesAsync(cancellationToken);

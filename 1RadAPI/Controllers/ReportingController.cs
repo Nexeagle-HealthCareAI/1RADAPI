@@ -1,3 +1,4 @@
+using _1Rad.Domain.Constants;
 using _1Rad.Application.Features.Reporting.Commands.GenerateVoiceReport;
 using _1Rad.Application.Features.Reporting.Commands.AiAssist;
 using _1Rad.Application.Features.Reporting.Commands.FormatReport;
@@ -198,6 +199,7 @@ namespace _1RadAPI.Controllers
         /// <summary>
         /// Create or update a report template
         /// </summary>
+        [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Doctor},{RoleConstants.Technician}")]  // P1-5: matches who sees /configuration
         [HttpPost("templates/upsert")]
         public async Task<IActionResult> UpsertTemplate([FromBody] UpsertTemplateCommand command)
         {
@@ -223,6 +225,7 @@ namespace _1RadAPI.Controllers
         /// <summary>
         /// Delete a report template
         /// </summary>
+        [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Doctor},{RoleConstants.Technician}")]  // P1-5: matches who sees /configuration
         [HttpDelete("templates/{id}")]
         public async Task<IActionResult> DeleteTemplate(Guid id)
         {
@@ -265,6 +268,7 @@ namespace _1RadAPI.Controllers
         /// <summary>
         /// Create or update a reporting keyword
         /// </summary>
+        [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Doctor},{RoleConstants.Technician}")]  // P1-5: matches who sees /configuration
         [HttpPost("keywords/upsert")]
         public async Task<IActionResult> UpsertKeyword([FromBody] UpsertKeywordCommand command)
         {
@@ -290,6 +294,7 @@ namespace _1RadAPI.Controllers
         /// <summary>
         /// Delete a reporting keyword
         /// </summary>
+        [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Doctor},{RoleConstants.Technician}")]  // P1-5: matches who sees /configuration
         [HttpDelete("keywords/{id}")]
         public async Task<IActionResult> DeleteKeyword(Guid id)
         {

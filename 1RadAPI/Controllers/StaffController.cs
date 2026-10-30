@@ -1,3 +1,4 @@
+using _1Rad.Domain.Constants;
 using _1Rad.Application.Features.Staff.Commands.AddSalaryDisbursement;
 using _1Rad.Application.Features.Staff.Commands.AddStaffMember;
 using _1Rad.Application.Features.Staff.Commands.DeleteSalaryRevision;
@@ -18,7 +19,8 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace _1RadAPI.Controllers;
 
-[Authorize]
+// Gap analysis P1: the UI shows /staff only to admins; the API let any role edit pay and attendance.
+[Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator}")]
 [ApiController]
 [Route("api/v1/[controller]")]
 public class StaffController : ControllerBase

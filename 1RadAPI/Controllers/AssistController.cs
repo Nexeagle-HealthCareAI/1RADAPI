@@ -1,3 +1,4 @@
+using _1Rad.Domain.Constants;
 using _1Rad.Application.Features.Assist.RadAi;
 using _1Rad.Application.Features.Assist.Retrain;
 using _1Rad.Application.Features.Assist.Usage;
@@ -29,6 +30,7 @@ public class AssistController : ControllerBase
     // paste-ready draft entry for app_knowledge.json.
     // NOTE: restrict to admins via your standard admin policy/attribute before
     // shipping (the class is [Authorize] but not yet admin-only).
+    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator}")]  // P1-8: admin-only analytics
     [HttpGet("retrain-candidates")]
     public async Task<IActionResult> RetrainCandidates([FromQuery] GetRadAiRetrainCandidatesQuery query)
     {
@@ -38,6 +40,7 @@ public class AssistController : ControllerBase
 
     // RadAI token-usage & savings dashboard (admin): tokens billed vs saved by
     // response caching + prompt caching, as a before/after. Restrict to admins.
+    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator}")]  // P1-8: admin-only analytics
     [HttpGet("usage")]
     public async Task<IActionResult> Usage([FromQuery] GetRadAiUsageQuery query)
     {
