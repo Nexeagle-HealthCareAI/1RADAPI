@@ -288,7 +288,7 @@ public class UpdateAppointmentStatusCommandHandler : IRequestHandler<UpdateAppoi
 
         if (totalAmount > 0 && isAutoBillingEnabled)
         {
-            invoiceDisplayId = $"INV-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString().Substring(0, 8).ToUpper()}";
+            invoiceDisplayId = await InvoiceNumbering.NextAsync(_context, appointment.HospitalId, DateTime.UtcNow, ct);
             var invoice = new Invoice
             {
                 AppointmentId = appointment.AppointmentId,

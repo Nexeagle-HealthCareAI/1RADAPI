@@ -169,13 +169,14 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
             // with no appointment to anchor to, same as the referral commission
             // created below for the same invoice.
             var invoiceCreatedAt = DateTime.UtcNow;
+            var invoiceNumber = await InvoiceNumbering.NextAsync(_context, hospitalId, invoiceCreatedAt, cancellationToken);
             var invoice = new Invoice
             {
                 AppointmentId = request.AppointmentId,
                 PatientId = request.PatientId,
                 PatientName = patient.FullName ?? "UNKNOWN PATIENT",
                 HospitalId = hospitalId,
-                InvoiceId = $"INV-{invoiceCreatedAt:yyyyMMdd}-{Guid.NewGuid().ToString().Substring(0, 8).ToUpper()}",
+                InvoiceId = invoiceNumber,
                 CentreDiscount = request.CentreDiscount,
                 ReferrerDiscount = request.ReferrerDiscount,
                 PaidAmount = 0,

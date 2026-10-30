@@ -541,13 +541,14 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             decimal gross = liveServices.Sum(s => s.Amount);
             if (gross > 0)
             {
+                var newInvoiceNumber = await InvoiceNumbering.NextAsync(_context, appointment.HospitalId, DateTime.UtcNow, cancellationToken);
                 var newInvoice = new Invoice
                 {
                     AppointmentId = appointment.AppointmentId,
                     PatientId = appointment.PatientId,
                     PatientName = appointment.PatientName ?? "Unknown",
                     HospitalId = appointment.HospitalId,
-                    InvoiceId = $"INV-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString().Substring(0, 8).ToUpper()}",
+                    InvoiceId = newInvoiceNumber,
                     PaidAmount = 0,
                     Status = "PENDING",
                     ReferralCutValue = liveServices.Sum(s => s.ReferralCutValue),
