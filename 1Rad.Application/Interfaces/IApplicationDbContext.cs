@@ -52,6 +52,7 @@ public interface IApplicationDbContext
     DbSet<AuditLog> AuditLogs { get; }
     DbSet<StudyAnnotation> StudyAnnotations { get; }
     DbSet<JobRun> JobRuns { get; }
+    DbSet<IntegrationClient> IntegrationClients { get; }
     DbSet<ReferrerLinkVersion> ReferrerLinkVersions { get; }
     DbSet<ReferralBookingRequest> ReferralBookingRequests { get; }
     IUserContext UserContext { get; }

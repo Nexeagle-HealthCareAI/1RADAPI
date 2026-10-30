@@ -63,7 +63,7 @@ public class SubscriptionValidationMiddleware
         // Only access tokens carry a centre; initiation / reset tokens pass through.
         var tokenType = context.User.FindFirst("type")?.Value;
         if (context.User.Identity?.IsAuthenticated == true &&
-            (tokenType == null || tokenType == "access") &&
+            (tokenType == null || tokenType == "access" || tokenType == _1Rad.Domain.Constants.IntegrationScopes.PrincipalType) &&
             Guid.TryParse(context.User.FindFirst("cid")?.Value, out var hospitalId) &&
             hospitalId != Guid.Empty)
         {
