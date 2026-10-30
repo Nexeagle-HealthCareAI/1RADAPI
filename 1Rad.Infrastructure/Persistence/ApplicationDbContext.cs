@@ -72,6 +72,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<IdempotencyRecord> IdempotencyKeys => Set<IdempotencyRecord>();
     public DbSet<RadAiQuestionLog> RadAiQuestionLogs => Set<RadAiQuestionLog>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+    public DbSet<StudyAnnotation> StudyAnnotations => Set<StudyAnnotation>();
     public DbSet<ReferrerLinkVersion> ReferrerLinkVersions => Set<ReferrerLinkVersion>();
     public DbSet<ReferralBookingRequest> ReferralBookingRequests => Set<ReferralBookingRequest>();
 
@@ -81,6 +82,16 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
 
         // RadAI question log — capture for the "retrain" loop. Scoped to a
         // hospital by the global query filter at the end of this method.
+        // dbo.StudyAnnotations (DB script 98) — saved viewer measurements.
+        modelBuilder.Entity<StudyAnnotation>(entity =>
+        {
+            entity.ToTable("StudyAnnotations", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.StudyKey).IsRequired().HasMaxLength(80);
+            entity.Property(e => e.AnnotationsJson).IsRequired();
+            entity.HasIndex(e => new { e.HospitalId, e.StudyKey }).IsUnique();
+        });
+
         // dbo.AuditLogs (DB script 97) — see AuditTrail.
         modelBuilder.Entity<AuditLog>(entity =>
         {

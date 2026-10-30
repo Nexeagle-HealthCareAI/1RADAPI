@@ -22,15 +22,15 @@ public static class CustomRoleRouteMap
             ["/operations-board"]  = new[] { "appointments" },
             ["/billing"]           = new[] { "finance", "referrers" },
             ["/approvals"]         = new[] { "approvals" },
-            ["/technician"]        = new[] { "appointments", "study" },
-            ["/doctor-board"]      = new[] { "reporting", "prescription", "study" },
+            ["/technician"]        = new[] { "appointments", "study", "study-annotations" },
+            ["/doctor-board"]      = new[] { "reporting", "prescription", "study", "study-annotations" },
             ["/referrals"]         = new[] { "referrers", "intelligence" },
             ["/staff"]             = new[] { "staff", "attendance", "leave", "leave-policy" },
             ["/staff/dashboard"]   = new[] { "staff", "attendance", "leave", "leave-policy" },
             ["/configuration"]     = new[] { "reporting/templates", "reporting/keywords" },
             ["/subscription"]      = new[] { "subscriptions" },
-            ["/studies"]           = new[] { "study" },
-            ["/dicom-bridge"]      = new[] { "study" },
+            ["/studies"]           = new[] { "study", "study-annotations" },
+            ["/dicom-bridge"]      = new[] { "study", "study-annotations" },
         };
 
     public static bool IsKnownPage(string? route) =>
