@@ -74,6 +74,7 @@ public static class DependencyInjection
         services.AddSingleton(_1Rad.Application.Common.ReferralLinkOptions.From(configuration));
         // Mints + delivers + records a portal link (manual send, daily renewal, doctor self-service).
         services.AddScoped<_1Rad.Application.Common.ReferralLinkSender>();
+        services.AddScoped<_1Rad.Application.Common.IReportReadyNotifier, _1Rad.Application.Common.ReportReadyNotifier>();
 
         // Session management — the active-session cache is process-local;
         // when we scale to multi-instance, swap the IActiveSessionCache

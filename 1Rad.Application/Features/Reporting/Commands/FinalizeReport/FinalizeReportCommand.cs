@@ -41,11 +41,14 @@ public class FinalizeReportCommandHandler : IRequestHandler<FinalizeReportComman
 {
     private readonly IApplicationDbContext _context;
     private readonly IPasswordHasher _passwordHasher;
+    private readonly IReportReadyNotifier? _reportReady;
 
-    public FinalizeReportCommandHandler(IApplicationDbContext context, IPasswordHasher passwordHasher)
+    public FinalizeReportCommandHandler(IApplicationDbContext context, IPasswordHasher passwordHasher,
+        IReportReadyNotifier? reportReady = null)
     {
         _context = context;
         _passwordHasher = passwordHasher;
+        _reportReady = reportReady;
     }
 
     public async Task<DiagnosticReport> Handle(FinalizeReportCommand request, CancellationToken cancellationToken)
@@ -188,6 +191,7 @@ public class FinalizeReportCommandHandler : IRequestHandler<FinalizeReportComman
         // ── Appointment / per-service "REPORTED" rollup — only on FINAL, and
         // only for appointment-linked reports (study-based reports have no
         // visit to advance). Moved here from SaveReport. ──
+        var statusBeforeRollup = appointment?.Status;
         if (target == ReportStatuses.Final && appointment != null)
         {
             if (request.AppointmentServiceId.HasValue)
@@ -260,6 +264,14 @@ public class FinalizeReportCommandHandler : IRequestHandler<FinalizeReportComman
             }
             throw new OccConflictException(canonical!,
                 "This report changed since you opened it — review the latest version before signing.");
+        }
+
+        // First time the whole visit is reported → tell the patient (best-effort,
+        // off unless Notifications:ReportReady:Enabled; see ReportReadyNotifier).
+        if (_reportReady != null && appointment != null &&
+            appointment.Status == "REPORTED" && statusBeforeRollup != "REPORTED")
+        {
+            await _reportReady.NotifyAsync(appointment, cancellationToken);
         }
 
         return report;
