@@ -152,7 +152,24 @@ builder.Services.AddAuthentication(options =>
         ValidAudience = jwtSettings["Audience"] ?? "1RadClient",
         IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey))
     };
+    // The live-updates hub runs over WebSockets, which can't carry an Authorization
+    // header, so the browser sends the access token as ?access_token= on that path only.
+    options.Events = new JwtBearerEvents
+    {
+        OnMessageReceived = ctx =>
+        {
+            var token = ctx.Request.Query["access_token"];
+            if (!string.IsNullOrEmpty(token) && ctx.HttpContext.Request.Path.StartsWithSegments("/api/v1/live"))
+                ctx.Token = token;
+            return Task.CompletedTask;
+        }
+    };
 });
+
+// Live updates: push "something changed" to dashboards instead of browser polling.
+builder.Services.AddSignalR();
+builder.Services.AddSingleton<_1RadAPI.Live.LiveConnectionRegistry>();
+builder.Services.AddHostedService<_1RadAPI.Live.LiveChangeWatcher>();
 
 // Authorization Policies
 builder.Services.AddAuthorization(options =>
@@ -249,5 +266,6 @@ app.UseMiddleware<SubscriptionValidationMiddleware>();
 app.UseMiddleware<IdempotencyMiddleware>();
 
 app.MapControllers();
+app.MapHub<_1RadAPI.Live.LiveHub>("/api/v1/live");
 
 app.Run();

@@ -60,4 +60,18 @@ Remaining:
 | `RadAiResponseCache` (6 h) | Lower hit rate only | Accept |
 | `DicomExtractionQueue` (in-memory channel) | Fine — the DB lease is the real queue | none |
 | First load of an all-time analytics view | Still reads the centre's full history once per data change | Pre-aggregated daily rows (`DailyFinanceFacts`) refreshed by a job, if a large centre's first load becomes slow |
-| Client polling (4–5 endpoints every 12–60 s per open browser) | Load grows with users, not instances | One SignalR/SSE channel per centre |
+
+## Live push instead of polling (30 Oct 2026)
+
+- Hub `/api/v1/live` (SignalR, WebSockets only, token in `?access_token=`). A browser
+  joins its centre's group; `LiveChangeWatcher` checks, every 4 s and only for centres
+  with someone connected, one version query per centre (row counts + latest UpdatedAt
+  per topic) and pushes `changed(["appointments" | "approvals" | "finance" | "reports" |
+  "patients" | "studies"])`. No message bus needed: each instance watches the centres
+  connected to it. Only topic names are sent.
+- Web: `src/live/liveUpdates.js` maps topics to the window events the screens already
+  use. While connected, the worklist (30 s), overdue (30 s), approvals badge (12 s),
+  sync pulls (30 s), Referrals (90 s) and Studies extraction (4 s) polls become a
+  5-minute (Studies: 30 s) safety net; without the connection everything polls as before.
+- nginx (Dev VM) needs the WebSocket `Upgrade`/`Connection` headers on `/api/` (see the
+  comment in 1RADWeb's deploy.yml); Caddy (Prod) passes WebSockets already.
