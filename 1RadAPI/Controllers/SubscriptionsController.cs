@@ -1,4 +1,5 @@
 using _1Rad.Application.Features.Subscriptions.Commands.ApprovePaymentRequest;
+using _1Rad.Application.Features.Subscriptions.Commands.RejectPaymentRequest;
 using _1Rad.Application.Features.Subscriptions.Commands.SetHospitalModules;
 using _1Rad.Application.Features.Subscriptions.Commands.SubmitPaymentRequest;
 using _1Rad.Application.Features.Subscriptions.Queries.GetSubscriptionStatus;
@@ -91,6 +92,20 @@ public class SubscriptionsController : ControllerBase
     }
 
     /// <summary>
+    /// [INTERNAL] Reject a pending payment request with a reason the centre will see.
+    /// Service-key only, like approve-payment.
+    /// </summary>
+    [HttpPost("reject-payment/{requestId:guid}")]
+    [AllowAnonymous]
+    public async Task<IActionResult> RejectPayment(Guid requestId, [FromBody] RejectPaymentBody body,
+        [FromHeader(Name = "X-Service-Key")] string? serviceKey)
+    {
+        if (!HasValidServiceKey(serviceKey)) return Unauthorized();
+        var result = await _mediator.Send(new RejectPaymentRequestCommand(requestId, body?.Reason ?? string.Empty));
+        return result.Success ? Ok(result) : BadRequest(new { error = result.Error });
+    }
+
+    /// <summary>
     /// Returns subscription invoices/transactions for the authenticated hospital.
     /// </summary>
     [HttpGet("invoices")]
@@ -142,4 +157,5 @@ public class SubscriptionsController : ControllerBase
 }
 
 public record ApprovePaymentBody(string? ReviewNote);
+public record RejectPaymentBody(string? Reason);
 public record SetModulesBody(string? Modules);
