@@ -21,7 +21,7 @@ public record GetReferralIntelligenceQuery(
     string? SourceKey = null,
     int Skip = 0,
     int? Take = null
-) : IRequest<List<ReferrerIntelligenceDto>>;
+) : IRequest<List<ReferrerIntelligenceDto>>, ICachedAnalyticsQuery;
 
 /// <summary>
 /// Per-source referral rollup behind the Referrals page and the admin board.

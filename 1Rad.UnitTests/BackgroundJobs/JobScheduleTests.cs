@@ -24,6 +24,15 @@ public class JobScheduleTests
     }
 
     [Fact]
+    public void Interval_keys_bucket_by_block()
+    {
+        JobSchedule.IntervalKey(Utc("2026-10-30T05:59:00Z"), 6).Should().Be("2026-10-30T00/6h");
+        JobSchedule.IntervalKey(Utc("2026-10-30T06:00:00Z"), 6).Should().Be("2026-10-30T06/6h");
+        JobSchedule.IntervalKey(Utc("2026-10-30T23:10:00Z"), 24).Should().Be("2026-10-30T00/24h");
+        JobSchedule.IntervalKey(Utc("2026-10-30T13:45:00Z"), 1).Should().Be("2026-10-30T13/1h");
+    }
+
+    [Fact]
     public void Ist_today_rolls_over_at_1830_utc()
     {
         JobSchedule.IstToday(Utc("2026-10-30T18:29:00Z")).Should().Be(new DateTime(2026, 10, 30));

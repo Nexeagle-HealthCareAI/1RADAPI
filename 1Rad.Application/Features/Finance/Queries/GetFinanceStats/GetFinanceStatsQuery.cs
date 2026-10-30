@@ -4,7 +4,7 @@ using _1Rad.Application.Interfaces;
 
 namespace _1Rad.Application.Features.Finance.Queries.GetFinanceStats;
 
-public record GetFinanceStatsQuery : IRequest<FinanceStatsDto>;
+public record GetFinanceStatsQuery : IRequest<FinanceStatsDto>, ICachedAnalyticsQuery;
 
 public class FinanceStatsDto
 {

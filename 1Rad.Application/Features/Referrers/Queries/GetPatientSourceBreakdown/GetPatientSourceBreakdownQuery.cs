@@ -30,7 +30,7 @@ public record PatientSourceBreakdownDto(
 /// say "By Doctor" but whose visits carry no partner (referral credit that is never paid).
 /// </summary>
 public record GetPatientSourceBreakdownQuery(DateTime? StartDate = null, DateTime? EndDate = null)
-    : IRequest<PatientSourceBreakdownDto>;
+    : IRequest<PatientSourceBreakdownDto>, ICachedAnalyticsQuery;
 
 public class GetPatientSourceBreakdownQueryHandler : IRequestHandler<GetPatientSourceBreakdownQuery, PatientSourceBreakdownDto>
 {

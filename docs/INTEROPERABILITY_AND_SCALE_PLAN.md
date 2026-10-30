@@ -35,19 +35,29 @@ Done on 30 Oct 2026:
   by the others at the next DB re-check (was: until the refresh token expired).
 - Subscription lock check (`SubscriptionValidationMiddleware`) caches 60 s per instance — acceptable.
 
-Still per-process (in order of risk):
+Also done (30 Oct 2026, second pass):
+
+- **Shared rate limits** — `[DistributedRateLimit]` counts in `dbo.RateLimitCounters`
+  (DB script 100), so the limit is the same however many instances run. The old OTP
+  limit was ONE bucket for the whole platform (5 OTPs per 10 min for everyone); it is
+  now per mobile number plus a platform ceiling. Login, forgot-password and
+  verify-reset-code are now limited per identifier too. Fails open (logs a warning) if
+  the table is missing.
+- **Every background job runs once per slot** — `SubscriptionLifecycleJob` (6-hour block),
+  `BlobOrphanSweepJob` (its interval) and `DicomExtractionBackfillJob` (per hour) claim
+  `JobRuns` like the daily jobs.
+- **Heavy analytics are computed once per data change** — the finance matrix, finance
+  stats, strategic outlook, referral intelligence/summary/visits, referral matrix and
+  acquisition sources implement `ICachedAnalyticsQuery`; `AnalyticsCacheBehavior` reuses
+  a result while a one-query "data version" (row counts + latest UpdatedAt of the tables
+  they read) is unchanged, for up to 2 minutes.
+
+Remaining:
 
 | Component | Effect with 2+ instances | Fix |
 | --- | --- | --- |
-| Rate limiter (`OtpRateLimit`, `ReferralPortalWrite`) | Limits multiply by instance count | Redis-backed limiter, or sticky routing for `/auth/otp/*` |
-| `SubscriptionLifecycleJob`, `BlobOrphanSweepJob`, `DicomExtractionBackfillJob` | Run on every instance; idempotent but duplicate work / log noise | Wrap each run in `JobSchedule.TryClaimAsync` with a window key (e.g. `yyyy-MM-dd-HH` / 6-hour block) |
 | `ModuleEntitlementService` / `StorageMeteringService` caches (60 s) | A module change takes up to 60 s on other instances | Accept, or invalidate via Redis pub/sub |
 | `RadAiResponseCache` (6 h) | Lower hit rate only | Accept |
-| `DicomExtractionQueue` (in-memory channel) | Fine — the DB lease (`ClaimNextExtractionJobAsync`) is the real queue; the channel is only a wake-up hint | none |
-
-Load, independent of instance count:
-
-- Finance matrix / intelligence queries load a centre's whole history — move to
-  date-bounded queries with pre-aggregated daily rows.
-- Every open browser polls 4–5 endpoints every 12–60 s (worklist, overdue, approvals,
-  sync) — one SignalR/SSE channel per centre would replace most of it.
+| `DicomExtractionQueue` (in-memory channel) | Fine — the DB lease is the real queue | none |
+| First load of an all-time analytics view | Still reads the centre's full history once per data change | Pre-aggregated daily rows (`DailyFinanceFacts`) refreshed by a job, if a large centre's first load becomes slow |
+| Client polling (4–5 endpoints every 12–60 s per open browser) | Load grows with users, not instances | One SignalR/SSE channel per centre |

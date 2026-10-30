@@ -30,7 +30,7 @@ public record GetReferralMatrixQuery(
     DateTime ReferenceDate,
     int WeekIndex,
     string? SearchQuery = null
-) : IRequest<ReferralMatrixDto>;
+) : IRequest<ReferralMatrixDto>, ICachedAnalyticsQuery;
 
 public class GetReferralMatrixQueryHandler : IRequestHandler<GetReferralMatrixQuery, ReferralMatrixDto>
 {

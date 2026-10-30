@@ -66,6 +66,9 @@ public static class DependencyInjection
         // (token-optimization layer). Backed by the AddMemoryCache below.
         services.AddSingleton<IRadAiResponseCache, RadAiResponseCache>();
         services.AddScoped<IEmailService, EmailService>();
+        services.AddScoped<IDistributedRateLimiter, SqlRateLimiter>();
+        // Reuses heavy analytics results while the centre's data is unchanged (P3-9).
+        services.AddTransient(typeof(MediatR.IPipelineBehavior<,>), typeof(AnalyticsCacheBehavior<,>));
         services.AddScoped<IJwtProvider, JwtProvider>();
         services.AddSingleton<ITrackingTokenService, TrackingTokenService>();
         services.AddSingleton<IStudyShareTokenService, StudyShareTokenService>();

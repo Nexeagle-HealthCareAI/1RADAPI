@@ -1,12 +1,10 @@
 using System.Text;
-using System.Threading.RateLimiting;
 using _1Rad.Application;
 using _1Rad.Infrastructure;
 using _1Rad.Infrastructure.Middleware;
 using _1RadAPI.Middleware;
 using FluentValidation.AspNetCore;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 
@@ -76,35 +74,8 @@ builder.Services.AddSwaggerGen(c =>
     });
 });
 
-// Configure Rate Limiting (OTP Protection)
-builder.Services.AddRateLimiter(options =>
-{
-    options.AddFixedWindowLimiter(policyName: "OtpRateLimit", opt =>
-    {
-        opt.PermitLimit = 5;
-        opt.Window = TimeSpan.FromMinutes(10);
-        opt.QueueLimit = 0;
-        opt.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
-    });
-
-    // Doctor-portal writes come from an anonymous capability link. Partition by the partner the link
-    // is for (and the action), so one leaked or scripted link cannot flood the front-desk queue or
-    // keep triggering renewal messages. Not by client IP: there is no forwarded-headers setup, so
-    // behind the reverse proxy every caller would look like the same address.
-    options.AddPolicy("ReferralPortalWrite", httpContext =>
-    {
-        var route = httpContext.Request.RouteValues;
-        var key = $"{route["action"]}:{route["referrerId"]}".ToLowerInvariant();
-        return RateLimitPartition.GetFixedWindowLimiter(key, _ => new FixedWindowRateLimiterOptions
-        {
-            PermitLimit = 20,
-            Window = TimeSpan.FromHours(1),
-            QueueLimit = 0,
-        });
-    });
-
-    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-});
+// Rate limiting: [DistributedRateLimit] on the actions (counted in dbo.RateLimitCounters,
+// shared by every API instance — gap analysis P3-9). The in-memory limiter was removed.
 
 // Configure CORS — pulls the allow-list from Cors:AllowedOrigins in
 // appsettings.{Environment}.json. Combining a wildcard origin with
@@ -260,7 +231,6 @@ app.MapGet("/", context =>
 
 app.UseCors("AllowedOrigins"); // Enable CORS
 
-app.UseRateLimiter(); // Apply Rate Limiting
 
 app.UseAuthentication(); // Must be before UseAuthorization
 app.UseAuthorization();

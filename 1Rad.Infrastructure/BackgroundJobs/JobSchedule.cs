@@ -28,6 +28,20 @@ public static class JobSchedule
         return next - istNow;
     }
 
+    /// <summary>Run key for an interval job: the UTC block of <paramref name="hours"/> hours, e.g. "2026-10-30T12/6h".</summary>
+    public static string IntervalKey(DateTime utcNow, int hours)
+    {
+        hours = Math.Max(1, hours);
+        var blockStart = utcNow.Date.AddHours(utcNow.Hour / hours * hours);
+        if (hours >= 24)
+        {
+            var days = hours / 24;
+            var dayIndex = (long)(utcNow.Date - DateTime.UnixEpoch.Date).TotalDays / days * days;
+            blockStart = DateTime.UnixEpoch.Date.AddDays(dayIndex);
+        }
+        return $"{blockStart:yyyy-MM-ddTHH}/{hours}h";
+    }
+
     /// <summary>
     /// Claims (jobName, runKey). True for exactly one caller across all instances; false
     /// when another instance already ran this slot. If the JobRuns table is missing (DB
