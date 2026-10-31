@@ -91,6 +91,7 @@ public class ApplyInvoiceDiscountCommandHandler : IRequestHandler<ApplyInvoiceDi
         }
 
         var originalAdditionalCharges = invoice.AdditionalCharges;
+        var oldReferrerDiscount = invoice.ReferrerDiscount;
 
         // When the settlement drawer saves a DRAFT it sends the discount
         // breakdown; persist it and derive the total from it so reopening the
@@ -155,6 +156,13 @@ public class ApplyInvoiceDiscountCommandHandler : IRequestHandler<ApplyInvoiceDi
         // Canonical recompute (Common/InvoiceTotals.cs).
         InvoiceTotals.RecomputeGross(invoice, originalAdditionalCharges);
         InvoiceTotals.ApplyDiscountAndFinalize(invoice, discount);
+
+        // A referrer discount saved as a draft comes off the referrer's commission
+        // now (review R2). Before, collection later saw "no change" and the doctor
+        // kept the full cut while the patient got the concession.
+        await ReferrerDiscountCommission.ApplyAsync(
+            _context, invoice, oldReferrerDiscount, absorbExcessToCentre: false,
+            $"draft saved by user {_context.UserContext.UserId}", cancellationToken);
 
         await _context.SaveChangesAsync(cancellationToken);
         return true;

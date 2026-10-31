@@ -64,19 +64,21 @@ public class UpdateReferralCommissionStatusCommandHandler : IRequestHandler<Upda
                 throw new BusinessRuleViolationException("The patient has not paid for this visit yet, so the referral commission cannot be paid out.");
         }
 
+        var actor = await CommissionActor.ResolveAsync(_context, cancellationToken);
         commission.Status = requestedStatus;
         if (requestedStatus == "PAID")
         {
             commission.PaymentDate = DateTime.UtcNow;
-            // Persist mandatory disbursement details when marking as PAID.
-            if (!string.IsNullOrWhiteSpace(request.PaidBy))    commission.PaidBy       = request.PaidBy;
-            if (!string.IsNullOrWhiteSpace(request.PayeeName)) commission.PayeeName    = request.PayeeName;
+            // Who paid and who was paid are always recorded (review R6): the signed-in
+            // user and the partner, unless the caller named someone else.
+            commission.PaidBy = !string.IsNullOrWhiteSpace(request.PaidBy) ? request.PaidBy.Trim() : actor;
+            commission.PayeeName = !string.IsNullOrWhiteSpace(request.PayeeName) ? request.PayeeName.Trim() : commission.ReferrerName;
             if (!string.IsNullOrWhiteSpace(request.PayeeContact)) commission.PayeeContact = request.PayeeContact;
             if (!string.IsNullOrWhiteSpace(request.PayeeEmail))   commission.PayeeEmail   = request.PayeeEmail;
             if (!string.IsNullOrWhiteSpace(request.PayeeAddress)) commission.PayeeAddress = request.PayeeAddress;
         }
         // Recorded from the signed-in account. request.UpdatedBy is client-supplied, so it is ignored.
-        commission.UpdatedBy = await CommissionActor.ResolveAsync(_context, cancellationToken);
+        commission.UpdatedBy = actor;
         commission.UpdatedAt = DateTime.UtcNow;
 
         await _context.SaveChangesAsync(cancellationToken);

@@ -186,6 +186,12 @@ public class UpdateAppointmentStatusCommandHandler : IRequestHandler<UpdateAppoi
                 c.CommissionAmount = 0;
             }
 
+            // The status goes in the SAME save as the bill and commission removal
+            // (review A15): a failed save used to leave a live visit with no bill,
+            // which the next arrival then re-billed. The later save only refreshes
+            // derived running totals.
+            appointment.Status = newStatus;
+            appointment.UpdatedAt = cancelNow;
             await _context.SaveChangesAsync(cancellationToken);
 
             // 3. Recompute accumulated totals for affected referrers over their
@@ -210,6 +216,36 @@ public class UpdateAppointmentStatusCommandHandler : IRequestHandler<UpdateAppoi
         var nowUtc = DateTime.UtcNow;
         if (newStatus == "CONFIRMED"   && appointment.ArrivedAt     == null) appointment.ArrivedAt     = nowUtc;
         if (newStatus == "IN_PROGRESS" && appointment.ScanStartedAt == null) appointment.ScanStartedAt = nowUtc;
+
+        // Visit-level SCANNED / REPORTED / DELIVERED (review A5): stamp the visit's
+        // milestones and bring its live service lines along, so the overdue bell and
+        // the Operations board see the same state as the Appointment board.
+        if (newStatus is "SCANNED" or "COMPLETED" or "REPORTING" or "REPORTED" or "DELIVERED")
+        {
+            appointment.ScanStartedAt ??= nowUtc;
+            appointment.ScannedAt ??= nowUtc;
+            if (newStatus == "DELIVERED") appointment.DeliveredAt ??= nowUtc;
+
+            var lines = await _context.AppointmentServices
+                .Where(s => s.AppointmentId == appointment.AppointmentId && s.DeletedAt == null)
+                .ToListAsync(cancellationToken);
+            var target = newStatus is "DELIVERED" ? "DELIVERED" : newStatus is "REPORTED" ? "REPORTED" : "SCANNED";
+            var rank = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["NOT_STARTED"] = 0, ["IN_PROGRESS"] = 1, ["IN_MID"] = 2, ["SCANNED"] = 3, ["REPORTED"] = 4, ["DELIVERED"] = 5,
+            };
+            foreach (var line in lines)
+            {
+                if (string.Equals(line.Status, "CANCELLED", StringComparison.OrdinalIgnoreCase)) continue;
+                line.ScanStartedAt ??= nowUtc;
+                line.ScanCompletedAt ??= nowUtc;
+                if (target is "REPORTED" or "DELIVERED") line.ReportedAt ??= nowUtc;
+                if (target == "DELIVERED") line.DeliveredAt ??= nowUtc;
+                var current = rank.TryGetValue(line.Status ?? "NOT_STARTED", out var r) ? r : 0;
+                if (current < rank[target]) line.Status = target;
+                line.UpdatedAt = nowUtc;
+            }
+        }
 
         // Generate the daily token on ARRIVAL (first time the patient is marked
         // CONFIRMED / arrived), not at booking — so the number reflects who
@@ -263,14 +299,17 @@ public class UpdateAppointmentStatusCommandHandler : IRequestHandler<UpdateAppoi
     // live commission already exists for this appointment.
     private async Task GenerateBillingOnArrivalAsync(Appointment appointment, CancellationToken ct)
     {
+        // The bill and the commissions are generated independently (review B22):
+        // a commission recorded early used to stop the bill from ever being made.
         var alreadyBilled = await _context.Invoices
             .AnyAsync(i => i.AppointmentId == appointment.AppointmentId && i.DeletedAt == null, ct);
         var alreadyCommissioned = await _context.ReferralCommissions
             .AnyAsync(c => c.AppointmentId == appointment.AppointmentId && c.DeletedAt == null, ct);
-        if (alreadyBilled || alreadyCommissioned) return;
+        if (alreadyBilled && alreadyCommissioned) return;
 
+        // A line cancelled before arrival is neither billed nor commissioned (review A6).
         var services = await _context.AppointmentServices
-            .Where(s => s.AppointmentId == appointment.AppointmentId && s.DeletedAt == null)
+            .Where(s => s.AppointmentId == appointment.AppointmentId && s.DeletedAt == null && s.Status != "CANCELLED")
             .OrderBy(s => s.UpdatedAt)
             .ToListAsync(ct);
         if (services.Count == 0) return;
@@ -286,7 +325,7 @@ public class UpdateAppointmentStatusCommandHandler : IRequestHandler<UpdateAppoi
         var serviceDate = appointment.DateTime;
         string? invoiceDisplayId = null;
 
-        if (totalAmount > 0 && isAutoBillingEnabled)
+        if (!alreadyBilled && totalAmount > 0 && isAutoBillingEnabled)
         {
             invoiceDisplayId = await InvoiceNumbering.NextAsync(_context, appointment.HospitalId, DateTime.UtcNow, ct);
             var invoice = new Invoice
@@ -342,12 +381,13 @@ public class UpdateAppointmentStatusCommandHandler : IRequestHandler<UpdateAppoi
         // whole fee. Skip commission generation entirely in that case.
         var isSelfReferral = string.Equals((appointment.ReferredBy ?? string.Empty).Trim(), "Self", StringComparison.OrdinalIgnoreCase);
 
-        if (referrerId != null && !isSelfReferral && (isAutoBillingEnabled || totalReferralCut > 0))
+        if (!alreadyCommissioned && referrerId != null && !isSelfReferral && (isAutoBillingEnabled || totalReferralCut > 0))
         {
             var anyAdded = false;
             foreach (var s in services)
             {
                 if (s.ReferralCutValue <= 0 && !isAutoBillingEnabled) continue;
+                if (s.IsFree) continue; // a free test earns no referral cut
                 _context.ReferralCommissions.Add(new ReferralCommission
                 {
                     ReferrerId = referrerId.Value,

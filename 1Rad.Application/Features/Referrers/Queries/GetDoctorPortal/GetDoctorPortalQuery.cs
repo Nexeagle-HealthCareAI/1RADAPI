@@ -261,7 +261,7 @@ public class GetDoctorPortalQueryHandler : IRequestHandler<GetDoctorPortalQuery,
         {
             var c = commissions[i];
             if (string.Equals(c.Status, "PAID", StringComparison.OrdinalIgnoreCase) || c.CommissionAmount <= 0m) continue;
-            if (patients[i].PaymentStatus is "PAID" or "PARTIAL") payableNow += c.CommissionAmount;
+            if (patients[i].PaymentStatus is "PAID") payableNow += c.CommissionAmount;
             else awaitingPatient += c.CommissionAmount;
         }
 

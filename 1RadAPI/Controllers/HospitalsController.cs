@@ -76,6 +76,21 @@ public class HospitalsController : ControllerBase
         return Ok(new { message = "Hospital metadata updated successfully." });
     }
 
+    // Review B9: the Billing page's auto-billing switch used to PUT the whole hospital
+    // record, and when its GET failed it sent blank GSTIN/PAN/address/NABH — wiping the
+    // centre's tax details. This endpoint changes only the flag.
+    [HttpPut("{id}/auto-billing")]
+    [Authorize(Roles = HospitalEditRoles)]
+    public async Task<IActionResult> SetAutoBilling(Guid id, [FromBody] SetAutoBillingRequest request)
+    {
+        if (!await CanAccessHospitalAsync(id)) return Forbid();
+        var hospital = await _db.Hospitals.FirstOrDefaultAsync(h => h.HospitalId == id);
+        if (hospital == null) return NotFound();
+        hospital.IsAutoBillingEnabled = request.Enabled;
+        await _db.SaveChangesAsync(HttpContext.RequestAborted);
+        return Ok(new { isAutoBillingEnabled = hospital.IsAutoBillingEnabled });
+    }
+
     [HttpPost("chain")]
     [Authorize(Roles = AdminRoles)]
     public async Task<IActionResult> CreateChain([FromBody] CreateChainRequest request)
@@ -121,6 +136,8 @@ public class HospitalsController : ControllerBase
         return Ok(new { success = true, data = result });
     }
 }
+
+public record SetAutoBillingRequest(bool Enabled);
 
 public class UpdateHospitalDetailsRequest
 {

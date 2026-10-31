@@ -142,8 +142,10 @@ internal static class ReferrerReassign
             .Select(i => i.InvoiceId)
             .FirstOrDefaultAsync(ct);
         bool hasArrived = appointment.ArrivedAt != null || invoiceDisplayId != null;
-        
-        if (hasArrived && !isSelf)
+        var visitCancelled = string.Equals((appointment.Status ?? "").Trim(), "CANCELLED", StringComparison.OrdinalIgnoreCase);
+
+        // A cancelled visit earns no new commission for anyone (review R14).
+        if (hasArrived && !isSelf && !visitCancelled)
         {
             var hospital = await ctx.Hospitals.FirstOrDefaultAsync(h => h.HospitalId == hospitalId, ct);
             bool autoBilling = hospital?.IsAutoBillingEnabled ?? false;
@@ -151,7 +153,9 @@ internal static class ReferrerReassign
             var existingServiceIds = commissions.Where(c => c.AppointmentServiceId.HasValue).Select(c => c.AppointmentServiceId!.Value).ToHashSet();
             foreach (var svc in services.Values)
             {
-                if (!existingServiceIds.Contains(svc.Id) && (svc.ReferralCutValue > 0 || autoBilling))
+                if (!existingServiceIds.Contains(svc.Id) && !svc.IsFree
+                    && !string.Equals(svc.Status, "CANCELLED", StringComparison.OrdinalIgnoreCase)
+                    && (svc.ReferralCutValue > 0 || autoBilling))
                 {
                     var newComm = new ReferralCommission
                     {
@@ -197,10 +201,15 @@ internal static class ReferrerReassign
             // exactly the money that was disbursed. Only when the row carries nothing
             // (it was "Self"/cancelled, which earns ₹0) do we fall back to the
             // service line's base cut so the newly assigned referrer is credited.
+            // Review R14: only a row zeroed because the visit was "Self" falls back to the
+            // line's base cut. A row cancelled for a cancelled visit or forfeited on a free
+            // test keeps its ₹0 and status — reassigning must not bring the cut back.
+            var wasSelfRow = string.Equals((c.ReferrerName ?? "").Trim(), "Self", StringComparison.OrdinalIgnoreCase);
             decimal baseCut = c.CommissionAmount;
-            if (baseCut == 0m
+            if (baseCut == 0m && wasSelfRow && !visitCancelled
                 && c.AppointmentServiceId.HasValue
-                && services.TryGetValue(c.AppointmentServiceId.Value, out var svc))
+                && services.TryGetValue(c.AppointmentServiceId.Value, out var svc)
+                && !svc.IsFree)
             {
                 baseCut = svc.ReferralCutValue;
             }
@@ -287,9 +296,10 @@ internal static class ReferrerReassign
                 c.ReferrerId = referrer.ReferrerId;
                 c.ReferrerName = referrer.Name ?? name;
                 c.CommissionAmount = isSelf ? 0 : baseCut;
-                
-                // If it was cancelled because of "Self", we revive it.
-                if (c.Status == "Cancelled" && !isSelf) c.Status = "UNPAID";
+
+                // Revive only a row that was cancelled because the visit was "Self".
+                if (string.Equals(c.Status, "Cancelled", StringComparison.OrdinalIgnoreCase) && !isSelf && wasSelfRow && baseCut != 0)
+                    c.Status = "UNPAID";
                 
                 c.UpdatedAt = now;
             }

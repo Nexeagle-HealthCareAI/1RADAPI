@@ -40,7 +40,7 @@ public class GetFinanceStatsQueryHandler : IRequestHandler<GetFinanceStatsQuery,
 
             var invoiceData = await _context.Invoices
                 .AsNoTracking()
-                .Where(i => i.HospitalId == hospitalId)
+                .Where(i => i.HospitalId == hospitalId && i.DeletedAt == null)
                 .Select(i => new { i.Status, i.GrossAmount, i.TotalAmount, i.PaidAmount })
                 .ToListAsync(cancellationToken);
 
