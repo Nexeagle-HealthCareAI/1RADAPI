@@ -26,7 +26,7 @@ public class GetAppointmentByIdQueryHandler : IRequestHandler<GetAppointmentById
             .AsNoTracking()
             .Include(a => a.Patient)
 
-            .GroupJoin(_context.Invoices,
+            .GroupJoin(_context.Invoices.Where(i => i.DeletedAt == null),
                 a => a.AppointmentId,
                 i => i.AppointmentId,
                 (a, invoices) => new { Appointment = a, Invoices = invoices })

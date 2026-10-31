@@ -61,8 +61,11 @@ public class RecordReferralCommissionsCommandHandler : IRequestHandler<RecordRef
         var existing = new List<ReferralCommission>();
         if (!string.IsNullOrEmpty(request.ReferenceNumber))
         {
+            // Only THIS referrer's rows (review R7): an invoice can carry commissions for
+            // more than one partner, and recording A's payout used to overwrite or delete B's.
             existing = await _context.ReferralCommissions
                 .Where(c => c.ReferenceNumber == request.ReferenceNumber
+                            && c.ReferrerId == request.ReferrerId
                             && c.HospitalId == hospitalId
                             && c.DeletedAt == null)
                 .ToListAsync(cancellationToken);
@@ -104,6 +107,11 @@ public class RecordReferralCommissionsCommandHandler : IRequestHandler<RecordRef
             {
                 lineStatus = CommissionStatus.Normalize(line.Status)
                     ?? throw new ValidationException($"Unknown commission status '{line.Status}'.");
+                // Paying goes through the payout screen (review R6), which records who
+                // paid whom, checks the patient has paid and nets any deficit.
+                if (lineStatus == CommissionStatus.Paid)
+                    throw new BusinessRuleViolationException(
+                        "Save the commission first, then pay it from the payout screen.", "COMMISSION_PAY_VIA_PAYOUT");
             }
 
             // Match an existing line to update in place (re-saving the same payout
@@ -130,6 +138,13 @@ public class RecordReferralCommissionsCommandHandler : IRequestHandler<RecordRef
                 if (string.Equals(commission.Status, "PAID", StringComparison.OrdinalIgnoreCase))
                     throw new BusinessRuleViolationException(
                         $"The commission for modality '{modality}' on this invoice is already paid and cannot be modified. Submit an approval request for an adjustment.");
+
+                // A commission generated from the visit's services follows the visit
+                // (edits, discounts, approvals); this manual save must not rewrite it.
+                if (commission.AppointmentServiceId != null && Math.Abs(commission.CommissionAmount - lineAmount) >= 0.005m)
+                    throw new BusinessRuleViolationException(
+                        $"The {modality} commission comes from the visit's services. Change it with an approval request instead.",
+                        "COMMISSION_OWNED_BY_VISIT");
 
                 matched.Add(commission.Id);
                 commission.CommissionAmount = lineAmount;
@@ -177,7 +192,10 @@ public class RecordReferralCommissionsCommandHandler : IRequestHandler<RecordRef
         // A PAID row is settlement history, not a draft line the client can drop —
         // an incoming payload that simply omits it (stale cache, edited elsewhere)
         // must never make it disappear from the ledger.
+        // Commissions generated from a visit's services are owned by that visit
+        // (review R7) — this manual-payout save must not tombstone them.
         foreach (var stale in existing.Where(c => !matched.Contains(c.Id)
+                                                   && c.AppointmentServiceId == null
                                                    && !string.Equals(c.Status, "PAID", StringComparison.OrdinalIgnoreCase)))
         {
             // Zero the amount before tombstoning — every other soft-delete site for

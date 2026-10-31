@@ -105,7 +105,11 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
                 .Take(takeCount)
                 .Select(a => new {
                     Appointment = a,
-                    Invoice = _context.Invoices.FirstOrDefault(i => i.AppointmentId == a.AppointmentId)
+                    // Live invoice only (review A13): a voided bill must not show its amount.
+                    Invoice = _context.Invoices
+                        .Where(i => i.AppointmentId == a.AppointmentId && i.DeletedAt == null)
+                        .OrderByDescending(i => i.CreatedAt)
+                        .FirstOrDefault()
                 });
 
             var rawResults = await appointmentQuery.ToListAsync(cancellationToken);

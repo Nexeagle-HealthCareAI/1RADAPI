@@ -2,6 +2,7 @@ using MediatR;
 using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Entities;
+using _1Rad.Domain.Exceptions;
 using Microsoft.EntityFrameworkCore;
 
 namespace _1Rad.Application.Features.Finance.Commands.CollectPayment;
@@ -208,110 +209,26 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
             InvoiceTotals.ApplyDiscountAndFinalize(invoice, totalDiscount);
 
             // Already-settled check, against the FRESH balance (see note above).
-            if (invoice.PaidAmount >= invoice.TotalAmount - 0.01m)
+            // Review B17: a bill discounted to ₹0 has nothing to collect but still has to
+            // reach PAID — it used to hit this check and stay PENDING forever. Only a bill
+            // with a real balance that is already covered is "already settled".
+            var zeroTotal = invoice.TotalAmount <= 0.01m;
+            if (!zeroTotal && invoice.PaidAmount >= invoice.TotalAmount - 0.01m)
             {
-                throw new InvalidOperationException($"Invoice '{invoice.InvoiceId}' is already settled.");
+                throw new ConflictException($"Bill {invoice.InvoiceId} is already settled.");
+            }
+            if (zeroTotal && request.Amount > 0.009m && string.Equals(invoice.Status, "PAID", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ConflictException($"Bill {invoice.InvoiceId} is already settled.");
             }
 
-            // Handle Referrer-side adjustment (Differential logic)
-            if (invoice.ReferrerDiscount != oldReferrerDiscount)
+            // Referrer-side adjustment: the commission moves by the change in the
+            // referrer discount, never touching PAID rows (Common/ReferrerDiscountCommission).
             {
-                // Multi-service appointments carry ONE ReferralCommission row PER
-                // SERVICE (see UpdateAppointmentStatusCommand.GenerateBillingOnArrivalAsync),
-                // all sharing this invoice's AppointmentId/ReferenceNumber. The
-                // invoice-level ReferrerDiscount is a single aggregate figure, so the
-                // differential must be spread across the WHOLE group — picking just
-                // one row (the old FirstOrDefaultAsync) silently corrupted sibling
-                // services' commissions on multi-service visits.
-                var commissions = await _context.ReferralCommissions
-                    .Where(c =>
-                        (c.AppointmentId == invoice.AppointmentId || (c.ReferenceNumber == invoice.InvoiceId && c.ReferenceNumber != null)) &&
-                        c.HospitalId == _context.UserContext.HospitalId &&
-                        c.DeletedAt == null)
-                    .ToListAsync(cancellationToken);
-
-                if (commissions.Count > 0)
-                {
-                    // A PAID commission is disbursement history — the invariant enforced
-                    // everywhere else this table is edited (UpdateReferralCommissionStatusCommand,
-                    // RecordReferralCommissionsCommand, ReferrerReassign's double-entry
-                    // reversal) is that it is never silently rewritten in place; an
-                    // adjustment after disbursement needs an audited reversal, not a
-                    // direct edit. A commission CAN be marked PAID before the invoice
-                    // itself is fully settled (see ReferrerReassign's comment on this),
-                    // so a second CollectPayment call with a changed ReferrerDiscount is
-                    // a real, reachable path here — restrict the redistribution to the
-                    // still-adjustable (non-PAID) rows so a paid row's CommissionAmount
-                    // can never be overwritten by this differential logic.
-                    var lockedCommissions = commissions.Where(c => string.Equals(c.Status, "PAID", StringComparison.OrdinalIgnoreCase)).ToList();
-                    var adjustable = commissions.Except(lockedCommissions).ToList();
-
-                    // Eligible commission pool before any referral concession this cycle
-                    // (locked/paid rows are frozen out of the pool — the full differential
-                    // falls on the remaining adjustable rows only).
-                    var currentTotal = adjustable.Sum(c => c.CommissionAmount);
-                    var baseCommission = currentTotal + oldReferrerDiscount;
-
-                    // Over-commission funded by the CENTRE: floor the pool at zero and
-                    // shift the excess into the centre discount so the centre — not the
-                    // referrer — absorbs it. The patient's total is unchanged (the excess
-                    // only moves between the two discount buckets), so just the split +
-                    // commission change.
-                    if (request.AbsorbExcessToCentre && invoice.ReferrerDiscount > baseCommission)
-                    {
-                        var excess = invoice.ReferrerDiscount - baseCommission;
-                        invoice.CentreDiscount += excess;
-                        invoice.ReferrerDiscount = baseCommission;
-                        invoice.DiscountAmount = invoice.CentreDiscount + invoice.ReferrerDiscount + invoice.InstitutionalDeduction;
-                        invoice.TotalAmount = invoice.GrossAmount - invoice.DiscountAmount;
-                        foreach (var c in adjustable)
-                            c.Remarks = (c.Remarks ?? "") + $" [Excess ₹{excess:0.##} absorbed by centre]";
-                    }
-
-                    // Spread the new pool across the group proportionally to each row's
-                    // current share, so no single service silently absorbs the whole
-                    // invoice-level concession. The last row takes the rounding remainder
-                    // so the group sum lands exactly on (baseCommission - ReferrerDiscount).
-                    var newTotal = baseCommission - invoice.ReferrerDiscount;
-                    var allocated = 0m;
-                    for (var i = 0; i < adjustable.Count; i++)
-                    {
-                        var c = adjustable[i];
-                        decimal rowNew;
-                        if (i == adjustable.Count - 1)
-                        {
-                            rowNew = newTotal - allocated;
-                        }
-                        else
-                        {
-                            var share = currentTotal != 0 ? c.CommissionAmount / currentTotal : 1m / adjustable.Count;
-                            rowNew = Math.Round(newTotal * share, 2);
-                            allocated += rowNew;
-                        }
-
-                        var oldRowAmount = c.CommissionAmount;
-                        c.CommissionAmount = rowNew;
-                        c.Remarks = (c.Remarks ?? "") + $" [Adj: ₹{oldRowAmount:0.##} -> ₹{rowNew:0.##} (referrer discount ₹{oldReferrerDiscount:0.##} -> ₹{invoice.ReferrerDiscount:0.##})]";
-
-                        // Over-commission concession → the commission is now negative; the
-                        // doctor carries that deficit, recovered from future referrals. Audit
-                        // the authoriser (the authenticated user) + reason so the credit
-                        // decision is traceable. The amount itself is intentionally NOT
-                        // clamped to zero — the negative is the whole point.
-                        if (c.CommissionAmount < 0)
-                        {
-                            var deficit = Math.Abs(c.CommissionAmount);
-                            var reason = string.IsNullOrWhiteSpace(request.DeficitReason) ? "" : $" — {request.DeficitReason.Trim()}";
-                            c.Remarks += $" [DEFICIT ₹{deficit:0.##} authorised by user {_context.UserContext.UserId}{reason}]";
-                        }
-                    }
-
-                    if (lockedCommissions.Count > 0)
-                    {
-                        foreach (var c in lockedCommissions)
-                            c.Remarks = (c.Remarks ?? "") + $" [Referrer discount changed to ₹{invoice.ReferrerDiscount:0.##} after this commission was already paid — left unchanged; submit an approval request to adjust it.]";
-                    }
-                }
+                var reason = string.IsNullOrWhiteSpace(request.DeficitReason) ? "" : $" — {request.DeficitReason.Trim()}";
+                await ReferrerDiscountCommission.ApplyAsync(
+                    _context, invoice, oldReferrerDiscount, request.AbsorbExcessToCentre,
+                    $"at collection by user {_context.UserContext.UserId}{reason}", cancellationToken);
             }
 
             // Process Optional Payment. Overpayment is NO LONGER rejected — the

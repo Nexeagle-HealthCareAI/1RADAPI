@@ -279,7 +279,7 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
 
             var hospitalId = _context.UserContext.HospitalId;
 
-            var invoiceQuery = _context.Invoices.AsNoTracking().Where(i => i.HospitalId == hospitalId);
+            var invoiceQuery = _context.Invoices.AsNoTracking().Where(i => i.HospitalId == hospitalId && i.DeletedAt == null);
             var expenseQuery = _context.Expenses.AsNoTracking().Where(e => e.HospitalId == hospitalId);
             // DeletedAt/Status filter matches the convention used everywhere else this
             // table is read (commissionByServiceId/commissionByAppointmentId below,
@@ -375,7 +375,7 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 .Select(c => new { c.ReferrerId, c.ReferrerName, c.CommissionAmount, c.TransactionDate, c.Status })
                 .ToListAsync(cancellationToken);
 
-            var paymentQuery = _context.Payments.AsNoTracking().Where(p => p.HospitalId == hospitalId);
+            var paymentQuery = _context.Payments.AsNoTracking().Where(p => p.HospitalId == hospitalId && p.Invoice.DeletedAt == null);
             if (request.StartDate.HasValue)
             {
                 paymentQuery = paymentQuery.Where(p => p.CreatedAt >= IstDateRange.ToUtcStart(request.StartDate.Value));

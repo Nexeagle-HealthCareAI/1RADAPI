@@ -4,7 +4,6 @@ using Microsoft.AspNetCore.Mvc;
 using _1Rad.Application.Features.Finance.Queries.ExportFinancials;
 using _1Rad.Application.Features.Finance.Queries.GetFinanceStats;
 using _1Rad.Application.Features.Finance.Queries.GetFinancialMatrix;
-using _1Rad.Application.Features.Finance.Commands.SyncLocalStorageInvoices;
 using _1Rad.Domain.Constants;
 
 namespace _1RadAPI.Controllers.Finance;
@@ -58,16 +57,5 @@ public class FinancialReportController : ControllerBase
         });
         var fileName = $"1RadFlow_Financials_{DateTime.Now:yyyyMMdd}.xlsx";
         return File(result, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", fileName);
-    }
-
-    /// <summary>
-    /// Legacy localStorage sync — kept isolated so it can be deprecated
-    /// independently without touching any other financial controller.
-    /// </summary>
-    [HttpPost("sync")]
-    public async Task<IActionResult> SyncLegacy([FromBody] SyncLocalStorageInvoicesCommand command)
-    {
-        var result = await _mediator.Send(command);
-        return Ok(new { syncedCount = result });
     }
 }

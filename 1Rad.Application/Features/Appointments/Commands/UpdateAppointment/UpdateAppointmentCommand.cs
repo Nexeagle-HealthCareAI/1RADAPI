@@ -6,6 +6,7 @@ using _1Rad.Application.Common;
 using _1Rad.Application.Features.Appointments;
 using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Entities;
+using _1Rad.Domain.Exceptions;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
 
@@ -123,6 +124,36 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
 
         bool dateChanged = appointment.DateTime.Date != request.DateTime.Date;
 
+        // ── Closed visits (review A1, A12, R3) ───────────────────────────────
+        // A cancelled visit keeps ArrivedAt, so an ordinary edit used to re-bill it
+        // and revive the referrer's commission. A delivered visit is finished. Both
+        // are refused here before anything is written.
+        var currentStatus = (appointment.Status ?? string.Empty).Trim().ToUpperInvariant();
+        if (currentStatus == "CANCELLED")
+            throw new BusinessRuleViolationException(
+                "This visit is cancelled and can't be edited. Book a new appointment instead.", "APPOINTMENT_CLOSED");
+
+        // Appointment.DateTime holds India clock time, so "future" is judged on the IST calendar day
+        // (the UTC day made a same-day edit between 00:00 and 05:30 IST look like a move to tomorrow).
+        var istToday = IstDateRange.ToIst(DateTime.UtcNow).Date;
+        var movesToFuture = dateChanged && request.DateTime.Date > istToday;
+        if (movesToFuture)
+        {
+            if (currentStatus is not ("" or "BOOKED" or "CONFIRMED" or "ARRIVED" or "SCHEDULED"))
+                throw new BusinessRuleViolationException(
+                    "This visit has already been scanned or reported, so it can't be moved to a future date. Cancel it and book a new appointment instead.",
+                    "RESCHEDULE_NOT_ALLOWED");
+            var hasPaidCommission = await _context.ReferralCommissions.AnyAsync(
+                c => c.AppointmentId == appointment.AppointmentId && c.DeletedAt == null && c.Status == "PAID", cancellationToken);
+            if (hasPaidCommission)
+                throw new BusinessRuleViolationException(
+                    "The referral commission for this visit has already been paid, so it can't be moved to a future date. Cancel it through Approvals and book again.",
+                    "RESCHEDULE_PAID_COMMISSION");
+        }
+        if (currentStatus == "DELIVERED" && dateChanged)
+            throw new BusinessRuleViolationException(
+                "This visit has been delivered, so its date can't be changed.", "APPOINTMENT_CLOSED");
+
         // Re-token on a date change — but ONLY for a visit that already HAS a token,
         // i.e. one that's been marked arrived (CONFIRMED) or beyond. Tokens are
         // minted at arrival and keyed by the day, so:
@@ -223,6 +254,13 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         // on the appointment, but its economic basis and payee cannot be changed
         // through an ordinary edit; doing so would either rewrite money already
         // paid or create a second commission for the same service.
+        // A delivered visit may still get a demographic or note fix, but not new
+        // services or prices (that would re-bill a finished visit).
+        if (currentStatus == "DELIVERED" && !ServicesUnchanged(request, existingServices))
+            throw new BusinessRuleViolationException(
+                "This visit has been delivered, so its services and prices can't be changed. Book a new appointment for any extra scan.",
+                "APPOINTMENT_CLOSED");
+
         var paidCommissions = await _context.ReferralCommissions
             .Where(c => c.AppointmentId == appointment.AppointmentId
                      && c.DeletedAt == null
@@ -300,6 +338,10 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             }
         }
 
+        // Each line's cut BEFORE this edit: the commission reconcile only moves a
+        // commission when the cut itself changed (review R1).
+        var originalCuts = existingServices.ToDictionary(sv => sv.Id, sv => sv.ReferralCutValue);
+
         var liveServices = await ReconcileServicesAsync(appointment, request, existingServices, cancellationToken);
 
         // Re-stamp the parent Appointment's denormalised scalars from the
@@ -320,8 +362,7 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         // ledger — as a WALLET credit (carry-forward / refundable) or a CASH
         // refund, per the operator's choice. Done before (and instead of) the
         // normal reconciliation below.
-        var movedToFuture = dateChanged && request.DateTime.Date > DateTime.UtcNow.Date;
-        if (movedToFuture)
+        if (movesToFuture)
         {
             var liveInvoice = await _context.Invoices
                 .Include(i => i.Items)
@@ -600,7 +641,7 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
                 .Where(h => h.HospitalId == appointment.HospitalId)
                 .Select(h => (bool?)h.IsAutoBillingEnabled)
                 .FirstOrDefaultAsync(cancellationToken) ?? false;
-            await ReconcileReferralCommissionsAsync(appointment, liveServices, request, effectiveReferredBy, invoice?.InvoiceId, autoBilling, cancellationToken);
+            await ReconcileReferralCommissionsAsync(appointment, liveServices, request, effectiveReferredBy, invoice?.InvoiceId, autoBilling, originalCuts, cancellationToken);
         }
 
         // Persist. Everything above was read fresh in THIS handler, so any
@@ -639,6 +680,37 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
     // Returns the list of live (non-soft-deleted) rows in insertion order
     // so the caller can derive the "primary" service from index 0.
     // ─────────────────────────────────────────────────────────────────────
+    /// <summary>True when the edit leaves the visit's service lines (and their prices and cuts) as they are.</summary>
+    public static bool ServicesUnchanged(UpdateAppointmentCommand request, IReadOnlyList<AppointmentService> existing)
+    {
+        static bool Same(decimal a, decimal b) => Math.Abs(a - b) < 0.005m;
+        static string Key(string? s) => (s ?? string.Empty).Trim().ToUpperInvariant();
+
+        if (request.Services is { Count: > 0 } lines)
+        {
+            if (lines.Count != existing.Count) return false;
+            foreach (var line in lines)
+            {
+                var match = line.Id != null
+                    ? existing.FirstOrDefault(e => e.Id == line.Id.Value)
+                    : existing.FirstOrDefault(e => Key(e.ServiceName) == Key(line.ServiceName) && Key(e.Modality) == Key(line.Modality));
+                if (match == null) return false;
+                if (Key(match.ServiceName) != Key(line.ServiceName) || Key(match.Modality) != Key(line.Modality)) return false;
+                if (!Same(match.Amount, line.Amount) || !Same(match.ReferralCutValue, line.ReferralCutValue)) return false;
+            }
+            return true;
+        }
+
+        // v1 scalar edit: only the primary line can change.
+        var primary = existing.FirstOrDefault();
+        if (primary == null) return string.IsNullOrWhiteSpace(request.Service);
+        if (!string.IsNullOrWhiteSpace(request.Service) && Key(primary.ServiceName) != Key(request.Service)) return false;
+        if (!string.IsNullOrWhiteSpace(request.Modality) && Key(primary.Modality) != Key(request.Modality)) return false;
+        if (request.Amount != null && !Same(primary.Amount, request.Amount.Value)) return false;
+        if (request.ReferralCutValue != null && !Same(primary.ReferralCutValue, request.ReferralCutValue.Value)) return false;
+        return true;
+    }
+
     private async Task<List<AppointmentService>> ReconcileServicesAsync(
         Appointment appointment,
         UpdateAppointmentCommand request,
@@ -943,8 +1015,15 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         string effectiveReferredBy,
         string? invoiceDisplayId,
         bool isAutoBillingEnabled,
+        IReadOnlyDictionary<Guid, decimal> originalCuts,
         CancellationToken cancellationToken)
     {
+        // Review R1: an edit used to reset every unpaid commission to the catalogue
+        // cut, undoing referrer-discount deductions, deficits and free-test forfeits
+        // (and reviving cancelled rows at full value). Now an existing commission
+        // only moves by the CHANGE in the line's cut, and a cancelled one is revived
+        // only when the operator actually set a new cut in this edit.
+
         // Load EVERY commission for this visit, INCLUDING tombstones — so a row
         // that was soft-deleted by an earlier edit can be revived (DeletedAt
         // cleared) when its service is live again, instead of staying invisible
@@ -1081,11 +1160,26 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             // single-row shape so existing UI/reports don't see a sudden
             // explosion of commission rows for what's still semantically
             // a single-service edit.
-            decimal finalCut = request.ReferralCutValue ?? 0;
+            var primaryLine = liveServices.FirstOrDefault();
+            decimal finalCut = request.ReferralCutValue ?? primaryLine?.ReferralCutValue ?? 0;
             var existing = commissions.FirstOrDefault();
             if (existing != null)
             {
-                existing.CommissionAmount = finalCut;
+                var hadCut = primaryLine != null && originalCuts.TryGetValue(primaryLine.Id, out var oldCut1) ? oldCut1 : (decimal?)null;
+                var cutDelta = hadCut.HasValue ? finalCut - hadCut.Value : (decimal?)null;
+                if (cutDelta is null)
+                    existing.CommissionAmount = finalCut;                 // no history to keep
+                else if (Math.Abs(cutDelta.Value) >= 0.005m)
+                {
+                    if (existing.DeletedAt != null || string.Equals(existing.Status, "Cancelled", StringComparison.OrdinalIgnoreCase))
+                    {
+                        existing.CommissionAmount = finalCut;             // operator set a new cut: start again
+                        existing.DeletedAt = null;
+                        existing.Status = "UNPAID";
+                    }
+                    else existing.CommissionAmount += cutDelta.Value;     // keep earlier adjustments
+                }
+                // else: cut unchanged — amount, status and tombstone stay as they are.
                 existing.Modality         = request.Modality;
                 existing.ReferrerId       = referrer.ReferrerId;
                 existing.ReferrerName     = referrer.Name ?? effectiveReferredBy;
@@ -1162,26 +1256,45 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
                 existing.ReferrerId           = referrer.ReferrerId;
                 existing.ReferrerName         = referrer.Name ?? effectiveReferredBy;
                 existing.Modality             = svc.Modality;
-                existing.CommissionAmount     = svc.ReferralCutValue;
                 existing.AppointmentServiceId = svc.Id;
                 if (!string.IsNullOrEmpty(invoiceDisplayId)) existing.ReferenceNumber = invoiceDisplayId;
                 existing.UpdatedAt = now;
                 touchedReferrers.Add(existing.ReferrerId);
 
-                if (shouldHaveRow)
+                var wasCancelled = existing.DeletedAt != null
+                                   || string.Equals(existing.Status, "Cancelled", StringComparison.OrdinalIgnoreCase);
+                decimal? cutDelta = originalCuts.TryGetValue(svc.Id, out var oldCut)
+                    ? svc.ReferralCutValue - oldCut
+                    : null; // a line new in this edit adopting an orphan row
+                var cutChanged = cutDelta is null || Math.Abs(cutDelta.Value) >= 0.005m;
+
+                if (!cutChanged)
                 {
-                    // Revive the row so the Referral Hub shows the (possibly
-                    // changed) amount again — fixes the "amount not updating".
+                    // Same cut as before: leave amount, status and tombstone alone, so
+                    // discount deductions, deficits and forfeited cuts survive the edit.
+                }
+                else if (svc.ReferralCutValue <= 0 && !isAutoBillingEnabled)
+                {
+                    // The cut was taken off this line → drop it from the ledger,
+                    // but never erase a deficit (negative) still to be recovered.
+                    if (existing.CommissionAmount >= 0)
+                    {
+                        existing.CommissionAmount = 0;
+                        existing.Status = "Cancelled";
+                        existing.DeletedAt ??= now;
+                    }
+                }
+                else if (wasCancelled || cutDelta is null)
+                {
+                    // A new cut was set: the row starts again at that cut.
+                    existing.CommissionAmount = svc.ReferralCutValue;
                     existing.DeletedAt = null;
-                    if (existing.Status == "Cancelled") existing.Status = "UNPAID";
+                    existing.Status = "UNPAID";
                 }
                 else
                 {
-                    // No cut + no auto-billing → drop this line from the ledger so
-                    // a swapped/zeroed modality doesn't linger as a stale row.
-                    existing.CommissionAmount = 0;
-                    existing.Status = "Cancelled";
-                    existing.DeletedAt ??= now;
+                    // Live row: move it by the change in the cut, keeping earlier adjustments.
+                    existing.CommissionAmount += cutDelta!.Value;
                 }
                 keep.Add(existing.Id);
                 continue;
