@@ -32,8 +32,21 @@ public record PayReferralCommissionsCommand(
     string? PayeeContact = null,
     string? PayeeEmail = null,
     string? PayeeAddress = null,
-    bool NetDeficits = false
+    bool NetDeficits = false,
+    // Review R10/R12: how the money went and the tax deducted from it.
+    // TdsCategory: COMMISSION / PROFESSIONAL / NONE (older clients send nothing = NONE).
+    string? TdsCategory = null,
+    string? PayeePan = null,
+    string? Mode = null,
+    string? Reference = null,
+    // True = work out the numbers (TDS, net) without recording anything.
+    bool PreviewOnly = false
 ) : IRequest<PayReferralCommissionsResult>;
+
+/// <summary>One payout per partner in the request: what changed hands.</summary>
+public record PayoutSummary(Guid? PayoutId, string? PayoutNumber, Guid ReferrerId, string PayeeName, string? PayeePan,
+    decimal Gross, decimal DeficitRecovered, string TdsCategory, decimal TdsRate, decimal TdsAmount, decimal Net,
+    decimal YearTotal, string TdsNote);
 
 public record SkippedCommission(Guid CommissionId, string Reason);
 
@@ -45,13 +58,23 @@ public record PayReferralCommissionsResult(
     List<SkippedCommission> Skipped,
     decimal TotalPaid,
     decimal DeficitRecovered = 0m,
-    decimal NetPaid = 0m);
+    decimal NetPaid = 0m,
+    decimal TdsDeducted = 0m,
+    List<PayoutSummary>? Payouts = null,
+    List<string>? Notices = null,
+    bool Preview = false);
 
 public class PayReferralCommissionsCommandHandler : IRequestHandler<PayReferralCommissionsCommand, PayReferralCommissionsResult>
 {
     private readonly IApplicationDbContext _context;
+    private readonly Microsoft.Extensions.Configuration.IConfiguration? _configuration;
 
-    public PayReferralCommissionsCommandHandler(IApplicationDbContext context) => _context = context;
+    public PayReferralCommissionsCommandHandler(IApplicationDbContext context,
+        Microsoft.Extensions.Configuration.IConfiguration? configuration = null)
+    {
+        _context = context;
+        _configuration = configuration;
+    }
 
     public async Task<PayReferralCommissionsResult> Handle(PayReferralCommissionsCommand request, CancellationToken ct)
     {
@@ -145,8 +168,19 @@ public class PayReferralCommissionsCommandHandler : IRequestHandler<PayReferralC
 
         decimal recovered = 0m;
         var splitReferrers = new HashSet<Guid>();
+        var recoveredByRoot = new Dictionary<Guid, decimal>();
         if (paid.Count > 0 && request.NetDeficits)
-            recovered = await RecoverDeficitsAsync(rows.Where(c => paid.Contains(c.Id)).ToList(), paidBy, payeeName, actor, now, hospitalId, splitReferrers, ct);
+            recovered = await RecoverDeficitsAsync(rows.Where(c => paid.Contains(c.Id)).ToList(), paidBy, payeeName, actor, now, hospitalId, splitReferrers, ct, recoveredByRoot);
+
+        // Review R10/R12: one payout header per partner, with TDS worked out against
+        // what the partner has already been paid this financial year.
+        var (payouts, notices) = paid.Count > 0
+            ? await BuildPayoutsAsync(rows.Where(c => paid.Contains(c.Id)).ToList(), recoveredByRoot, request, paidBy, payeeName, now, hospitalId, ct)
+            : (new List<PayoutSummary>(), new List<string>());
+        var tdsTotal = payouts.Sum(p => p.TdsAmount);
+
+        if (request.PreviewOnly)
+            return new PayReferralCommissionsResult(paid, skipped, total, recovered, total - recovered - tdsTotal, tdsTotal, payouts, notices, Preview: true);
 
         if (paid.Count > 0)
         {
@@ -178,7 +212,121 @@ public class PayReferralCommissionsCommandHandler : IRequestHandler<PayReferralC
             }
         }
 
-        return new PayReferralCommissionsResult(paid, skipped, total, recovered, total - recovered);
+        return new PayReferralCommissionsResult(paid, skipped, total, recovered, total - recovered - tdsTotal, tdsTotal, payouts, notices);
+    }
+
+    private async Task<(List<PayoutSummary>, List<string>)> BuildPayoutsAsync(
+        List<Domain.Entities.ReferralCommission> paidRows, Dictionary<Guid, decimal> recoveredByRoot,
+        PayReferralCommissionsCommand request, string paidBy, string payeeName, DateTime now, Guid hospitalId, CancellationToken ct)
+    {
+        var registry = await _context.Referrers
+            .Where(r => r.HospitalId == hospitalId)
+            .ToListAsync(ct);
+        var byId = registry.ToDictionary(r => r.ReferrerId);
+        Guid Root(Guid id)
+        {
+            var seen = new HashSet<Guid>();
+            while (byId.TryGetValue(id, out var r) && r.MergedIntoId.HasValue && seen.Add(id)) id = r.MergedIntoId.Value;
+            return id;
+        }
+
+        var category = (request.TdsCategory ?? ReferralTds.None).Trim().ToUpperInvariant();
+        var rule = ReferralTds.RuleFor(category, _configuration);
+        if (category != ReferralTds.None && rule == null)
+            throw new ValidationException("TDS category must be COMMISSION, PROFESSIONAL or NONE.");
+        var mode = string.IsNullOrWhiteSpace(request.Mode) ? "CASH" : request.Mode.Trim().ToUpperInvariant();
+        if (mode.Length > 20) throw new ValidationException("Payment mode is too long.");
+        var reference = string.IsNullOrWhiteSpace(request.Reference) ? null : request.Reference.Trim();
+        if (reference?.Length > 100) throw new ValidationException("Reference is too long (at most 100 characters).");
+        string? panFromRequest = null;
+        if (!string.IsNullOrWhiteSpace(request.PayeePan))
+        {
+            panFromRequest = request.PayeePan.Trim().ToUpperInvariant();
+            if (!ReferralTds.IsValidPan(panFromRequest)) throw new ValidationException("PAN should look like ABCDE1234F.");
+        }
+
+        var fy = InvoiceNumbering.FinancialYearLabel(now);
+        var (fyStart, fyEnd) = FinancialYearBounds(fy);
+        var payouts = new List<PayoutSummary>();
+        var notices = new List<string>();
+
+        foreach (var group in paidRows.GroupBy(c => Root(c.ReferrerId)))
+        {
+            var rootId = group.Key;
+            byId.TryGetValue(rootId, out var partner);
+            var aliasIds = registry.Where(r => Root(r.ReferrerId) == rootId).Select(r => r.ReferrerId).ToList();
+            if (partner != null && panFromRequest != null && partner.Pan != panFromRequest && !request.PreviewOnly)
+                partner.Pan = panFromRequest; // remember it for next time
+            var pan = panFromRequest ?? partner?.Pan;
+
+            var gross = group.Sum(c => c.CommissionAmount);
+            recoveredByRoot.TryGetValue(rootId, out var rec);
+            var taxable = Math.Max(0, gross - rec);
+
+            var earlier = await _context.ReferralPayouts.AsNoTracking()
+                .Where(p => p.HospitalId == hospitalId && p.ReferrerId == rootId && p.FinancialYear == fy)
+                .Select(p => new { Taxable = p.Gross - p.DeficitRecovered, p.TdsAmount })
+                .ToListAsync(ct);
+            // Paid before payout headers existed (this year): counted, never taxed.
+            var legacy = await _context.ReferralCommissions.AsNoTracking()
+                .Where(c => c.HospitalId == hospitalId && aliasIds.Contains(c.ReferrerId) && c.PayoutId == null
+                            && c.Status == CommissionStatus.Paid && c.CommissionAmount > 0
+                            && c.PaymentDate >= fyStart && c.PaymentDate < fyEnd)
+                .SumAsync(c => c.CommissionAmount, ct);
+            var yearBefore = earlier.Sum(e => e.Taxable) + legacy;
+            var yearTaxed = earlier.Where(e => e.TdsAmount > 0).Sum(e => e.Taxable);
+
+            var tds = ReferralTds.Compute(rule, ReferralTds.IsValidPan(pan), yearBefore, yearTaxed, taxable, _configuration);
+            var net = taxable - tds.Tds;
+
+            if (partner?.IsDoctor == true && category == ReferralTds.Commission)
+                notices.Add($"{partner.Name} is recorded as a doctor. Paying a doctor for referring patients breaches the NMC's code of conduct, and the Supreme Court has held such payments are not an allowable business expense (Apex Laboratories, 2022). Check with your CA before paying.");
+            if (rule != null && tds.OverThreshold && !ReferralTds.IsValidPan(pan))
+                notices.Add($"No PAN on file for {partner?.Name ?? payeeName}: TDS is at the higher {tds.Rate:0.##}% rate. Add the PAN to use the normal rate.");
+
+            Guid? payoutId = null;
+            string? number = null;
+            if (!request.PreviewOnly)
+            {
+                var seq = await _context.NextSequenceValueAsync(hospitalId, $"REFERRAL_PAYOUT_FY_{fy}", 1, ct);
+                number = $"RPO{InvoiceNumbering.Compact(fy)}-{seq:D5}";
+                var payout = new Domain.Entities.ReferralPayout
+                {
+                    HospitalId = hospitalId,
+                    PayoutNumber = number,
+                    ReferrerId = rootId,
+                    PayeeName = payeeName,
+                    PayeePan = ReferralTds.IsValidPan(pan) ? pan : null,
+                    FinancialYear = fy,
+                    PaidAt = now,
+                    PaidBy = paidBy,
+                    CreatedByUserId = _context.UserContext.UserId == Guid.Empty ? null : _context.UserContext.UserId,
+                    Mode = mode,
+                    Reference = reference,
+                    Gross = gross,
+                    DeficitRecovered = rec,
+                    TdsCategory = rule?.Code ?? ReferralTds.None,
+                    TdsRate = tds.Rate,
+                    TdsAmount = tds.Tds,
+                    Net = net,
+                    TdsNote = tds.Note.Length <= 500 ? tds.Note : tds.Note[..500],
+                };
+                _context.ReferralPayouts.Add(payout);
+                payoutId = payout.Id;
+                foreach (var c in group) c.PayoutId = payout.Id;
+            }
+            payouts.Add(new PayoutSummary(payoutId, number, rootId, payeeName, ReferralTds.IsValidPan(pan) ? pan : null,
+                gross, rec, rule?.Code ?? ReferralTds.None, tds.Rate, tds.Tds, net, tds.YearTotal, tds.Note));
+        }
+        return (payouts, notices);
+    }
+
+    /// <summary>"2026-27" → [1 Apr 2026 00:00 IST, 1 Apr 2027 00:00 IST) in UTC.</summary>
+    public static (DateTime Start, DateTime End) FinancialYearBounds(string fy)
+    {
+        var startYear = int.Parse(fy[..4]);
+        var start = IstDateRange.ToUtcStart(new DateTime(startYear, 4, 1));
+        return (start, start.AddYears(1));
     }
 
     private static void RequireMaxLength(string? value, int max, string label)
@@ -193,7 +341,8 @@ public class PayReferralCommissionsCommandHandler : IRequestHandler<PayReferralC
     /// netted against the primary's payout. Returns the amount recovered.
     /// </summary>
     private async Task<decimal> RecoverDeficitsAsync(
-        List<Domain.Entities.ReferralCommission> paidRows, string paidBy, string payeeName, string actor, DateTime now, Guid hospitalId, HashSet<Guid> splitReferrers, CancellationToken ct)
+        List<Domain.Entities.ReferralCommission> paidRows, string paidBy, string payeeName, string actor, DateTime now, Guid hospitalId, HashSet<Guid> splitReferrers, CancellationToken ct,
+        Dictionary<Guid, decimal>? recoveredByRoot = null)
     {
         var registry = await _context.Referrers.AsNoTracking()
             .Where(r => r.HospitalId == hospitalId)
@@ -264,6 +413,8 @@ public class PayReferralCommissionsCommandHandler : IRequestHandler<PayReferralC
 
                 capacity -= take;
                 recoveredTotal += take;
+                if (recoveredByRoot != null)
+                    recoveredByRoot[group.Key] = recoveredByRoot.GetValueOrDefault(group.Key) + take;
             }
         }
         return recoveredTotal;

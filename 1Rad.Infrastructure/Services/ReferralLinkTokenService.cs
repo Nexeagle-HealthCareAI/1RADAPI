@@ -10,7 +10,10 @@ namespace _1Rad.Infrastructure.Services;
 // HMAC-SHA256 signed capability token for the public doctor-referral portal.
 //   payload   = referrerId (16 bytes) || expUnixSeconds (8 bytes, BE) || version (4 bytes, BE)
 //               (legacy 24-byte payloads — issued before versions existed — are read as version 0)
-//   signature = HMAC-SHA256(key=Jwt:Secret, DOMAIN || payload)
+//   signature = HMAC-SHA256(key=ReferralLinks:SigningKey, DOMAIN || payload)
+//               (review R23: its own key, so rotating the JWT secret no longer kills every
+//               doctor's link. Links signed earlier with Jwt:Secret still validate until
+//               they expire; new links use the dedicated key when it is set.)
 //   wire      = base64url(payload) + "." + base64url(signature)
 // The DOMAIN tag domain-separates these from /track tokens — a tracking token's
 // signature will never validate as a referral token.
@@ -21,6 +24,7 @@ public class ReferralLinkTokenService : IReferralLinkTokenService
     private static readonly byte[] Domain = Encoding.ASCII.GetBytes("REFERRAL_LINK_V1");
 
     private readonly byte[] _key;
+    private readonly byte[]? _legacyKey;
 
     // New links live ReferralLinks:TtlDays (default 90). Links minted earlier keep the
     // expiry they were signed with - the expiry is inside the token.
@@ -28,13 +32,22 @@ public class ReferralLinkTokenService : IReferralLinkTokenService
 
     public ReferralLinkTokenService(IConfiguration configuration)
     {
-        var secret = configuration["Jwt:Secret"];
-        if (string.IsNullOrWhiteSpace(secret))
+        var jwtSecret = configuration["Jwt:Secret"];
+        var linkKey = configuration["ReferralLinks:SigningKey"];
+        if (string.IsNullOrWhiteSpace(linkKey) && string.IsNullOrWhiteSpace(jwtSecret))
         {
             throw new InvalidOperationException(
-                "Jwt:Secret is not configured. ReferralLinkTokenService cannot sign tokens.");
+                "ReferralLinks:SigningKey (or Jwt:Secret) is not configured. ReferralLinkTokenService cannot sign tokens.");
         }
-        _key = Encoding.UTF8.GetBytes(secret);
+        if (!string.IsNullOrWhiteSpace(linkKey))
+        {
+            _key = Encoding.UTF8.GetBytes(linkKey);
+            _legacyKey = string.IsNullOrWhiteSpace(jwtSecret) ? null : Encoding.UTF8.GetBytes(jwtSecret);
+        }
+        else
+        {
+            _key = Encoding.UTF8.GetBytes(jwtSecret!);
+        }
         Ttl = ReferralLinkOptions.From(configuration).Ttl;
     }
 
@@ -59,7 +72,7 @@ public class ReferralLinkTokenService : IReferralLinkTokenService
         catch { return false; }
 
         if (payload.Length != PayloadSize && payload.Length != LegacyPayloadSize) return false;
-        if (!CryptographicOperations.FixedTimeEquals(Hmac(payload), sig)) return false;
+        if (!SignatureMatches(payload, sig)) return false;
         if (new Guid(payload.AsSpan(0, 16)) != expectedReferrerId) return false;
 
         // A token is only good while it matches the partner's CURRENT link version;
@@ -83,7 +96,7 @@ public class ReferralLinkTokenService : IReferralLinkTokenService
         catch { return false; }
 
         if (payload.Length != PayloadSize && payload.Length != LegacyPayloadSize) return false;
-        if (!CryptographicOperations.FixedTimeEquals(Hmac(payload), sig)) return false;
+        if (!SignatureMatches(payload, sig)) return false;
 
         var exp = DateTimeOffset.FromUnixTimeSeconds(BinaryPrimitives.ReadInt64BigEndian(payload.AsSpan(16, 8))).UtcDateTime;
         var version = payload.Length == PayloadSize ? BinaryPrimitives.ReadInt32BigEndian(payload.AsSpan(24, 4)) : 0;
@@ -91,9 +104,15 @@ public class ReferralLinkTokenService : IReferralLinkTokenService
         return true;
     }
 
-    private byte[] Hmac(byte[] data)
+    private bool SignatureMatches(byte[] payload, byte[] sig) =>
+        CryptographicOperations.FixedTimeEquals(Hmac(payload, _key), sig)
+        || (_legacyKey != null && CryptographicOperations.FixedTimeEquals(Hmac(payload, _legacyKey), sig));
+
+    private byte[] Hmac(byte[] data) => Hmac(data, _key);
+
+    private static byte[] Hmac(byte[] data, byte[] key)
     {
-        using var hmac = new HMACSHA256(_key);
+        using var hmac = new HMACSHA256(key);
         var buf = new byte[Domain.Length + data.Length];
         Buffer.BlockCopy(Domain, 0, buf, 0, Domain.Length);
         Buffer.BlockCopy(data, 0, buf, Domain.Length, data.Length);

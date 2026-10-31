@@ -17,7 +17,8 @@ public record CreateReferrerCommand(
     string? Specialty = null,
     string? Degree = null,
     bool IsDoctor = true,
-    string? SupportedByDoctor = null
+    string? SupportedByDoctor = null,
+    string? Pan = null
 ) : IRequest<Guid>;
 
 public class CreateReferrerCommandHandler : IRequestHandler<CreateReferrerCommand, Guid>
@@ -93,6 +94,7 @@ public class CreateReferrerCommandHandler : IRequestHandler<CreateReferrerComman
             Degree    = NameNormalizer.UpperOrNull(request.Degree),
             IsDoctor  = request.IsDoctor,
             SupportedByDoctor = NameNormalizer.UpperOrNull(request.SupportedByDoctor),
+            Pan = ReferralTds.IsValidPan(request.Pan?.Trim().ToUpperInvariant()) ? request.Pan!.Trim().ToUpperInvariant() : null,
         };
 
         _context.Referrers.Add(referrer);

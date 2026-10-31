@@ -61,4 +61,24 @@ public class FinancialReportController : ControllerBase
         var fileName = $"1RadFlow_Financials_{DateTime.Now:yyyyMMdd}.xlsx";
         return File(result, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", fileName);
     }
+
+    // Review B12: the cash view — money that actually moved, by IST day, mode and cashier.
+    [HttpGet("daybook")]
+    [Authorize(Roles = RoleSets.Billing)]
+    public async Task<IActionResult> DayBook([FromQuery] DateTime? from, [FromQuery] DateTime? to)
+    {
+        var today = _1Rad.Application.Common.IstDateRange.ToIst(DateTime.UtcNow).Date;
+        var result = await _mediator.Send(new _1Rad.Application.Features.Finance.DayBook.GetDayBookQuery(from ?? today, to ?? from ?? today));
+        return Ok(result);
+    }
+
+    [HttpPost("daybook/close")]
+    [Authorize(Roles = RoleSets.Billing)]
+    public async Task<IActionResult> CloseDay([FromBody] CloseDayRequest body)
+    {
+        var result = await _mediator.Send(new _1Rad.Application.Features.Finance.DayBook.CloseDayCommand(body.Date, body.CountedCash, body.Note));
+        return Ok(result);
+    }
+
+    public record CloseDayRequest(DateTime Date, decimal CountedCash, string? Note);
 }

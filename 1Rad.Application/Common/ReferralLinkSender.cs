@@ -86,7 +86,9 @@ public sealed class ReferralLinkSender
 
         var version = await ReferralLinkVersions.GetOneAsync(_context, referrerId, ct);
         var token = _tokens.Issue(referrerId, version);
-        var link = $"{origin}/r/{referrerId}?t={token}";
+        // Review R23: the token rides in the URL fragment, which browsers never send to a
+        // server, so it stays out of web-server and proxy logs and Referer headers.
+        var link = $"{origin}/r/{referrerId}#t={token}";
 
         try
         {

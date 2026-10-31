@@ -10,7 +10,7 @@ using MediatR;
 namespace _1Rad.Application.Features.Referrers.Commands.SendReferralLinks;
 
 // Emails each named referrer their personal doctor-portal link. The link is the
-// signed capability URL "{baseUrl}/r/{referrerId}?t={token}". Hospital-scoped.
+// signed capability URL "{baseUrl}/r/{referrerId}#t={token}". Hospital-scoped.
 //
 // Delivery goes through ReferralLinkSender, which also records the send (channel,
 // expiry, portal) and switches auto-renewal on for the doctor.

@@ -18,9 +18,11 @@ public class InvoiceNumberingTests
     }
 
     [Fact]
-    public void Format_pads_the_running_number()
+    public void Format_pads_the_running_number_and_stays_within_16_characters()
     {
-        InvoiceNumbering.Format("2026-27", 7).Should().Be("INV-2026-27-00007");
-        InvoiceNumbering.Format("2026-27", 123456).Should().Be("INV-2026-27-123456");
+        // Review B26: GST rules 46/49 allow at most 16 characters.
+        InvoiceNumbering.Format("2026-27", 7).Should().Be("INV2627-00007");
+        InvoiceNumbering.Format("2026-27", 123456).Should().Be("INV2627-123456");
+        InvoiceNumbering.Format("2099-00", 9_999_999).Length.Should().BeLessThanOrEqualTo(16);
     }
 }

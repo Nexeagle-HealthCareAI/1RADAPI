@@ -11,7 +11,7 @@ namespace _1Rad.Application.Features.Referrers.Commands.SendReferralLinksWhatsAp
 
 // Sends each named referrer their personal doctor-portal link over WhatsApp via
 // the NexEagle WhatsApp Business API. The link is the signed capability URL
-// "{baseUrl}/r/{referrerId}?t={token}". Hospital-scoped.
+// "{baseUrl}/r/{referrerId}#t={token}". Hospital-scoped.
 //
 // Delivery goes through ReferralLinkSender, which also records the send (channel,
 // expiry, portal) and switches auto-renewal on for the doctor - so a link a centre

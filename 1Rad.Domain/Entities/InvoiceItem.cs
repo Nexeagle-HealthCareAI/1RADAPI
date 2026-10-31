@@ -24,6 +24,10 @@ public class InvoiceItem : BaseEntity
     // Other lines on the same invoice can still be charged. Mirrors
     // AppointmentService.IsFree (the source of truth for the service line).
     public bool IsFree { get; set; } = false;
+    // Stamped when the line is billed (migration 105) so a later rate change never
+    // alters an issued bill. Null on lines billed before then (read as exempt 9993).
+    public string? SacCode { get; set; }
+    public decimal? GstRate { get; set; }
 
     // Navigation
     public Invoice Invoice { get; set; } = null!;

@@ -75,6 +75,9 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<StudyAnnotation> StudyAnnotations => Set<StudyAnnotation>();
     public DbSet<JobRun> JobRuns => Set<JobRun>();
     public DbSet<IntegrationClient> IntegrationClients => Set<IntegrationClient>();
+    public DbSet<DayClose> DayCloses => Set<DayClose>();
+    public DbSet<ReferralPayout> ReferralPayouts => Set<ReferralPayout>();
+    public DbSet<ReferralPortalView> ReferralPortalViews => Set<ReferralPortalView>();
     public DbSet<ReferrerLinkVersion> ReferrerLinkVersions => Set<ReferrerLinkVersion>();
     public DbSet<ReferralBookingRequest> ReferralBookingRequests => Set<ReferralBookingRequest>();
 
@@ -329,6 +332,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.HasKey(e => e.ReferrerId);
             entity.Property(e => e.Name).IsRequired().HasMaxLength(255);
             entity.Property(e => e.Contact).HasMaxLength(20);
+            entity.Property(e => e.Pan).HasMaxLength(10);
             
             entity.HasOne(e => e.Hospital)
                 .WithMany()
@@ -434,6 +438,8 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.Modality).IsRequired().HasMaxLength(50);
             entity.Property(e => e.ServiceName).IsRequired().HasMaxLength(255);
             entity.Property(e => e.Amount).HasPrecision(18, 2);
+            entity.Property(e => e.SacCode).HasMaxLength(8);
+            entity.Property(e => e.GstRate).HasPrecision(5, 2);
 
             entity.HasOne(e => e.Hospital)
                 .WithMany()
@@ -502,6 +508,8 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Description).IsRequired().HasMaxLength(500);
             entity.Property(e => e.Amount).HasPrecision(18, 2);
+            entity.Property(e => e.SacCode).HasMaxLength(8);
+            entity.Property(e => e.GstRate).HasPrecision(5, 2);
 
             entity.HasOne(e => e.Invoice)
                 .WithMany(i => i.Items)
@@ -560,6 +568,47 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
         // / InvoiceId are kept as plain Guid columns (no FK navs) so this ledger is
         // independent of cascade paths; hospital isolation comes from the global
         // IHospitalContext query filter applied below.
+        // Review phase 3 (migrations 104, 106, 107).
+        modelBuilder.Entity<DayClose>(entity =>
+        {
+            entity.ToTable("DayCloses", "dbo");
+            entity.HasKey(e => e.Id);
+            foreach (var p in new[] { nameof(DayClose.ExpectedCash), nameof(DayClose.CountedCash), nameof(DayClose.Variance),
+                                      nameof(DayClose.ExpectedUpi), nameof(DayClose.ExpectedCard), nameof(DayClose.ExpectedOther) })
+                entity.Property(p).HasPrecision(18, 2);
+            entity.Property(e => e.Note).HasMaxLength(500);
+            entity.Property(e => e.ClosedByName).HasMaxLength(200);
+            entity.HasIndex(e => new { e.HospitalId, e.BusinessDate }).IsUnique();
+        });
+        modelBuilder.Entity<ReferralPayout>(entity =>
+        {
+            entity.ToTable("ReferralPayouts", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.PayoutNumber).IsRequired().HasMaxLength(20);
+            entity.Property(e => e.PayeeName).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.PayeePan).HasMaxLength(10);
+            entity.Property(e => e.FinancialYear).IsRequired().HasMaxLength(7);
+            entity.Property(e => e.PaidBy).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Mode).IsRequired().HasMaxLength(20);
+            entity.Property(e => e.Reference).HasMaxLength(100);
+            entity.Property(e => e.TdsCategory).IsRequired().HasMaxLength(20);
+            entity.Property(e => e.TdsNote).HasMaxLength(500);
+            foreach (var p in new[] { nameof(ReferralPayout.Gross), nameof(ReferralPayout.DeficitRecovered), nameof(ReferralPayout.TdsRate),
+                                      nameof(ReferralPayout.TdsAmount), nameof(ReferralPayout.Net) })
+                entity.Property(p).HasPrecision(18, 2);
+            entity.HasIndex(e => new { e.HospitalId, e.ReferrerId, e.FinancialYear });
+            entity.HasIndex(e => new { e.HospitalId, e.PaidAt });
+        });
+        modelBuilder.Entity<ReferralPortalView>(entity =>
+        {
+            entity.ToTable("ReferralPortalViews", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Action).IsRequired().HasMaxLength(20);
+            entity.Property(e => e.IpHash).HasMaxLength(64);
+            entity.Property(e => e.UserAgent).HasMaxLength(300);
+            entity.HasIndex(e => new { e.HospitalId, e.ReferrerId, e.ViewedAt });
+        });
+
         modelBuilder.Entity<CreditTransaction>(entity =>
         {
             entity.ToTable("CreditTransactions", "dbo");
@@ -1466,6 +1515,42 @@ UPDATE dbo.StudyAssets
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// Review B33 (migration 105): every bill line carries the SAC code and GST rate
+    /// in force when it was billed — taken from the price list via its booked scan,
+    /// or exempt diagnostic services (9993, 0%) for a free-form line. Stamped once,
+    /// here, so no billing path can forget it and a later price-list change never
+    /// alters an issued bill.
+    /// </summary>
+    private async Task StampLineTaxAsync(CancellationToken ct)
+    {
+        var fresh = ChangeTracker.Entries<InvoiceItem>()
+            .Where(e => e.State == EntityState.Added && e.Entity.GstRate == null)
+            .Select(e => e.Entity).ToList();
+        if (fresh.Count == 0) return;
+        var serviceIds = fresh.Where(i => i.AppointmentServiceId.HasValue).Select(i => i.AppointmentServiceId!.Value).Distinct().ToList();
+        var taxByService = serviceIds.Count == 0
+            ? new Dictionary<Guid, (string? Sac, decimal Rate)>()
+            : (await AppointmentServices.IgnoreQueryFilters().AsNoTracking()
+                .Where(s => serviceIds.Contains(s.Id) && s.ServiceCharge != null)
+                .Select(s => new { s.Id, s.ServiceCharge!.SacCode, s.ServiceCharge.GstRate })
+                .ToListAsync(ct))
+              .ToDictionary(x => x.Id, x => (x.SacCode, x.GstRate));
+        foreach (var item in fresh)
+        {
+            if (item.AppointmentServiceId is Guid sid && taxByService.TryGetValue(sid, out var t))
+            {
+                item.SacCode = string.IsNullOrWhiteSpace(t.Sac) ? GstDefaults.DiagnosticSac : t.Sac;
+                item.GstRate = t.Rate;
+            }
+            else
+            {
+                item.SacCode ??= GstDefaults.DiagnosticSac;
+                item.GstRate = 0m;
+            }
+        }
+    }
+
     public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
     {
         // Sync foundations: keep Appointment.UpdatedAt fresh on every write
@@ -1475,6 +1560,7 @@ UPDATE dbo.StudyAssets
         // Done before base.SaveChangesAsync so the new value persists in
         // the same transaction.
         var nowUtc = DateTime.UtcNow;
+        await StampLineTaxAsync(cancellationToken);
         foreach (var entry in ChangeTracker.Entries<Appointment>())
         {
             if (entry.State == EntityState.Added || entry.State == EntityState.Modified)

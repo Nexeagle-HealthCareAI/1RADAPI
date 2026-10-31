@@ -53,6 +53,9 @@ public interface IApplicationDbContext
     DbSet<StudyAnnotation> StudyAnnotations { get; }
     DbSet<JobRun> JobRuns { get; }
     DbSet<IntegrationClient> IntegrationClients { get; }
+    DbSet<DayClose> DayCloses { get; }
+    DbSet<ReferralPayout> ReferralPayouts { get; }
+    DbSet<ReferralPortalView> ReferralPortalViews { get; }
     DbSet<ReferrerLinkVersion> ReferrerLinkVersions { get; }
     DbSet<ReferralBookingRequest> ReferralBookingRequests { get; }
     IUserContext UserContext { get; }

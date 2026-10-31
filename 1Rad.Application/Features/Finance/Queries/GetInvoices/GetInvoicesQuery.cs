@@ -100,6 +100,9 @@ public class InvoiceItemDto
     public string? Modality { get; set; }
     // Per-line free test — this service is free; excluded from the payable total.
     public bool IsFree { get; set; }
+    // GST stamped when billed (review B33). Null on older lines = exempt 9993.
+    public string? SacCode { get; set; }
+    public decimal? GstRate { get; set; }
 }
 
 public class InvoicePaymentDto
@@ -218,6 +221,8 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, PagedIn
                         Quantity = it.Quantity,
                         AppointmentServiceId = it.AppointmentServiceId,
                         IsFree = it.IsFree,
+                        SacCode = it.SacCode,
+                        GstRate = it.GstRate,
                         // Service-linked items: left null here (matches what
                         // the old per-item correlated subquery would return
                         // on a miss) and batch-resolved below instead — one
