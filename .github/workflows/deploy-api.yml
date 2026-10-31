@@ -172,7 +172,6 @@ jobs:
         ports: ["1433:1433"]
     env:
       SA_PASSWORD: "Ci-${{ github.run_id }}-Xy9!"
-      SQL_CONTAINER: ${{ job.services.mssql.id }}
       HAS_DB_TOKEN: ${{ secrets.DB_REPO_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
@@ -193,6 +192,10 @@ jobs:
         # A broken script is 1RADDatabase's own validate job's failure to report;
         # here it only means the drift check can't run (warned below), not a red build.
         continue-on-error: true
+        # The job context (service container id) is only available to steps, not to the job's own env:
+        # putting it there made GitHub reject the whole workflow file, so no job ran at all.
+        env:
+          SQL_CONTAINER: ${{ job.services.mssql.id }}
         run: |
           for i in $(seq 1 60); do
             docker exec "$SQL_CONTAINER" /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$SA_PASSWORD" -C -Q "SELECT 1" >/dev/null 2>&1 && break
