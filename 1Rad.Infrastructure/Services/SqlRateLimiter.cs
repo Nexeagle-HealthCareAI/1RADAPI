@@ -4,6 +4,7 @@ using System.Data.Common;
 using _1Rad.Application.Interfaces;
 using _1Rad.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging;
 
 namespace _1Rad.Infrastructure.Services;
