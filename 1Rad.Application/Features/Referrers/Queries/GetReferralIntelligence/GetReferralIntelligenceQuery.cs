@@ -230,7 +230,9 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
         // rows out, clawback deficits in).
         var moneyQuery = _context.ReferralCommissions.AsNoTracking()
             .Where(c => c.HospitalId == hospitalId && c.DeletedAt == null
-                        && c.Status != CommissionStatus.Cancelled && c.Status != "CANCELLED");
+                        && c.Status != CommissionStatus.Cancelled && c.Status != "CANCELLED"
+                        // Review #21: legacy "+D PAID" write-off rows were never paid to anyone.
+                        && !(c.Modality == "WRITE-OFF" && c.PayeeName == "CENTRE ABSORBED"));
         if (fromUtc.HasValue) moneyQuery = moneyQuery.Where(c => c.ServiceDate >= fromUtc.Value);
         if (toUtc.HasValue) moneyQuery = moneyQuery.Where(c => c.ServiceDate <= toUtc.Value);
         if (aliasIds != null) moneyQuery = moneyQuery.Where(c => aliasIds.Contains(c.ReferrerId));

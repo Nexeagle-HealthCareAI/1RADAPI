@@ -82,7 +82,10 @@ public record UpdateAppointmentCommand(
     // Review A7: the version of the visit the form was opened on (AppointmentDto.
     // RowVersion). When sent, an edit made on a stale form is refused with 409
     // instead of silently undoing someone else's change (e.g. dropping a scan they added).
-    string? RowVersion = null
+    string? RowVersion = null,
+    // The partner picked on the form (review #12/#13). When sent, "did the referrer
+    // change?" is decided by id, so a display title ("Dr.") can never look like a change.
+    Guid? ReferrerId = null
 ) : IRequest<UpdateAppointmentResult>;
 
 /// <summary>
@@ -206,15 +209,36 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         // a bulk edit here must NOT silently re-point it. Detect that case and
         // keep the existing referrer for every downstream write.
         var prevReferredBy = appointment.ReferredBy;
-        var referrerChanged = !string.Equals((prevReferredBy ?? string.Empty).Trim(),
-                                              (request.ReferredBy ?? string.Empty).Trim(),
-                                              StringComparison.OrdinalIgnoreCase);
+        // Review #12: decide "changed" by partner id when the form sent one, otherwise by
+        // name ignoring titles and case - "Dr. Rajesh Kumar" is the same as "RAJESH KUMAR".
+        static bool NoReferrer(string? n) => string.IsNullOrWhiteSpace(n) || NameNormalizer.SameName(n, "Self");
+        bool referrerChanged;
+        Referrer? pickedReferrer = null;
+        if (request.ReferrerId.HasValue && request.ReferrerId.Value != Guid.Empty)
+        {
+            pickedReferrer = await ReferrerResolver.ByIdAsync(_context, appointment.HospitalId, request.ReferrerId.Value, cancellationToken);
+            var currentRoot = appointment.ReferrerId.HasValue
+                ? (await ReferrerResolver.ByIdAsync(_context, appointment.HospitalId, appointment.ReferrerId.Value, cancellationToken))?.ReferrerId
+                : null;
+            referrerChanged = pickedReferrer != null
+                ? pickedReferrer.ReferrerId != currentRoot
+                : !(NameNormalizer.SameName(prevReferredBy, request.ReferredBy) || (NoReferrer(prevReferredBy) && NoReferrer(request.ReferredBy)));
+        }
+        else
+        {
+            referrerChanged = !(NameNormalizer.SameName(prevReferredBy, request.ReferredBy)
+                                || (NoReferrer(prevReferredBy) && NoReferrer(request.ReferredBy)));
+        }
         var referrerLocked = false;
         if (referrerChanged)
         {
             referrerLocked = await AppointmentPaymentGuard.HasCollectedPayment(_context, request.AppointmentId, cancellationToken);
         }
-        var effectiveReferredBy = referrerLocked ? (prevReferredBy ?? string.Empty) : (request.ReferredBy ?? string.Empty);
+        // An unchanged referrer keeps the stored spelling (no "Dr." added by a form);
+        // a picked partner is written under its own stored name.
+        var effectiveReferredBy = (referrerLocked || !referrerChanged)
+            ? (prevReferredBy ?? string.Empty)
+            : (pickedReferrer?.Name ?? request.ReferredBy ?? string.Empty);
 
         appointment.DateTime = request.DateTime;
         appointment.Doctor = request.Doctor;
@@ -225,9 +249,10 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         // the column). Only EXISTING partners are matched here - a brand-new name is created on
         // first use by the commission reconcile below and stamped there. Self / blank -> null.
         if (referrerChanged && !referrerLocked)
-            appointment.ReferrerId = await ReferrerLookup.FindIdByNameAsync(_context, appointment.HospitalId, effectiveReferredBy, cancellationToken);
+            appointment.ReferrerId = pickedReferrer?.ReferrerId
+                ?? (await ReferrerResolver.ResolveAsync(_context, appointment.HospitalId, null, effectiveReferredBy, request.ReferredContact, cancellationToken))?.ReferrerId;
         else
-            appointment.ReferrerId ??= await ReferrerLookup.FindIdByNameAsync(_context, appointment.HospitalId, effectiveReferredBy, cancellationToken);
+            appointment.ReferrerId ??= (await ReferrerResolver.ResolveAsync(_context, appointment.HospitalId, null, effectiveReferredBy, null, cancellationToken))?.ReferrerId;
         if (!referrerLocked && request.ReferredContact != null)
             appointment.ReferredContact = request.ReferredContact;
 
@@ -858,6 +883,8 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
                         AppointmentId        = appointment.AppointmentId,
                         AppointmentServiceId = null,
                         Remarks              = "Clawback — service removed after commission was paid (admin-approved)",
+                        ServiceDate          = c.ServiceDate, // the visit's day, not today (#15)
+                        PatientName          = c.PatientName,
                     });
                     c.AppointmentServiceId = null; // detach so the service row can delete; keep the PAID row for audit
                     c.Remarks = (c.Remarks ?? string.Empty) + " [service removed after payment — clawback booked]";
@@ -1051,13 +1078,19 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
 
         // Resolve referrer (create on first use).
         var searchName = effectiveReferredBy.Trim();
-        var referrer = await _context.Referrers
-            .FirstOrDefaultAsync(r => r.Name.ToLower() == searchName.ToLower() && r.HospitalId == appointment.HospitalId, cancellationToken);
+        // Same resolver as booking (#13/#25): the visit's partner id first, then the name.
+        // A visit already pointing at a live partner keeps that exact record (a merged
+        // duplicate is not churned onto its primary by an unrelated edit).
+        var referrer = appointment.ReferrerId.HasValue
+            ? await _context.Referrers.FirstOrDefaultAsync(r => r.ReferrerId == appointment.ReferrerId.Value
+                                                                && r.HospitalId == appointment.HospitalId && r.DeletedAt == null, cancellationToken)
+            : null;
+        referrer ??= await ReferrerResolver.ResolveAsync(_context, appointment.HospitalId, null, searchName, null, cancellationToken);
         if (referrer == null)
         {
             referrer = new Referrer
             {
-                Name = searchName,
+                Name = NameNormalizer.Upper(searchName),
                 Contact = string.Empty,
                 Address = string.Empty,
                 HospitalId = appointment.HospitalId
@@ -1181,7 +1214,8 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
                     TransactionDate      = DateTime.UtcNow,
                     HospitalId           = appointment.HospitalId,
                     AppointmentId        = appointment.AppointmentId,
-                    AppointmentServiceId = liveServices.FirstOrDefault()?.Id
+                    AppointmentServiceId = liveServices.FirstOrDefault()?.Id,
+                    ServiceDate          = appointment.DateTime, // #15
                 });
             }
             return;
@@ -1291,7 +1325,8 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
                 HospitalId           = appointment.HospitalId,
                 AppointmentId        = appointment.AppointmentId,
                 AppointmentServiceId = svc.Id,
-                ReferenceNumber      = invoiceDisplayId
+                ReferenceNumber      = invoiceDisplayId,
+                ServiceDate          = appointment.DateTime, // #15: a scan added later still belongs to the visit's day
             };
             _context.ReferralCommissions.Add(newCommission);
             keep.Add(newCommission.Id);

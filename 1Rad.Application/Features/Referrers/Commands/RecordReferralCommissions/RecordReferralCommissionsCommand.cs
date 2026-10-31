@@ -87,6 +87,11 @@ public class RecordReferralCommissionsCommandHandler : IRequestHandler<RecordRef
                 .ToListAsync(cancellationToken))
               .ToDictionary(s => s.Id, s => (s.Amount, s.ServiceName ?? string.Empty));
 
+        DateTime? visitDate = request.AppointmentId.HasValue
+            ? await _context.Appointments.Where(a => a.AppointmentId == request.AppointmentId.Value && a.HospitalId == hospitalId)
+                .Select(a => (DateTime?)a.DateTime).FirstOrDefaultAsync(cancellationToken)
+            : null;
+
         foreach (var line in lines)
         {
             var modality = line.Modality.Trim();
@@ -173,6 +178,8 @@ public class RecordReferralCommissionsCommandHandler : IRequestHandler<RecordRef
                     CommissionAmount = lineAmount,
                     AccumulatedTotal = 0,
                     TransactionDate = now,
+                    // #15: dated by the visit when there is one, else today (India clock).
+                    ServiceDate = visitDate ?? IstDateRange.NowIst(),
                     // A write-off is booked directly as PAID (it settles a deficit); it is
                     // stamped with a payment date like any other settled row.
                     Status = lineStatus ?? CommissionStatus.Unpaid,

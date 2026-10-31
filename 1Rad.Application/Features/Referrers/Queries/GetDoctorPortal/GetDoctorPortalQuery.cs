@@ -111,7 +111,10 @@ public class GetDoctorPortalQueryHandler : IRequestHandler<GetDoctorPortalQuery,
 
         var commissions = await _context.ReferralCommissions.AsNoTracking().IgnoreQueryFilters()
             .Where(c => aliasIds.Contains(c.ReferrerId) && c.HospitalId == hospitalId
-                        && c.DeletedAt == null && c.Status != "Cancelled" && c.Status != "CANCELLED")
+                        && c.DeletedAt == null && c.Status != "Cancelled" && c.Status != "CANCELLED"
+                        // Review #21: older deficit write-offs were booked as a "+D PAID" row; the
+                        // doctor never received that money, so it is not shown as a payment.
+                        && !(c.Modality == "WRITE-OFF" && c.PayeeName == "CENTRE ABSORBED"))
             .OrderByDescending(c => c.ServiceDate)
             .Select(c => new { c.PatientName, c.Modality, c.ServiceDate, c.TransactionDate, c.AppointmentId, c.AppointmentServiceId, c.CommissionAmount, c.Status })
             .ToListAsync(ct);

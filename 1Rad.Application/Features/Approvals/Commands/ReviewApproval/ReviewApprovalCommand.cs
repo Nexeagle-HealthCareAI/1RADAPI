@@ -820,7 +820,7 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
 
         string name; string? contact; bool? isDoctor; string? supportedByDoctor;
         string? email; string? specialty; string? degree; string? address;
-        string? supportedSpecialty; string? supportedDegree;
+        string? supportedSpecialty; string? supportedDegree; Guid? newReferrerId = null;
         try
         {
             using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(req.Payload) ? "{}" : req.Payload);
@@ -835,6 +835,7 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
             address = GetString(root, "newReferrerAddress");
             supportedSpecialty = GetString(root, "newReferrerSupportedSpecialty");
             supportedDegree = GetString(root, "newReferrerSupportedDegree");
+            newReferrerId = Guid.TryParse(GetString(root, "newReferrerId"), out var nid) ? nid : null;
         }
         catch { return; }
 
@@ -845,7 +846,8 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
             _context, req.AppointmentId.Value, req.HospitalId, name, contact, isDoctor, ct,
             preserveHistory: true, supportedByDoctor: supportedByDoctor,
             email: email, specialty: specialty, degree: degree, address: address,
-            supportedSpecialty: supportedSpecialty, supportedDegree: supportedDegree);
+            supportedSpecialty: supportedSpecialty, supportedDegree: supportedDegree,
+            newReferrerId: newReferrerId);
     }
 
     private static string? GetString(JsonElement el, string name)

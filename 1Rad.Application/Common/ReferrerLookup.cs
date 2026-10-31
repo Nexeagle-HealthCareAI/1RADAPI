@@ -21,6 +21,10 @@ internal static class ReferrerLookup
         var trimmed = (name ?? string.Empty).Trim();
         if (trimmed.Length == 0 || NameNormalizer.SameName(trimmed, "Self")) return null;
 
+        // Same rule as booking (ReferrerResolver): live, unmerged partners first.
+        var live = await ReferrerResolver.ResolveAsync(ctx, hospitalId, null, trimmed, null, ct);
+        if (live != null) return live.ReferrerId;
+
         var lower = trimmed.ToLower();
         var id = await ctx.Referrers
             .Where(r => r.HospitalId == hospitalId && r.Name.ToLower() == lower)

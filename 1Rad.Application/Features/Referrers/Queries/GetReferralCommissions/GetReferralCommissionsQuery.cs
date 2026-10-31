@@ -10,7 +10,10 @@ public record GetReferralCommissionsQuery(
     DateTime? EndDate = null,
     Guid? ReferrerId = null,
     DateTime? UpdatedAfter = null,
-    bool IncludeDeleted = false
+    bool IncludeDeleted = false,
+    // Only rows still open (not paid, not cancelled) - what a partner is owed or owes.
+    // Bounded by what is outstanding, unlike the full history (review #27).
+    bool OpenOnly = false
 ) : IRequest<List<ReferralCommissionDto>>;
 
 public record ReferralCommissionDto(
@@ -99,6 +102,9 @@ public class GetReferralCommissionsQueryHandler : IRequestHandler<GetReferralCom
             commissionsQuery = commissionsQuery.Where(c => c.DeletedAt == null);
         if (request.UpdatedAfter.HasValue)
             commissionsQuery = commissionsQuery.Where(c => c.UpdatedAt > request.UpdatedAfter.Value);
+        if (request.OpenOnly)
+            commissionsQuery = commissionsQuery.Where(c => c.Status != CommissionStatus.Paid
+                                                           && c.Status != CommissionStatus.Cancelled && c.Status != "CANCELLED");
         
         if (request.ReferrerId.HasValue)
         {
@@ -179,7 +185,8 @@ public class GetReferralCommissionsQueryHandler : IRequestHandler<GetReferralCom
                 x.Commission.Status ?? "UNPAID",
                 x.Commission.ReferenceNumber,
                 x.Commission.Remarks,
-                x.PatientDetails?.FullName ?? "Unknown Patient",
+                x.PatientDetails?.FullName
+                    ?? (string.IsNullOrWhiteSpace(x.Commission.PatientName) || x.Commission.PatientName == "N/A" ? "Unknown Patient" : x.Commission.PatientName),
                 x.PatientDetails?.PatientIdentifier,
                 x.PatientDetails?.Age,
                 x.PatientDetails?.Gender,

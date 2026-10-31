@@ -301,8 +301,19 @@ public class ReferrersController : ControllerBase
         return Ok(result);
     }
 
+    // Who is owed what, one row per partner (merge roots), worked out on the server and
+    // paged (review #27) - replaces grouping the whole commission history in the browser.
+    [HttpGet("outstanding")]
+    [Authorize(Roles = FinanceRoles)]
+    public async Task<IActionResult> Outstanding(
+        [FromQuery] string? search, [FromQuery] string? show, [FromQuery] int page = 1, [FromQuery] int pageSize = 50)
+    {
+        var result = await _mediator.Send(new _1Rad.Application.Features.Referrers.Queries.GetReferrersOutstanding.GetReferrersOutstandingQuery(search, show, page, pageSize));
+        return Ok(result);
+    }
+
     // The centre absorbs a partner's outstanding clawback deficit (settles the open
-    // negative rows and books the compensating write-off). The amount is computed
+    // negative rows; review #21: no compensating paid row). The amount is computed
     // server-side from live rows; a repeat call is refused because nothing is open.
     [HttpPost("{id:guid}/write-off-deficit")]
     [Authorize(Roles = FinanceRoles)]
@@ -319,9 +330,10 @@ public class ReferrersController : ControllerBase
         [FromQuery] DateTime? endDate,
         [FromQuery] Guid? referrerId,
         [FromQuery] DateTime? updatedAfter,
-        [FromQuery] bool includeDeleted = false)
+        [FromQuery] bool includeDeleted = false,
+        [FromQuery] bool openOnly = false)
     {
-        var result = await _mediator.Send(new GetReferralCommissionsQuery(startDate, endDate, referrerId, updatedAfter, includeDeleted));
+        var result = await _mediator.Send(new GetReferralCommissionsQuery(startDate, endDate, referrerId, updatedAfter, includeDeleted, openOnly));
         return Ok(result);
     }
 

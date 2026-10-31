@@ -40,6 +40,19 @@ public class UpdateDoctorProfileCommandHandler : IRequestHandler<UpdateDoctorPro
             .FirstOrDefaultAsync(r => r.ReferrerId == request.ReferrerId && r.DeletedAt == null, ct);
         if (referrer == null) return new UpdateDoctorProfileResult(false, false);
 
+        // Review #22: the portal shows the PRIMARY partner of a merged duplicate, so an edit
+        // made there lands on the primary too (it used to update the hidden duplicate and
+        // look as if it never saved).
+        var seenIds = new HashSet<Guid> { referrer.ReferrerId };
+        while (referrer.MergedIntoId.HasValue && seenIds.Add(referrer.MergedIntoId.Value))
+        {
+            var nextId = referrer.MergedIntoId.Value;
+            var next = await _context.Referrers.IgnoreQueryFilters()
+                .FirstOrDefaultAsync(r => r.ReferrerId == nextId && r.HospitalId == referrer.HospitalId && r.DeletedAt == null, ct);
+            if (next == null) break;
+            referrer = next;
+        }
+
         static string? Clean(string? v) => string.IsNullOrWhiteSpace(v) ? null : v.Trim();
 
         // The NAME is not editable from the public link (it is the payee's identity on

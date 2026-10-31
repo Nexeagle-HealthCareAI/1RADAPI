@@ -69,7 +69,10 @@ public record CreateAppointmentCommand(
     // SCHEDULED and linked to the new appointment, so the doctor sees it move off "pending" and
     // the front desk's queue drops it. A request that is missing, or already decided, is not an
     // error here - the appointment still books; the link-back is just skipped.
-    Guid? BookingRequestId = null
+    Guid? BookingRequestId = null,
+    // The partner the front desk PICKED (review #13). When it is a live partner of this
+    // centre it wins over the typed name; a merged duplicate credits its primary.
+    Guid? ReferrerId = null
 ) : IRequest<Guid>;
 
 
@@ -225,18 +228,23 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
             // "aquib", "Aquib" and "Md Aquib" all resolve to the SAME referrer
             // instead of spawning duplicates, and the name is stored UPPERCASE.
             var searchName = NameNormalizer.Upper(request.ReferredBy);
-            var nameKey = NameNormalizer.Normalize(request.ReferredBy);
-            referrer = await _context.Referrers
-                .FirstOrDefaultAsync(r => r.Name == searchName && r.HospitalId == hospitalId, cancellationToken);
-
-            if (referrer == null)
+            // One resolver for every write path (#13/#25): picked id, then exact name,
+            // then title-insensitive name or mobile - live, unmerged partners only.
+            // Booked from a doctor's portal request and the name still matches that
+            // doctor: credit the requesting partner, not a namesake.
+            var pickedId = request.ReferrerId;
+            if (pickedId == null && request.BookingRequestId.HasValue)
             {
-                // Honorific-insensitive fallback so "AQUIB" reuses "MD AQUIB".
-                var hospRefs = await _context.Referrers
-                    .Where(r => r.HospitalId == hospitalId)
-                    .ToListAsync(cancellationToken);
-                referrer = hospRefs.FirstOrDefault(r => NameNormalizer.Normalize(r.Name) == nameKey);
+                var requester = await (from b in _context.ReferralBookingRequests
+                                       join r in _context.Referrers on b.ReferrerId equals r.ReferrerId
+                                       where b.Id == request.BookingRequestId.Value && b.HospitalId == hospitalId
+                                       select new { b.ReferrerId, r.Name })
+                    .FirstOrDefaultAsync(cancellationToken);
+                if (requester != null && NameNormalizer.SameName(requester.Name, request.ReferredBy))
+                    pickedId = requester.ReferrerId;
             }
+            referrer = await ReferrerResolver.ResolveAsync(_context, hospitalId, pickedId, request.ReferredBy, request.ReferredContact, cancellationToken);
+            var referrerIsNew = referrer == null;
 
             if (referrer == null)
             {
@@ -257,7 +265,7 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
                     Address = string.Empty,
                     HospitalId = hospitalId,
                     IsDoctor  = request.ReferrerIsDoctor,
-                    SupportedByDoctor = request.ReferrerIsDoctor ? null : NameNormalizer.UpperOrNull(request.ReferrerSupportedByDoctor),
+                    SupportedByDoctor = (referrer?.IsDoctor ?? request.ReferrerIsDoctor) ? null : NameNormalizer.UpperOrNull(request.ReferrerSupportedByDoctor),
                     Email     = NullIfBlank(request.ReferrerEmail),
                     Specialty = NullIfBlank(request.ReferrerSpecialty),
                     Degree    = NullIfBlank(request.ReferrerDegree),
@@ -274,18 +282,22 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
                     // referrer first. Drop our duplicate and use the winner.
                     _context.Entry(referrer).State = EntityState.Detached;
                     referrer = await _context.Referrers
-                        .FirstOrDefaultAsync(r => r.Name!.ToLower() == searchName.ToLower() && r.HospitalId == hospitalId, cancellationToken);
+                        .FirstOrDefaultAsync(r => r.Name == searchName && r.HospitalId == hospitalId && r.DeletedAt == null, cancellationToken);
                     if (referrer == null) throw; // couldn't resolve at all — surface it
+                    referrerIsNew = false;
                 }
             }
 
             // Keep the referral record fresh — fill in anything this booking
             // supplied (only overwrite when a non-blank value arrived, so an
             // empty booking field never wipes a previously-saved profile).
-            referrer.IsDoctor  = request.ReferrerIsDoctor;
-            referrer.SupportedByDoctor = request.ReferrerIsDoctor
-                ? null
-                : (NameNormalizer.UpperOrNull(request.ReferrerSupportedByDoctor) ?? referrer.SupportedByDoctor);
+            // A booking never changes an EXISTING partner's type (#13): "doctor" or
+            // "agent" is edited on the partner's own page. The visit itself still records
+            // who this agent was collecting for (Appointment.SupportedByDoctor below).
+            if (!referrerIsNew && !referrer.IsDoctor && string.IsNullOrWhiteSpace(referrer.SupportedByDoctor))
+                referrer.SupportedByDoctor = NameNormalizer.UpperOrNull(request.ReferrerSupportedByDoctor);
+            if (string.IsNullOrWhiteSpace(referrer.Contact))
+                referrer.Contact = ReferrerResolver.MobileDigits(request.ReferredContact);
             referrer.Email     = NullIfBlank(request.ReferrerEmail)     ?? referrer.Email;
             referrer.Specialty = NullIfBlank(request.ReferrerSpecialty) ?? referrer.Specialty;
             referrer.Degree    = NullIfBlank(request.ReferrerDegree)    ?? referrer.Degree;
@@ -296,7 +308,7 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
             // When the payee is an agent, make sure the supporting doctor also
             // exists as a partner doctor — so their profile (speciality/degree)
             // is stored once and they become auto-selectable on the next booking.
-            if (!request.ReferrerIsDoctor)
+            if (!referrer.IsDoctor)
             {
                 var supportName = NameNormalizer.UpperOrNull(request.ReferrerSupportedByDoctor);
                 if (supportName != null)
@@ -363,7 +375,7 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
             ReferrerId = referrer?.ReferrerId,
             ReferredContact = request.ReferredContact,
             // Per-appointment supporting doctor — only for an agent referral.
-            SupportedByDoctor = request.ReferrerIsDoctor ? null : NameNormalizer.UpperOrNull(request.ReferrerSupportedByDoctor),
+            SupportedByDoctor = (referrer?.IsDoctor ?? request.ReferrerIsDoctor) ? null : NameNormalizer.UpperOrNull(request.ReferrerSupportedByDoctor),
             Notes = request.Notes,
             // Token assigned on arrival, not at booking (see status handler).
             DailyTokenNumber = null,

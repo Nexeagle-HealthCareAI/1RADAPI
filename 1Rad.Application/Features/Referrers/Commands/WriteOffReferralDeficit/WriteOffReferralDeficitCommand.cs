@@ -17,8 +17,8 @@ namespace _1Rad.Application.Features.Referrers.Commands.WriteOffReferralDeficit;
 /// been recovered a second time. The server now does the whole thing:
 ///   • the open negative rows are settled (cancelled — "written off"), so they no
 ///     longer count anywhere and can never be netted;
-///   • a +D PAID "WRITE-OFF" row is booked so the cash the centre actually paid
-///     out (and will not get back) still shows in cash-basis figures;
+///   • nothing else is booked: the cash already paid out stays on its PAID rows
+///     (review #21 - a compensating PAID row double-counted it);
 ///   • the amount is computed here from live rows, and the call is naturally
 ///     idempotent — a second call finds nothing open and is refused.
 /// </summary>
@@ -77,23 +77,12 @@ public class WriteOffReferralDeficitCommandHandler : IRequestHandler<WriteOffRef
             c.UpdatedAt = now;
         }
 
-        _context.ReferralCommissions.Add(new ReferralCommission
-        {
-            HospitalId = hospitalId,
-            ReferrerId = root,
-            ReferrerName = rootName,
-            Modality = "WRITE-OFF",
-            CommissionAmount = deficit,
-            Status = CommissionStatus.Paid,
-            PaymentDate = now,
-            PayeeName = "CENTRE ABSORBED",
-            CreatedBy = actor,
-            UpdatedBy = actor,
-            TransactionDate = now,
-            ServiceDate = IstDateRange.NowIst(), // India clock time, like visit-dated rows
-            Remarks = $"DEFICIT WRITE-OFF (₹{deficit:0.##}) — centre absorbed",
-            UpdatedAt = now,
-        });
+        // Review #21: no compensating "+D PAID" row any more. The money the partner was
+        // actually paid stays on its own PAID rows (cancel and reassign keep them at full
+        // value), so a +D PAID row counted that cash twice and showed on the doctor's
+        // portal as a payment they never received. Cancelling the open deficit rows is
+        // the whole write-off; each carries the dated "written off" note for audit.
+        _ = rootName;
 
         try
         {

@@ -729,7 +729,7 @@ public class ReferralIncentiveAccuracyTests : BaseHandlerTest
     // ── writing a deficit off ───────────────────────────────────────────────────
 
     [Fact]
-    public async Task WriteOff_SettlesTheOpenDeficitRowsAndBooksTheCompensatingPaidRow()
+    public async Task WriteOff_SettlesTheOpenDeficitRows_WithoutBookingAPaidRow()
     {
         var a = AddReferrer("DR A");
         var d1 = AddCommission(a, null, -100m);
@@ -747,10 +747,9 @@ public class ReferralIncentiveAccuracyTests : BaseHandlerTest
         Assert.Equal("Cancelled", Context.ReferralCommissions.Single(x => x.Id == d2.Id).Status);
         Assert.Equal("PAID", Context.ReferralCommissions.Single(x => x.Id == recoveredAlready.Id).Status);
         Assert.Equal("UNPAID", Context.ReferralCommissions.Single(x => x.Id == upcoming.Id).Status);
-        var booked = Assert.Single(Context.ReferralCommissions.Where(x => x.Modality == "WRITE-OFF"));
-        Assert.Equal(150m, booked.CommissionAmount);
-        Assert.Equal("PAID", booked.Status);
-        Assert.NotNull(booked.PaymentDate);
+        // Review #21: no compensating PAID row - it counted the cash twice and showed on the portal.
+        Assert.Empty(Context.ReferralCommissions.Where(x => x.Modality == "WRITE-OFF"));
+        Assert.Equal(-30m, Context.ReferralCommissions.Where(x => x.Status == "PAID").Sum(x => x.CommissionAmount));
     }
 
     [Fact]

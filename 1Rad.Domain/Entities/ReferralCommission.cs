@@ -14,7 +14,8 @@ public class ReferralCommission : BaseEntity, IHospitalContext
     
     public string Modality { get; set; } = string.Empty;
     
-    [NotMapped]
+    // Stored since migration 110 (review #16). Visit-linked rows take the name from the
+    // visit; manual and payout lines rely on this column.
     public string PatientName { get; set; } = string.Empty;
     
     public Guid? AppointmentId { get; set; }

@@ -992,7 +992,8 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.ToTable("ReferralCommissions", "dbo");
             entity.HasKey(e => e.Id);
             entity.Property(e => e.ReferrerName).IsRequired().HasMaxLength(255); 
-            // entity.Property(e => e.PatientName).IsRequired().HasMaxLength(255); 
+            // Review #16: stored (migration 110) so manual and payout lines keep the patient.
+            entity.Property(e => e.PatientName).IsRequired().HasMaxLength(255).HasDefaultValue(string.Empty);
             entity.Property(e => e.CommissionAmount).HasPrecision(18, 2);
             entity.Property(e => e.AccumulatedTotal).HasPrecision(18, 2);
             // Status is the concurrency token: paying, cancelling, writing off and netting a deficit all

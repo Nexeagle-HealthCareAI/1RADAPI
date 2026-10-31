@@ -65,7 +65,7 @@ public class UpdateReferralCommissionStatusCommandHandler : IRequestHandler<Upda
         }
 
         var actor = await CommissionActor.ResolveAsync(_context, cancellationToken);
-        commission.Status = requestedStatus;
+        commission.Status = CommissionStatus.Normalize(requestedStatus) ?? requestedStatus; // one spelling per status (#31)
         if (requestedStatus == "PAID")
         {
             commission.PaymentDate = DateTime.UtcNow;

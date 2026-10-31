@@ -102,30 +102,40 @@ public class DailyReferralExcelReportJob : BackgroundService
                 headerRange.Style.Fill.BackgroundColor = XLColor.FromHtml("#0f52ba");
                 headerRange.Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
 
-                int row = 2;
-                foreach (var referrer in referrers)
-                {
-                    // Count unique patients sent today
-                    var todayCount = await context.Appointments
-                        .IgnoreQueryFilters()
-                        .Include(a => a.Patient)
-                        .Where(a => a.HospitalId == hospital.HospitalId && 
-                                    a.Patient.ReferrerId == referrer.ReferrerId && 
-                                    a.DateTime >= dayStartUtc && a.DateTime < dayEndUtc)
-                        .Select(a => a.PatientId)
-                        .Distinct()
-                        .CountAsync(stoppingToken);
+                // Review #20: count visits the same way the app does - the visit's own partner
+                // first (ReferralAttribution), only patients who actually came (no cancelled or
+                // no-show visits), and merged duplicates rolled into their primary partner.
+                // One query for the week instead of two per partner.
+                var attribution = new ReferralAttribution(referrers.Select(r =>
+                    new ReferralAttribution.Entry(r.ReferrerId, r.MergedIntoId, r.Name, r.Contact, r.Address, r.DeletedAt)));
+                var weekVisits = await context.Appointments
+                    .IgnoreQueryFilters()
+                    .Where(a => a.HospitalId == hospital.HospitalId && a.DeletedAt == null &&
+                                a.DateTime >= weekStartUtc && a.DateTime < dayEndUtc)
+                    .Select(a => new { a.PatientId, a.DateTime, a.Status, a.ArrivedAt, a.ReferredBy, a.ReferrerId, PatientReferrerId = a.Patient.ReferrerId })
+                    .ToListAsync(stoppingToken);
+                var counted = weekVisits
+                    .Where(v => !AppointmentAttendance.IsCancelled(v.Status) && AppointmentAttendance.IsAttended(v.Status, v.ArrivedAt))
+                    .Select(v => new { v.PatientId, Today = v.DateTime >= dayStartUtc, Source = attribution.Attribute(v.ReferredBy, v.PatientReferrerId, v.ReferrerId) })
+                    .Where(v => v.Source.Kind == SourceKind.Partner)
+                    .GroupBy(v => v.Source.RootId)
+                    .ToDictionary(g => g.Key, g => (
+                        Today: g.Where(x => x.Today).Select(x => x.PatientId).Distinct().Count(),
+                        Week: g.Select(x => x.PatientId).Distinct().Count()));
 
-                    // Count unique patients sent this week
-                    var weekCount = await context.Appointments
-                        .IgnoreQueryFilters()
-                        .Include(a => a.Patient)
-                        .Where(a => a.HospitalId == hospital.HospitalId && 
-                                    a.Patient.ReferrerId == referrer.ReferrerId && 
-                                    a.DateTime >= weekStartUtc && a.DateTime < dayEndUtc)
-                        .Select(a => a.PatientId)
-                        .Distinct()
-                        .CountAsync(stoppingToken);
+                // Live primary partners only (a deleted or merged-away record is not listed).
+                var listed = referrers
+                    .Where(r => r.DeletedAt == null && r.MergedIntoId == null && !NameNormalizer.SameName(r.Name, "Self"))
+                    .Select(r => (Referrer: r, Counts: counted.TryGetValue(r.ReferrerId, out var c) ? c : (Today: 0, Week: 0)))
+                    .OrderByDescending(x => x.Counts.Today).ThenByDescending(x => x.Counts.Week).ThenBy(x => x.Referrer.Name)
+                    .ToList();
+                if (listed.Count == 0) continue;
+
+                int row = 2;
+                foreach (var (referrer, counts) in listed)
+                {
+                    var todayCount = counts.Today;
+                    var weekCount = counts.Week;
 
                     worksheet.Cell(row, 1).Value = referrer.Name;
                     worksheet.Cell(row, 2).Value = todayCount;
