@@ -26,6 +26,7 @@ public class FinancialReportController : ControllerBase
     }
 
     [HttpGet("stats")]
+    [Authorize(Roles = RoleSets.FinanceReports)]
     public async Task<IActionResult> GetStats()
     {
         var result = await _mediator.Send(new GetFinanceStatsQuery());
@@ -33,6 +34,7 @@ public class FinancialReportController : ControllerBase
     }
 
     [HttpGet("matrix")]
+    [Authorize(Roles = RoleSets.FinanceReports)]
     public async Task<IActionResult> GetMatrix(
         [FromQuery] DateTime? startDate,
         [FromQuery] DateTime? endDate)
@@ -46,6 +48,7 @@ public class FinancialReportController : ControllerBase
     }
 
     [HttpGet("export")]
+    [Authorize(Roles = RoleSets.FinanceReports)]
     public async Task<IActionResult> Export(
         [FromQuery] DateTime? startDate,
         [FromQuery] DateTime? endDate)

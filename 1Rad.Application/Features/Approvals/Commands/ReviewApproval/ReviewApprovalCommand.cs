@@ -19,12 +19,16 @@ public record ReviewApprovalCommand : IRequest<bool>
     public Guid Id { get; init; }
     public bool Approve { get; init; }
     public string? Note { get; init; }
+    // How money goes back when the approved change refunds the patient
+    // (CASH / UPI / CARD, or ADVANCE to hold it in the wallet). Default: ADVANCE.
+    public string? RefundMode { get; init; }
 }
 
 public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalCommand, bool>
 {
     private readonly IApplicationDbContext _context;
     private readonly IMediator _mediator;
+    private string _refundMode = PaymentLedger.WalletMode;
 
     public ReviewApprovalCommandHandler(IApplicationDbContext context, IMediator mediator)
     {
@@ -61,6 +65,7 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
 
         if (request.Approve)
         {
+            _refundMode = PaymentLedger.NormaliseMode(request.RefundMode ?? ReadRefundMode(req.Payload));
             // Apply the requested change atomically with the status update.
             await ApplyApprovedChangeAsync(req, ct);
             req.Status = "APPROVED";
@@ -77,6 +82,20 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
 
         await _context.SaveChangesAsync(ct);
         return true;
+    }
+
+    private static string? ReadRefundMode(string? payload)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(payload) ? "{}" : payload);
+            foreach (var key in new[] { "refundMode", "RefundMode" })
+                if (doc.RootElement.ValueKind == JsonValueKind.Object
+                    && doc.RootElement.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String)
+                    return v.GetString();
+        }
+        catch (JsonException) { }
+        return null;
     }
 
     /// <summary>
@@ -109,7 +128,31 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
             case "EDIT_SERVICES":
                 await ApplyEditServicesAsync(req, ct);
                 break;
+            case "REFERRER_CONTACT":
+                await ApplyReferrerContactAsync(req, ct);
+                break;
         }
+    }
+
+    /// <summary>
+    /// A referrer changed their mobile/email from the portal (review R8). Applied
+    /// only once someone at the centre has approved it. Payload: { referrerId, contact, email }.
+    /// </summary>
+    private async Task ApplyReferrerContactAsync(ApprovalRequest req, CancellationToken ct)
+    {
+        using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(req.Payload) ? "{}" : req.Payload);
+        var root = doc.RootElement;
+        if (!root.TryGetProperty("referrerId", out var idEl) || !Guid.TryParse(idEl.GetString(), out var referrerId))
+            return;
+        var referrer = await _context.Referrers
+            .FirstOrDefaultAsync(r => r.ReferrerId == referrerId && r.HospitalId == req.HospitalId && r.DeletedAt == null, ct);
+        if (referrer == null)
+            throw new _1Rad.Domain.Exceptions.NotFoundException("That referrer no longer exists.");
+        if (root.TryGetProperty("contact", out var c) && c.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(c.GetString()))
+            referrer.Contact = c.GetString()!.Trim();
+        if (root.TryGetProperty("email", out var e) && e.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(e.GetString()))
+            referrer.Email = e.GetString()!.Trim();
+        referrer.UpdatedAt = DateTime.UtcNow;
     }
 
     /// <summary>
@@ -145,6 +188,7 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
         {
             AppointmentId = req.AppointmentId.Value,
             ApprovedServiceRemoval = true,
+            RowVersion = null, // the approver applies it to the visit as it stands now
             RefundMode = string.IsNullOrWhiteSpace(cmd.RefundMode) ? "WALLET" : cmd.RefundMode,
         };
 
@@ -244,20 +288,10 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
             _context, invoice, oldReferrerDiscount, absorbToCentre,
             $"edit approved (request {req.Id}{(string.IsNullOrWhiteSpace(req.Reason) ? "" : " — " + req.Reason)})", ct);
 
-        // Re-derive status against the new total.
-        if (invoice.PaidAmount > 0 && invoice.PaidAmount >= invoice.TotalAmount - 0.01m)
-        {
-            invoice.Status = "PAID";
-            invoice.PaidAt ??= DateTime.UtcNow;
-        }
-        else if (invoice.PaidAmount > 0)
-        {
-            invoice.Status = "PARTIAL";
-        }
-        else
-        {
-            invoice.Status = "PENDING";
-        }
+        // Re-derive status against the new total; anything collected beyond it goes
+        // back to the patient (review B7) instead of sitting as a hidden overpayment.
+        await PaymentLedger.SettleAfterTotalChangeAsync(_context, invoice,
+            $"Bill lowered (approval {req.Id.ToString()[..8]})", ct, _refundMode);
 
         // Free → payment: reopening a free bill and charging for it (the edit
         // leaves a payable total) must clear the "free test" flag, so the bill
@@ -308,15 +342,19 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
         // back, so any collected payment must be reversed (income nets to zero).
         // Payments have no tombstone column, so the rows are removed outright
         // (mirrors Mark-Free). The refunded total is audited onto the commission.
-        var invoiceRowIds = invoices.Select(i => i.Id).ToList();
+        // Review B6: the money goes back as its own refund row (dated today, with the
+        // mode and the approver) instead of deleting the original payments, so closed
+        // days don't change and wallet-funded money returns to the wallet.
         decimal refunded = 0;
-        if (invoiceRowIds.Count > 0)
+        foreach (var invoice in invoices)
         {
-            var payments = await _context.Payments
-                .Where(p => invoiceRowIds.Contains(p.InvoiceId) && p.HospitalId == hospitalId)
-                .ToListAsync(ct);
-            refunded = payments.Sum(p => p.Amount);
-            if (payments.Count > 0) _context.Payments.RemoveRange(payments);
+            var collected = await PaymentLedger.CollectedAsync(_context, invoice, ct);
+            if (collected > 0.009m)
+            {
+                await PaymentLedger.RefundAsync(_context, invoice, collected, _refundMode,
+                    $"Visit cancelled (approval {req.Id.ToString()[..8]})", ct);
+                refunded += collected;
+            }
         }
 
         // Keep the bill VISIBLE as a cancelled record (do NOT tombstone it) so the
@@ -465,16 +503,12 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
             // consistent whether the user frees all-at-once or one-by-one.
             foreach (var it in invoice.Items) it.IsFree = true;
 
-            // Reverse any collected money so there is no income (Payment has no
-            // tombstone column, so the rows are removed outright).
-            var payments = await _context.Payments
-                .Where(p => p.InvoiceId == invoice.Id && p.HospitalId == req.HospitalId)
-                .ToListAsync(ct);
-            if (payments.Count > 0) _context.Payments.RemoveRange(payments);
-
-            invoice.PaidAmount = 0;
-            invoice.PaidAt = null;
-            invoice.Status = "PAID"; // total is 0 → nothing owed, nothing collected
+            // Return any collected money as refund rows (review B6) — the bill is
+            // now ₹0, so everything collected is an overpayment.
+            invoice.Status = "PAID"; // total is 0 → nothing owed
+            await PaymentLedger.SettleAfterTotalChangeAsync(_context, invoice,
+                $"Marked free (approval {req.Id.ToString()[..8]})", ct, _refundMode);
+            PaymentLedger.DeriveStatus(invoice);
             invoice.UpdatedAt = DateTime.UtcNow;
         }
 
@@ -617,11 +651,10 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
         // existing "free test" reports still recognise it).
         invoice.IsFree = invoice.Items.Count > 0 && invoice.Items.All(it => it.IsFree);
 
-        // Re-derive status against the new payable. We do NOT reverse payments —
-        // money already taken for the OTHER (paid) lines stays collected.
-        if (invoice.PaidAmount >= invoice.TotalAmount) invoice.Status = "PAID";
-        else if (invoice.PaidAmount > 0) invoice.Status = "PARTIAL";
-        else invoice.Status = "PENDING";
+        // Re-derive status against the new payable. Money taken for the other lines
+        // stays; only what now exceeds the bill goes back (review B7).
+        await PaymentLedger.SettleAfterTotalChangeAsync(_context, invoice,
+            $"Scan marked free (approval {req.Id.ToString()[..8]})", ct, _refundMode);
         invoice.UpdatedAt = DateTime.UtcNow;
 
         // 3) Settle the referral cut for THIS line only, per the bearer rule

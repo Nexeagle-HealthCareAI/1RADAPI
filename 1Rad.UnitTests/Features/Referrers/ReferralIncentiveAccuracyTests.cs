@@ -224,16 +224,23 @@ public class ReferralIncentiveAccuracyTests : BaseHandlerTest
     }
 
     [Fact]
-    public async Task UpdateStatus_AllowsPaymentOncePatientHasPaidAnything()
+    public async Task UpdateStatus_WaitsUntilThePatientHasPaidInFull()
     {
+        // Review R5 (Oct 2026): a part-paid bill no longer makes the cut payable —
+        // otherwise the referrer is paid on money the centre may never collect.
         var a = AddReferrer("DR A");
         var (visit, _) = AddVisit("DR A", a.ReferrerId);
-        AddInvoice(visit, 1000m, 300m, "PARTIAL");
+        var inv = AddInvoice(visit, 1000m, 300m, "PARTIAL");
         var c = AddCommission(a, visit, 200m);
         await Context.SaveChangesAsync();
 
-        await new UpdateReferralCommissionStatusCommandHandler(Context)
-            .Handle(new UpdateReferralCommissionStatusCommand(c.Id, "PAID"), CancellationToken.None);
+        var handler = new UpdateReferralCommissionStatusCommandHandler(Context);
+        await Assert.ThrowsAsync<BusinessRuleViolationException>(() =>
+            handler.Handle(new UpdateReferralCommissionStatusCommand(c.Id, "PAID"), CancellationToken.None));
+
+        inv.PaidAmount = 1000m; inv.Status = "PAID";
+        await Context.SaveChangesAsync();
+        await handler.Handle(new UpdateReferralCommissionStatusCommand(c.Id, "PAID"), CancellationToken.None);
 
         var saved = Context.ReferralCommissions.Single(x => x.Id == c.Id);
         Assert.Equal("PAID", saved.Status);

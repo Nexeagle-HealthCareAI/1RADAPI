@@ -70,7 +70,9 @@ public class HospitalsController : ControllerBase
             request.NABHNumber,
             request.IsAutoBillingEnabled,
             request.Latitude,
-            request.Longitude));
+            request.Longitude,
+            request.PublicContact,
+            request.PublicEmail));
 
         if (!result.Success) return BadRequest(new { message = result.Error });
         return Ok(new { message = "Hospital metadata updated successfully." });
@@ -150,6 +152,8 @@ public class UpdateHospitalDetailsRequest
     public bool IsAutoBillingEnabled { get; set; }
     public decimal? Latitude { get; set; }
     public decimal? Longitude { get; set; }
+    public string? PublicContact { get; set; }
+    public string? PublicEmail { get; set; }
 }
 
 public record CreateChainRequest(

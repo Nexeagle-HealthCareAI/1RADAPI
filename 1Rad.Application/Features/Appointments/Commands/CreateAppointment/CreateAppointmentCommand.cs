@@ -87,7 +87,7 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
         var patient = await _context.Patients
             .FirstOrDefaultAsync(p => p.PatientId == request.PatientId, cancellationToken);
 
-        if (patient == null) throw new Exception("Patient not found.");
+        if (patient == null) throw new NotFoundException("Patient not found.");
 
         var hospitalId = _context.UserContext.HospitalId != Guid.Empty
             ? _context.UserContext.HospitalId
@@ -114,7 +114,7 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
         var serviceLines = NormaliseServices(request);
         if (serviceLines.Count == 0)
         {
-            throw new Exception("At least one service is required to book an appointment.");
+            throw new ValidationException("Add at least one scan or test to book the appointment.");
         }
 
         // ── DUPLICATE-APPOINTMENT GUARD ──────────────────────────────────────
@@ -203,7 +203,7 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
             catch { /* best-effort — never block a booking on a roster lookup error */ }
 
             if (assignedIsNonDoctor)
-                throw new Exception("The assigned Lead Specialist is not a registered doctor at this centre. Please assign a doctor to supervise this appointment.");
+                throw new ValidationException("The lead specialist chosen isn't a registered doctor at this centre. Choose a doctor to supervise this appointment.");
         }
 
         // --- REFERRER RESOLUTION (race-safe, before the appointment is built) ---
@@ -403,7 +403,7 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
             var innerMessage = ex.InnerException?.Message ?? "No inner exception details";
             throw new Exception($"MISSION PERSISTENCE FAILURE: {ex.Message}. Database says: {innerMessage}", ex);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not DomainException)
         {
             throw new Exception($"UNEXPECTED SYSTEM ERROR: {ex.Message}", ex);
         }

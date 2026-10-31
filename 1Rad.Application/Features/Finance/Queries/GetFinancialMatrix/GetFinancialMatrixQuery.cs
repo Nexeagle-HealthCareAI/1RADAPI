@@ -375,7 +375,9 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 .Select(c => new { c.ReferrerId, c.ReferrerName, c.CommissionAmount, c.TransactionDate, c.Status })
                 .ToListAsync(cancellationToken);
 
-            var paymentQuery = _context.Payments.AsNoTracking().Where(p => p.HospitalId == hospitalId && p.Invoice.DeletedAt == null);
+            // Payments are counted even when their bill was later voided: the money really moved,
+            // and a void now writes its own refund rows (migration 102), so they net out on the refund day.
+            var paymentQuery = _context.Payments.AsNoTracking().Where(p => p.HospitalId == hospitalId);
             if (request.StartDate.HasValue)
             {
                 paymentQuery = paymentQuery.Where(p => p.CreatedAt >= IstDateRange.ToUtcStart(request.StartDate.Value));

@@ -51,6 +51,9 @@ public class Invoice : BaseEntity, IHospitalContext
 
     
     public Guid HospitalId { get; set; }
+
+    // Optimistic concurrency (migration 102). Server-maintained.
+    public byte[]? RowVersion { get; set; }
     
     // Navigation
     public Hospital Hospital { get; set; } = null!;

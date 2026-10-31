@@ -446,7 +446,7 @@ public class UpdateAppointmentCommandHandlerTests : BaseHandlerTest
         // A brand-new service line whose cut is bigger than its own price —
         // exactly the case CreateAppointmentCommand/AddBookingServiceCommand
         // already reject at booking time, previously unguarded on edit.
-        await Assert.ThrowsAsync<ArgumentException>(() => _handler.Handle(new UpdateAppointmentCommand(
+        await Assert.ThrowsAsync<_1Rad.Domain.Exceptions.ValidationException>(() => _handler.Handle(new UpdateAppointmentCommand(
             appointment.AppointmentId,
             "Ultrasound",
             "USG",

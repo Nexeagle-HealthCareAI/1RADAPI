@@ -77,6 +77,12 @@ public class InvoiceDto
     public Guid? AppointmentId { get; set; }
     public List<InvoiceItemDto> Items { get; set; } = new();
     public List<InvoiceExtraChargeDto> ExtraCharges { get; set; } = new();
+    // Money in and out of this bill, oldest first (review B6). Refunds are negative.
+    public List<InvoicePaymentDto> Payments { get; set; } = new();
+    // Concurrency token (base64). Send it back as RowVersion on CollectPayment.
+    public string? RowVersion { get => RowVersionBytes == null ? null : Convert.ToBase64String(RowVersionBytes); set { } }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public byte[]? RowVersionBytes { get; set; }
     // Sync fields. Populated for every row the sync engine pulls.
     public DateTime? UpdatedAt { get; set; }
     public DateTime? DeletedAt { get; set; }
@@ -94,6 +100,16 @@ public class InvoiceItemDto
     public string? Modality { get; set; }
     // Per-line free test — this service is free; excluded from the payable total.
     public bool IsFree { get; set; }
+}
+
+public class InvoicePaymentDto
+{
+    public Guid Id { get; set; }
+    public decimal Amount { get; set; }
+    public string Kind { get; set; } = "PAYMENT";
+    public string Method { get; set; } = string.Empty;
+    public string? Reason { get; set; }
+    public DateTime CreatedAt { get; set; }
 }
 
 public class InvoiceExtraChargeDto
@@ -214,6 +230,16 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, PagedIn
                         Reason = ec.Reason,
                         Amount = ec.Amount
                     }).ToList(),
+                    Payments = i.Payments.OrderBy(p => p.CreatedAt).Select(p => new InvoicePaymentDto
+                    {
+                        Id = p.Id,
+                        Amount = p.Amount,
+                        Kind = p.Kind,
+                        Method = p.PaymentMethod,
+                        Reason = p.Reason,
+                        CreatedAt = p.CreatedAt,
+                    }).ToList(),
+                    RowVersionBytes = i.RowVersion,
                     UpdatedAt = i.UpdatedAt,
                     DeletedAt = i.DeletedAt
                 })

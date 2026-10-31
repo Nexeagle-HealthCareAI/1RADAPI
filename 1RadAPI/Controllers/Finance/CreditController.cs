@@ -28,6 +28,7 @@ public class CreditController : ControllerBase
 
     /// <summary>The patient's current wallet balance + ledger.</summary>
     [HttpGet("credit/{patientId}")]
+    [Authorize(Roles = RoleSets.Billing)]
     public async Task<IActionResult> GetPatientCredit(Guid patientId)
     {
         var result = await _mediator.Send(new GetPatientCreditQuery(patientId));
@@ -36,6 +37,7 @@ public class CreditController : ControllerBase
 
     /// <summary>Everyone currently holding an advance (for the Advances & Refunds list).</summary>
     [HttpGet("credits/outstanding")]
+    [Authorize(Roles = RoleSets.Billing)]
     public async Task<IActionResult> GetOutstandingCredits()
     {
         var result = await _mediator.Send(new GetOutstandingCreditsQuery());

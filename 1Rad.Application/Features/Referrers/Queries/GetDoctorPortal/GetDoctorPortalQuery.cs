@@ -12,8 +12,10 @@ namespace _1Rad.Application.Features.Referrers.Queries.GetDoctorPortal;
 
 // Public, referrer-scoped snapshot powering the doctor portal (/r/{id}). Derives
 // the hospital from the referrer (NOT from a user context — the caller is
-// unauthenticated) and never exposes full patient names (masked to initials +
-// PTID), since the link is a capability URL.
+// unauthenticated). The link is a capability URL that can be forwarded, so
+// (review R9) the patient list covers the last 90 days plus older unpaid rows, an
+// agent payee sees initials + PTID only (a doctor sees the names of their own
+// patients), and the centre contact is the centre's public one.
 public record GetDoctorPortalQuery(Guid ReferrerId) : IRequest<DoctorPortalDto?>;
 
 public record DoctorPortalPatientDto(
@@ -33,7 +35,7 @@ public record DoctorPortalPatientDto(
 
 public record DoctorPortalDto(
     string CentreName,
-    // Centre identity for the portal's top nav (best-effort — the admin user's).
+    // Centre identity for the portal's top nav (Hospitals.PublicContact / PublicEmail).
     string? CentreLocation,
     string? CentreAdminName,
     string? CentreContact,
@@ -75,28 +77,12 @@ public class GetDoctorPortalQueryHandler : IRequestHandler<GetDoctorPortalQuery,
         var hospitalId = referrer.HospitalId;
         var centre = await _context.Hospitals.IgnoreQueryFilters()
             .Where(h => h.HospitalId == hospitalId)
-            .Select(h => new { h.HospitalName, h.HospitalAddress })
+            .Select(h => new { h.HospitalName, h.HospitalAddress, h.PublicContact, h.PublicEmail })
             .FirstOrDefaultAsync(ct);
         var centreName = centre?.HospitalName;
 
-        // Best-effort centre contact for the top nav: prefer a user with an Admin
-        // role mapped to this hospital, else the default / earliest-assigned user.
-        var centreUsers = await _context.UserHospitalMappings.AsNoTracking().IgnoreQueryFilters()
-            .Where(m => m.HospitalId == hospitalId)
-            .Select(m => new {
-                m.IsDefault,
-                m.AssignedAt,
-                m.User.FullName,
-                m.User.Email,
-                m.User.Mobile,
-                IsAdmin = m.Roles.Any(r => r.RoleName.Contains("Admin"))
-            })
-            .ToListAsync(ct);
-        var admin = centreUsers
-            .OrderByDescending(x => x.IsAdmin)
-            .ThenByDescending(x => x.IsDefault)
-            .ThenBy(x => x.AssignedAt)
-            .FirstOrDefault();
+        // Review R9: the portal shows the centre's own contact (Admin → Centre details),
+        // never an admin's personal mobile and email.
 
         // A partner may have duplicates merged into it (virtual merge, MergedIntoId).
         // Whichever alias this link belongs to, the doctor sees the combined
@@ -180,6 +166,12 @@ public class GetDoctorPortalQueryHandler : IRequestHandler<GetDoctorPortalQuery,
             .GroupBy(l => l.AppointmentId!.Value)
             .ToDictionary(g => g.Key, g => g.ToList());
 
+        // Review R9: the per-patient list covers the last 90 days, plus anything older
+        // that is still unpaid; totals below still cover everything. An agent (not a
+        // clinician) sees initials only.
+        var windowStart = DateTime.UtcNow.Date.AddDays(-PortalWindowDays);
+        var showFullNames = referrer.IsDoctor;
+
         var patients = commissions.Select(c =>
         {
             var paid = string.Equals(c.Status, "PAID", StringComparison.OrdinalIgnoreCase);
@@ -200,6 +192,7 @@ public class GetDoctorPortalQueryHandler : IRequestHandler<GetDoctorPortalQuery,
             // The referring doctor referred this patient, so they see the full name.
             var name = !string.IsNullOrWhiteSpace(fullName) ? fullName
                 : (string.IsNullOrWhiteSpace(c.PatientName) ? "—" : c.PatientName);
+            if (!showFullNames) name = Initials(name);
             var label = string.IsNullOrWhiteSpace(ptid) ? name : $"{name} · {ptid}";
 
             // The referrer concession given to the patient out of this doctor's cut.
@@ -270,12 +263,17 @@ public class GetDoctorPortalQueryHandler : IRequestHandler<GetDoctorPortalQuery,
         var referredCount = commissions.Select(c => c.AppointmentId).Where(x => x != null).Distinct().Count();
         if (referredCount == 0) referredCount = commissions.Count;
 
+        var visible = patients
+            .Where((p, i) => DateTime.TryParse(p.Date, out var d) && d >= windowStart
+                             || !string.Equals(commissions[i].Status, "PAID", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
         return new DoctorPortalDto(
             string.IsNullOrWhiteSpace(centreName) ? "Diagnostic Centre" : centreName!,
             centre?.HospitalAddress,
-            admin?.FullName,
-            admin?.Mobile,
-            admin?.Email,
+            null,
+            centre?.PublicContact,
+            centre?.PublicEmail,
             referrer.Name ?? "Doctor",
             referrer.Address,
             referrer.Specialty,
@@ -286,10 +284,20 @@ public class GetDoctorPortalQueryHandler : IRequestHandler<GetDoctorPortalQuery,
             totalEligible,
             paidTotal,
             totalEligible - paidTotal,
-            patients,
+            visible,
             payableNow,
             awaitingPatient
         );
+    }
+
+    public const int PortalWindowDays = 90;
+
+    /// <summary>"Ravi Kumar Singh" → "R. K. S."</summary>
+    public static string Initials(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name) || name == "—") return "—";
+        var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return string.Join(" ", parts.Where(p => char.IsLetter(p[0])).Select(p => char.ToUpperInvariant(p[0]) + "."));
     }
 
     // Flattened invoice-line projection (one row per line, carrying its parent

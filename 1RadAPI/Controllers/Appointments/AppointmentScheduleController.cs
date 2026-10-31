@@ -3,6 +3,7 @@ using _1Rad.Application.Features.Appointments.Commands.CreateAppointment;
 using _1Rad.Application.Features.Appointments.Commands.UpdateAppointment;
 using _1Rad.Application.Features.Appointments.Commands.UpdateAppointmentStatus;
 using _1Rad.Application.Features.Appointments.Commands.ChangeReferrer;
+using _1Rad.Domain.Constants;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -57,6 +58,7 @@ public class AppointmentScheduleController : ControllerBase
     }
 
     [HttpPost]
+    [Authorize(Roles = RoleSets.FrontDesk)]
     public async Task<IActionResult> Create([FromBody] CreateAppointmentCommand command)
     {
         var result = await _mediator.Send(command);
@@ -64,6 +66,7 @@ public class AppointmentScheduleController : ControllerBase
     }
 
     [HttpPut("{id}")]
+    [Authorize(Roles = RoleSets.FrontDesk)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateAppointmentCommand command)
     {
         if (id != command.AppointmentId) return BadRequest("Appointment ID mismatch.");
@@ -79,8 +82,14 @@ public class AppointmentScheduleController : ControllerBase
     }
 
     [HttpPatch("{id}/status")]
+    [Authorize(Roles = RoleSets.Workflow)]
     public async Task<IActionResult> UpdateStatus(Guid id, [FromBody] string status)
     {
+        // Review A4: moving a visit along is workflow; cancelling it is the front desk's.
+        if (string.Equals(status?.Trim(), "CANCELLED", StringComparison.OrdinalIgnoreCase)
+            && !RoleSets.CanCancel.Any(User.IsInRole))
+            return StatusCode(StatusCodes.Status403Forbidden,
+                new { error = "Only the front desk or an admin can cancel a visit." });
         var result = await _mediator.Send(new UpdateAppointmentStatusCommand(id, status));
         if (!result.Success && result.Message == "Appointment not found.")
             return NotFound();
@@ -97,6 +106,7 @@ public class AppointmentScheduleController : ControllerBase
         string? NewReferrerSupportedSpecialty, string? NewReferrerSupportedDegree);
 
     [HttpPost("{id:guid}/change-referrer")]
+    [Authorize(Roles = RoleSets.FrontDesk)]
     public async Task<IActionResult> ChangeReferrer(Guid id, [FromBody] ChangeReferrerBody body)
     {
         var result = await _mediator.Send(new ChangeReferrerCommand

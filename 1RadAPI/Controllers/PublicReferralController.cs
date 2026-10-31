@@ -93,10 +93,11 @@ public class PublicReferralController : ControllerBase
         var state = await LinkStateAsync(token, referrerId);
         if (state != ReferralLinkState.Valid) return LinkRejected(state);
 
-        var ok = await _mediator.Send(new UpdateDoctorProfileCommand(referrerId, body?.Name, body?.Location, body?.Specialty, body?.Degree, body?.Email, body?.Contact));
-        if (!ok) return NotFound(new { success = false, error = "Referrer not found." });
+        var result = await _mediator.Send(new UpdateDoctorProfileCommand(referrerId, body?.Name, body?.Location, body?.Specialty, body?.Degree, body?.Email, body?.Contact));
+        if (!result.Found) return NotFound(new { success = false, error = "Referrer not found." });
 
-        return Ok(new { success = true });
+        // contactChangePending: a new mobile/email waits for the centre to confirm (review R8).
+        return Ok(new { success = true, contactChangePending = result.ContactChangePending });
     }
 
     // ── Book from the portal ─────────────────────────────────────────────────

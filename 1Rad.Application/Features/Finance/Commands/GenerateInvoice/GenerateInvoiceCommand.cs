@@ -34,9 +34,13 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
 {
     private readonly IApplicationDbContext _context;
 
-    public GenerateInvoiceCommandHandler(IApplicationDbContext context)
+    private readonly Microsoft.Extensions.Configuration.IConfiguration? _configuration;
+
+    public GenerateInvoiceCommandHandler(IApplicationDbContext context,
+        Microsoft.Extensions.Configuration.IConfiguration? configuration = null)
     {
         _context = context;
+        _configuration = configuration;
     }
 
     public async Task<Guid> Handle(GenerateInvoiceCommand request, CancellationToken cancellationToken)
@@ -147,7 +151,22 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
                 }
             }
 
-            var grossAmount = request.Items.Sum(x => x.Amount * x.Quantity);
+            // Review B3: a line tied to a booked scan is billed at the price on the
+            // visit. Only admins and accountants may bill it at a different price.
+            var servicePrices = new Dictionary<Guid, decimal>();
+            var linkedIds = request.Items.Where(i => i.AppointmentServiceId.HasValue).Select(i => i.AppointmentServiceId!.Value).ToList();
+            if (linkedIds.Count > 0)
+                servicePrices = await _context.AppointmentServices
+                    .Where(sv => linkedIds.Contains(sv.Id))
+                    .ToDictionaryAsync(sv => sv.Id, sv => sv.Amount, cancellationToken);
+            var mayReprice = DiscountPolicy.HasFinanceRole(_context.UserContext);
+            decimal PriceOf(InvoiceItemDto item) =>
+                !mayReprice && item.AppointmentServiceId is Guid sid && servicePrices.TryGetValue(sid, out var booked)
+                    ? booked
+                    : item.Amount;
+
+            DiscountPolicy.RejectNegatives(request.CentreDiscount, request.ReferrerDiscount, null);
+            var grossAmount = request.Items.Sum(x => PriceOf(x) * x.Quantity);
             var totalDiscount = request.CentreDiscount + request.ReferrerDiscount;
             
             // Keep the deduction vectors and the aggregate discount auditable.
@@ -157,6 +176,7 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
             {
                 throw new ArgumentException("Total discount cannot exceed the invoice gross amount.");
             }
+            DiscountPolicy.CheckLimit(_context.UserContext, _configuration, grossAmount, request.CentreDiscount, 0);
 
             // ServiceDate is what GetFinancialMatrixQuery (Service Performance,
             // Analytics, and every other matrix tab) filters invoices by — it was
@@ -191,7 +211,7 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
                 invoice.Items.Add(new InvoiceItem
                 {
                     Description = item.Description,
-                    Amount = item.Amount,
+                    Amount = PriceOf(item),
                     Quantity = item.Quantity,
                     AppointmentServiceId = item.AppointmentServiceId,
                 });

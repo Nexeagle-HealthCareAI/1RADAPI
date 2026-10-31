@@ -22,6 +22,7 @@ public class InvoiceController : ControllerBase
     }
 
     [HttpGet("invoices")]
+    [Authorize(Roles = RoleSets.Billing)]
     public async Task<IActionResult> GetInvoices(
         [FromQuery] string? search,
         [FromQuery] string? status,
@@ -73,7 +74,20 @@ public class InvoiceController : ControllerBase
             : BadRequest(new { message = error });
     }
 
+    // Review B6: refunds are their own rows (mode, user, date) — never a deleted payment.
+    [HttpPost("invoices/{id:guid}/refunds")]
+    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Accountant}")]
+    public async Task<IActionResult> Refund(Guid id, [FromBody] RefundRequest body)
+    {
+        var result = await _mediator.Send(new _1Rad.Application.Features.Finance.Commands.RefundPayment.RefundPaymentCommand(
+            id, body.Amount, body.Mode ?? string.Empty, body.Reason ?? string.Empty));
+        return Ok(result);
+    }
+
+    public record RefundRequest(decimal Amount, string? Mode, string? Reason);
+
     [HttpGet("pending-billables/{patientId}")]
+    [Authorize(Roles = RoleSets.Billing)]
     public async Task<IActionResult> GetPendingBillables(Guid patientId)
     {
         var result = await _mediator.Send(new GetPendingBillablesQuery { PatientId = patientId });

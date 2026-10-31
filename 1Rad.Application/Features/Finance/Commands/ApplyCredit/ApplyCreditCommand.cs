@@ -1,4 +1,5 @@
 using MediatR;
+using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -59,19 +60,13 @@ public class ApplyCreditCommandHandler : IRequestHandler<ApplyCreditCommand, App
             InvoiceId = invoice.Id,
             Amount = toApply,
             PaymentMethod = "ADVANCE",
+            Kind = PaymentKinds.Payment,
+            CreatedByUserId = _context.UserContext.UserId == Guid.Empty ? null : _context.UserContext.UserId,
             CreatedAt = DateTime.UtcNow,
             HospitalId = hospitalId,
         });
         invoice.PaidAmount += toApply;
-        if (invoice.PaidAmount >= invoice.TotalAmount - 0.01m)
-        {
-            invoice.Status = "PAID";
-            invoice.PaidAt = DateTime.UtcNow;
-        }
-        else if (invoice.PaidAmount > 0)
-        {
-            invoice.Status = "PARTIAL";
-        }
+        PaymentLedger.DeriveStatus(invoice);
 
         _context.CreditTransactions.Add(new CreditTransaction
         {

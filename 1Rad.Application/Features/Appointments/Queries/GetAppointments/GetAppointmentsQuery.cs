@@ -157,7 +157,9 @@ public class GetAppointmentsQueryHandler : IRequestHandler<GetAppointmentsQuery,
                 x.Appointment.DeletedAt,
                 x.Invoice?.TotalAmount ?? 0,
                 x.Invoice?.ReferralCutValue ?? 0,
-                assetCountByAppointment.GetValueOrDefault(x.Appointment.AppointmentId, 0)
+                assetCountByAppointment.GetValueOrDefault(x.Appointment.AppointmentId, 0),
+                null,
+                x.Appointment.RowVersion == null ? null : Convert.ToBase64String(x.Appointment.RowVersion)
             )).ToList();
 
             string? nextCursor = null;

@@ -1,4 +1,5 @@
 using System.Linq;
+using System.Text.Json;
 using _1Rad.Application.Interfaces;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
@@ -20,43 +21,95 @@ public record UpdateDoctorProfileCommand(
     string? Degree,
     string? Email,
     string? Contact
-) : IRequest<bool>;
+) : IRequest<UpdateDoctorProfileResult>;
 
-public class UpdateDoctorProfileCommandHandler : IRequestHandler<UpdateDoctorProfileCommand, bool>
+/// <summary>ContactChangePending: the new mobile/email waits for the centre to approve it.</summary>
+public record UpdateDoctorProfileResult(bool Found, bool ContactChangePending);
+
+public class UpdateDoctorProfileCommandHandler : IRequestHandler<UpdateDoctorProfileCommand, UpdateDoctorProfileResult>
 {
+    public const string ApprovalType = "REFERRER_CONTACT";
     private readonly IApplicationDbContext _context;
 
     public UpdateDoctorProfileCommandHandler(IApplicationDbContext context) => _context = context;
 
-    public async Task<bool> Handle(UpdateDoctorProfileCommand request, CancellationToken ct)
+    public async Task<UpdateDoctorProfileResult> Handle(UpdateDoctorProfileCommand request, CancellationToken ct)
     {
         var referrer = await _context.Referrers
             .IgnoreQueryFilters()
             .FirstOrDefaultAsync(r => r.ReferrerId == request.ReferrerId && r.DeletedAt == null, ct);
-        if (referrer == null) return false;
+        if (referrer == null) return new UpdateDoctorProfileResult(false, false);
 
-        // Trim to null so a cleared field stores null rather than whitespace.
         static string? Clean(string? v) => string.IsNullOrWhiteSpace(v) ? null : v.Trim();
 
-        // The NAME is deliberately not editable from the public link. It is the
-        // partner's identity everywhere: appointments record the referrer by name
-        // (Appointment.ReferredBy), payout/ledger rows carry it, and reports join on
-        // it. Anyone holding the capability link could otherwise rename the payee
-        // and silently detach their history — a name correction is a centre-side
-        // edit (Referrals → Edit partner). The request field is accepted but ignored
-        // so older portal builds keep working.
-        referrer.Address   = Clean(request.Location);   // "location" on the portal
-        referrer.Specialty = Clean(request.Specialty);
-        referrer.Degree    = Clean(request.Degree);
-        referrer.Email     = Clean(request.Email);
+        // The NAME is not editable from the public link (it is the payee's identity on
+        // every appointment, payout and report). The field is accepted and ignored.
+        //
+        // Review R8: a blank field never clears what the centre holds — the portal only
+        // adds or corrects. Profile details apply at once.
+        referrer.Address   = Clean(request.Location)  ?? referrer.Address;
+        referrer.Specialty = Clean(request.Specialty) ?? referrer.Specialty;
+        referrer.Degree    = Clean(request.Degree)    ?? referrer.Degree;
 
-        // Keep only the digits of the mobile (matches the admin-side format).
+        // Review R8: mobile and email are where every future link is sent. Anyone
+        // holding a forwarded link could redirect them and take over the portal, so a
+        // change becomes a request the centre approves (Approvals → Referrer contact).
         var digits = new string((request.Contact ?? string.Empty).Where(char.IsDigit).ToArray());
-        referrer.Contact = digits.Length == 0 ? null : digits;
+        var newContact = digits.Length == 0 ? null : digits;
+        var newEmail = Clean(request.Email);
+        var contactChanged = newContact != null && newContact != referrer.Contact;
+        var emailChanged = newEmail != null && !string.Equals(newEmail, referrer.Email, StringComparison.OrdinalIgnoreCase);
 
-        referrer.UpdatedAt = DateTime.UtcNow; // also auto-stamped on save; set for clarity
+        var pending = false;
+        if (contactChanged || emailChanged)
+        {
+            var payload = JsonSerializer.Serialize(new
+            {
+                referrerId = referrer.ReferrerId,
+                contact = contactChanged ? newContact : null,
+                email = emailChanged ? newEmail : null,
+                previousContact = referrer.Contact,
+                previousEmail = referrer.Email,
+            });
+            var existing = await _context.ApprovalRequests
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(a => a.HospitalId == referrer.HospitalId && a.Type == ApprovalType
+                                          && a.Status == "PENDING" && a.DeletedAt == null
+                                          && a.Payload.Contains(referrer.ReferrerId.ToString()), ct);
+            var title = $"{referrer.Name}: new contact details from the referral portal";
+            var reason = string.Join(" · ", new[]
+            {
+                contactChanged ? $"Mobile {Mask(referrer.Contact)} → {newContact}" : null,
+                emailChanged ? $"Email {referrer.Email ?? "none"} → {newEmail}" : null,
+            }.Where(x => x != null));
+            if (existing != null)
+            {
+                existing.Payload = payload;
+                existing.Title = title;
+                existing.Reason = reason;
+                existing.UpdatedAt = DateTime.UtcNow;
+            }
+            else
+            {
+                _context.ApprovalRequests.Add(new Domain.Entities.ApprovalRequest
+                {
+                    HospitalId = referrer.HospitalId,
+                    Type = ApprovalType,
+                    Title = title,
+                    Reason = reason,
+                    Payload = payload,
+                    Status = "PENDING",
+                    RequestedBy = Guid.Empty, // the referrer, via their link — not a staff user
+                });
+            }
+            pending = true;
+        }
 
+        referrer.UpdatedAt = DateTime.UtcNow;
         await _context.SaveChangesAsync(ct);
-        return true;
+        return new UpdateDoctorProfileResult(true, pending);
     }
+
+    private static string Mask(string? contact) =>
+        string.IsNullOrEmpty(contact) ? "none" : contact.Length <= 4 ? contact : new string('•', contact.Length - 4) + contact[^4..];
 }

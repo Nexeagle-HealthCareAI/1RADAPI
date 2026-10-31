@@ -78,7 +78,11 @@ public record UpdateAppointmentCommand(
     // PAID. The public PUT endpoint forces this to false, so a client can't use it
     // to bypass the paid-commission gate. When true: skip that gate, and the paid
     // cut is clawed back (a negative adjustment row) instead of blocking.
-    bool ApprovedServiceRemoval = false
+    bool ApprovedServiceRemoval = false,
+    // Review A7: the version of the visit the form was opened on (AppointmentDto.
+    // RowVersion). When sent, an edit made on a stale form is refused with 409
+    // instead of silently undoing someone else's change (e.g. dropping a scan they added).
+    string? RowVersion = null
 ) : IRequest<UpdateAppointmentResult>;
 
 /// <summary>
@@ -121,6 +125,15 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
             .FirstOrDefaultAsync(a => a.AppointmentId == request.AppointmentId, cancellationToken);
 
         if (appointment == null) return new UpdateAppointmentResult { NotFound = true };
+
+        if (!string.IsNullOrWhiteSpace(request.RowVersion) && appointment.RowVersion != null)
+        {
+            byte[]? sent = null;
+            try { sent = Convert.FromBase64String(request.RowVersion); } catch (FormatException) { }
+            if (sent == null || !sent.AsSpan().SequenceEqual(appointment.RowVersion))
+                throw new ConflictException(
+                    "Someone else changed this visit after you opened it. Reopen it to see their changes, then make yours again.");
+        }
 
         bool dateChanged = appointment.DateTime.Date != request.DateTime.Date;
 
@@ -269,8 +282,9 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
 
         if (paidCommissions.Count > 0 && referrerChanged)
         {
-            throw new InvalidOperationException(
-                "The referring party cannot be changed because this appointment has a paid referral commission. Use the approved referrer-change workflow.");
+            throw new BusinessRuleViolationException(
+                "The referrer can't be changed here because their commission for this visit has already been paid. Use Change referrer, which goes to an admin for approval.",
+                "REFERRER_PAID");
         }
 
         if (request.Services is { Count: > 0 })
@@ -287,8 +301,9 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
                 var original = existingServices.First(s => s.Id == line.Id.Value);
                 if (line.ReferralCutValue != original.ReferralCutValue)
                 {
-                    throw new InvalidOperationException(
-                        "The referral cut cannot be changed after it has been paid. Create an approved commission adjustment instead.");
+                    throw new BusinessRuleViolationException(
+                        "This referral cut has already been paid, so it can't be changed here. Ask an admin to approve a commission adjustment.",
+                        "CUT_PAID");
                 }
 
                 // Keep the paid row associated with the same clinical service.
@@ -370,7 +385,7 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
 
             if (liveInvoice != null)
             {
-                var paid = liveInvoice.PaidAmount;
+                var paid = await PaymentLedger.CollectedAsync(_context, liveInvoice, cancellationToken);
 
                 // Void the bill so the future visit is clean (items go with it).
                 liveInvoice.Status = "CANCELLED";
@@ -387,28 +402,17 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
                     .ToListAsync(cancellationToken);
                 foreach (var c in comms) { c.CommissionAmount = 0; c.Status = "Cancelled"; c.DeletedAt = DateTime.UtcNow; }
 
-                // Return money already collected into the credit ledger.
+                // Return money already collected (review B5, B6): a refund row on the
+                // bill, dated today, in the chosen mode; wallet-funded money and an
+                // "ADVANCE" choice go back to the patient's wallet. The old code wrote a
+                // lone wallet REFUND with no matching ADVANCE, which the wallet's
+                // non-negative trigger rejected and the whole edit failed.
                 if (paid > 0.009m)
                 {
-                    var cash = string.Equals(request.RefundMode, "CASH", StringComparison.OrdinalIgnoreCase);
-                    _context.CreditTransactions.Add(new CreditTransaction
-                    {
-                        HospitalId = appointment.HospitalId,
-                        PatientId = appointment.PatientId,
-                        PatientName = appointment.PatientName ?? string.Empty,
-                        Type = cash ? "REFUND" : "ADVANCE",
-                        Amount = Math.Round(paid, 2),
-                        InvoiceId = cash ? (Guid?)null : liveInvoice.Id,
-                        InvoiceDisplayId = liveInvoice.InvoiceId,
-                        PaymentMethod = cash ? "CASH" : null,
-                        CreatedByUserId = _context.UserContext.UserId,
-                        Remarks = cash
-                            ? "Cash refund — paid visit moved to a future date"
-                            : "Advance held — paid visit moved to a future date",
-                        CreatedAt = DateTime.UtcNow,
-                        UpdatedAt = DateTime.UtcNow,
-                    });
+                    await PaymentLedger.RefundAsync(_context, liveInvoice, paid, request.RefundMode,
+                        "Paid visit moved to a future date", cancellationToken);
                 }
+                liveInvoice.Status = "CANCELLED";
             }
 
             // No longer served — reset arrival so it bills fresh on the new date.
@@ -450,7 +454,8 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         {
             if (dateChanged)
             {
-                invoice.CreatedAt = request.DateTime;
+                // Review B13: the bill's issue date (CreatedAt) stays as issued; only the
+                // service date follows the visit.
                 // ServiceDate drives GetFinancialMatrixQuery's date filter (the
                 // Service Performance tab and friends) — it used to only be set
                 // once at invoice creation and never refreshed on a reschedule,
@@ -531,38 +536,11 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
                         };
                     }
 
-                    var cash = string.Equals(request.RefundMode, "CASH", StringComparison.OrdinalIgnoreCase);
-                    _context.CreditTransactions.Add(new CreditTransaction
-                    {
-                        HospitalId = appointment.HospitalId,
-                        PatientId = appointment.PatientId,
-                        PatientName = appointment.PatientName ?? string.Empty,
-                        Type = cash ? "REFUND" : "ADVANCE",
-                        Amount = Math.Round(overpay, 2),
-                        InvoiceId = cash ? (Guid?)null : invoice.Id,
-                        InvoiceDisplayId = invoice.InvoiceId,
-                        PaymentMethod = cash ? "CASH" : null,
-                        CreatedByUserId = _context.UserContext.UserId,
-                        Remarks = cash
-                            ? "Cash refund — service removed after payment"
-                            : "Advance held — service removed after payment",
-                        CreatedAt = DateTime.UtcNow,
-                        UpdatedAt = DateTime.UtcNow,
-                    });
-                    // The excess now lives in the credit ledger — the invoice is
-                    // settled exactly to its new total.
-                    invoice.PaidAmount = invoice.TotalAmount;
+                    await PaymentLedger.RefundAsync(_context, invoice, overpay, request.RefundMode,
+                        "Service removed after payment", cancellationToken);
                 }
 
-                if (invoice.PaidAmount >= invoice.TotalAmount - 0.01m)
-                    invoice.Status = invoice.PaidAmount > 0 ? "PAID" : "PENDING";
-                else if (invoice.PaidAmount > 0)
-                    invoice.Status = "PARTIAL";
-                else
-                    invoice.Status = "PENDING";
-
-                if (invoice.Status == "PAID" && invoice.PaidAt == null)
-                    invoice.PaidAt = DateTime.UtcNow;
+                PaymentLedger.DeriveStatus(invoice);
             }
         }
         else if (invoice == null && appointment.ArrivedAt != null)
@@ -652,24 +630,19 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
         // change should win — the rest of this handler is already last-writer-wins
         // — so refresh the conflicting rows' concurrency tokens and re-save instead
         // of bubbling a 409 the user can do nothing about. Bounded to avoid a loop.
-        const int maxConcurrencyAttempts = 3;
-        for (var attempt = 1; ; attempt++)
         {
             try
             {
                 await _context.SaveChangesAsync(cancellationToken);
-                break;
             }
-            catch (DbUpdateConcurrencyException ex) when (attempt < maxConcurrencyAttempts)
+            catch (DbUpdateConcurrencyException)
             {
-                foreach (var entry in ex.Entries)
-                {
-                    var dbValues = await entry.GetDatabaseValuesAsync(cancellationToken);
-                    if (dbValues == null)
-                        entry.State = EntityState.Detached;          // row was deleted — drop just this change
-                    else
-                        entry.OriginalValues.SetValues(dbValues);     // refresh token; our edited values still win
-                }
+                // Review A7: the visit, its bill or one of its scans changed between our
+                // read and our save. Forcing our values through ("the editing user wins")
+                // undid the other change — a technician's status tick, a scan someone
+                // added — so refuse and let the user reload.
+                throw new ConflictException(
+                    "Someone else changed this visit a moment ago. Reopen it to see their changes, then make yours again.");
             }
         }
         return new UpdateAppointmentResult { Success = true };
@@ -785,7 +758,7 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
 
             if (badLine.ReferralCutValue < 0 || badLine.ReferralCutValue > badLine.Amount)
             {
-                throw new ArgumentException(
+                throw new ValidationException(
                     $"The referral cut for '{badLine.ServiceName}' (₹{badLine.ReferralCutValue:0.##}) cannot be negative or exceed its price (₹{badLine.Amount:0.##}).");
             }
         }
@@ -847,7 +820,7 @@ public class UpdateAppointmentCommandHandler : IRequestHandler<UpdateAppointment
                 || await _context.StudyAssets.AnyAsync(
                     a => a.AppointmentServiceId != null && staleIds.Contains(a.AppointmentServiceId.Value), cancellationToken);
             if (hasClinicalWork)
-                throw new ArgumentException(
+                throw new BusinessRuleViolationException(
                     "Cannot remove a service that already has a report or scan attached. " +
                     "Cancel or reassign its report/scan first, then remove the service.");
 

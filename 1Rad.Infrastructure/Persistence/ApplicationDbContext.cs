@@ -206,6 +206,8 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             
             // Metadata Fields
             entity.Property(e => e.GSTIN).HasMaxLength(15);
+            entity.Property(e => e.PublicContact).HasMaxLength(20);
+            entity.Property(e => e.PublicEmail).HasMaxLength(255);
             entity.Property(e => e.RegistrationNumber).HasMaxLength(100);
             entity.Property(e => e.PAN).HasMaxLength(10);
             entity.Property(e => e.NABHNumber).HasMaxLength(100);
@@ -443,6 +445,8 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
         {
             entity.ToTable("Invoices", "dbo");
             entity.HasKey(e => e.Id);
+            // Migration 102 (review B1): two collections on one bill can't both write PaidAmount.
+            entity.Property(e => e.RowVersion).IsRowVersion();
             entity.Property(e => e.InvoiceId).IsRequired().HasMaxLength(50);
             entity.Property(e => e.PatientName).IsRequired().HasMaxLength(255); 
             entity.Property(e => e.GrossAmount).HasPrecision(18, 2);
@@ -529,10 +533,13 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
         // Payment Configuration
         modelBuilder.Entity<Payment>(entity =>
         {
-            entity.ToTable("Payments", "dbo");
+            // Migration 102's append-only trigger: tell EF so it never uses a bare OUTPUT clause on this table.
+            entity.ToTable("Payments", "dbo", tb => tb.HasTrigger("TR_Payments_AppendOnly"));
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Amount).HasPrecision(18, 2);
             entity.Property(e => e.PaymentMethod).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.Kind).IsRequired().HasMaxLength(20).HasDefaultValue(PaymentKinds.Payment);
+            entity.Property(e => e.Reason).HasMaxLength(500);
 
             entity.HasOne(e => e.Invoice)
                 .WithMany(i => i.Payments)

@@ -16,12 +16,14 @@ public static class AppointmentPaymentGuard
     /// <summary>
     /// True if this appointment's visit has any money on the books — a live
     /// invoice that's PAID/PARTIAL or carries a positive PaidAmount, OR any
-    /// Payment row at all.
+    /// net positive Payment total (refund rows count against it).
     /// </summary>
     public static async Task<bool> HasCollectedPayment(IApplicationDbContext context, Guid appointmentId, CancellationToken cancellationToken)
     {
         return await context.Invoices
             .AnyAsync(i => i.AppointmentId == appointmentId && (i.PaidAmount > 0 || i.Status == "PAID" || i.Status == "PARTIAL"), cancellationToken)
-            || await context.Payments.AnyAsync(p => p.Invoice.AppointmentId == appointmentId, cancellationToken);
+            // Net of refunds: a visit whose money was fully returned has nothing on the books.
+            || await context.Payments.Where(p => p.Invoice.AppointmentId == appointmentId)
+                   .SumAsync(p => p.Amount, cancellationToken) > 0.009m;
     }
 }
