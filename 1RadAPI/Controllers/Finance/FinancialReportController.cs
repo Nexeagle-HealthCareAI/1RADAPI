@@ -81,4 +81,26 @@ public class FinancialReportController : ControllerBase
     }
 
     public record CloseDayRequest(DateTime Date, decimal CountedCash, string? Note);
+
+    // Credit notes and refund vouchers issued on bills (raised automatically when a
+    // paid bill is lowered, cancelled or refunded). By IST issue date, or for one bill.
+    [HttpGet("credit-notes")]
+    [Authorize(Roles = RoleSets.Billing)]
+    public async Task<IActionResult> CreditNotes([FromQuery] DateTime? from, [FromQuery] DateTime? to, [FromQuery] Guid? invoiceId)
+    {
+        var result = await _mediator.Send(new _1Rad.Application.Features.Finance.CreditNotes.GetCreditNotesQuery(from, to, invoiceId));
+        return Ok(result);
+    }
+
+    // The month's GSTR-1 working sheet (B2C, exempt, SAC summary, documents issued).
+    [HttpGet("gstr1")]
+    [Authorize(Roles = RoleSets.FinanceReports)]
+    public async Task<IActionResult> Gstr1([FromQuery] string month)
+    {
+        if (string.IsNullOrWhiteSpace(month) || !DateTime.TryParseExact(month, "yyyy-MM",
+                System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var m))
+            return BadRequest(new { error = "month must be YYYY-MM." });
+        var file = await _mediator.Send(new _1Rad.Application.Features.Finance.Gstr1.ExportGstr1Query(m.Year, m.Month));
+        return File(file.Content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", file.FileName);
+    }
 }

@@ -90,7 +90,7 @@ public class WriteOffReferralDeficitCommandHandler : IRequestHandler<WriteOffRef
             CreatedBy = actor,
             UpdatedBy = actor,
             TransactionDate = now,
-            ServiceDate = now,
+            ServiceDate = IstDateRange.NowIst(), // India clock time, like visit-dated rows
             Remarks = $"DEFICIT WRITE-OFF (₹{deficit:0.##}) — centre absorbed",
             UpdatedAt = now,
         });

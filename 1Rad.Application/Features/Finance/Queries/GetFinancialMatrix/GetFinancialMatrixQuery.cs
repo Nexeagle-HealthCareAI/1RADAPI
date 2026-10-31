@@ -312,16 +312,20 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
             // hours — see IstDateRange's doc comment for the full picture.
             if (request.StartDate.HasValue)
             {
-                var start = IstDateRange.ToUtcStart(request.StartDate.Value);
+                // ServiceDate is India clock time (copied from the visit); expense
+                // TransactionDate is a UTC instant.
+                var start = IstDateRange.ClockStart(request.StartDate.Value);
                 invoiceQuery = invoiceQuery.Where(i => i.ServiceDate >= start);
-                expenseQuery = expenseQuery.Where(e => e.TransactionDate >= start);
+                var startUtc = IstDateRange.ToUtcStart(request.StartDate.Value);
+                expenseQuery = expenseQuery.Where(e => e.TransactionDate >= startUtc);
                 commissionQuery = commissionQuery.Where(c => c.ServiceDate >= start);
             }
             if (request.EndDate.HasValue)
             {
-                var end = IstDateRange.ToUtcEndInclusive(request.EndDate.Value);
+                var end = IstDateRange.ClockEndInclusive(request.EndDate.Value);
                 invoiceQuery = invoiceQuery.Where(i => i.ServiceDate <= end);
-                expenseQuery = expenseQuery.Where(e => e.TransactionDate <= end);
+                var endUtc = IstDateRange.ToUtcEndInclusive(request.EndDate.Value);
+                expenseQuery = expenseQuery.Where(e => e.TransactionDate <= endUtc);
                 commissionQuery = commissionQuery.Where(c => c.ServiceDate <= end);
             }
 

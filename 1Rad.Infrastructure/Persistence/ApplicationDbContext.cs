@@ -2,6 +2,7 @@ using System.Data;
 using System.Data.Common;
 using System.Collections.Concurrent;
 using _1Rad.Application.Interfaces;
+using _1Rad.Application.Common;
 using _1Rad.Domain.Common;
 using _1Rad.Domain.Constants;
 using _1Rad.Domain.Entities;
@@ -78,6 +79,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<DayClose> DayCloses => Set<DayClose>();
     public DbSet<ReferralPayout> ReferralPayouts => Set<ReferralPayout>();
     public DbSet<ReferralPortalView> ReferralPortalViews => Set<ReferralPortalView>();
+    public DbSet<CreditNote> CreditNotes => Set<CreditNote>();
     public DbSet<ReferrerLinkVersion> ReferrerLinkVersions => Set<ReferrerLinkVersion>();
     public DbSet<ReferralBookingRequest> ReferralBookingRequests => Set<ReferralBookingRequest>();
 
@@ -607,6 +609,24 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.IpHash).HasMaxLength(64);
             entity.Property(e => e.UserAgent).HasMaxLength(300);
             entity.HasIndex(e => new { e.HospitalId, e.ReferrerId, e.ViewedAt });
+        });
+        modelBuilder.Entity<CreditNote>(entity =>
+        {
+            entity.ToTable("CreditNotes", "dbo", tb => tb.HasTrigger("TR_CreditNotes_AppendOnly"));
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Kind).IsRequired().HasMaxLength(20);
+            entity.Property(e => e.Number).IsRequired().HasMaxLength(16);
+            entity.Property(e => e.FinancialYear).IsRequired().HasMaxLength(7);
+            entity.Property(e => e.InvoiceNumber).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.PatientName).HasMaxLength(200);
+            entity.Property(e => e.RefundModes).HasMaxLength(100);
+            entity.Property(e => e.Reason).IsRequired().HasMaxLength(500);
+            foreach (var p in new[] { nameof(CreditNote.Amount), nameof(CreditNote.TaxableValue), nameof(CreditNote.TaxAmount),
+                                      nameof(CreditNote.RefundedAmount), nameof(CreditNote.BillTotalBefore), nameof(CreditNote.BillTotalAfter) })
+                entity.Property(p).HasPrecision(18, 2);
+            entity.HasIndex(e => new { e.HospitalId, e.Number }).IsUnique();
+            entity.HasIndex(e => new { e.HospitalId, e.CreatedAt });
+            entity.HasIndex(e => e.InvoiceId);
         });
 
         modelBuilder.Entity<CreditTransaction>(entity =>
@@ -1551,6 +1571,30 @@ UPDATE dbo.StudyAssets
         }
     }
 
+    /// <summary>
+    /// Credit notes and refund vouchers (review B6/B10): hands what changed on bills in
+    /// this save to <see cref="CreditNoteIssuer"/>, which adds the documents to the same
+    /// transaction — so every billing path is covered.
+    /// </summary>
+    private Task IssueCreditNotesAsync(DateTime nowUtc, CancellationToken ct)
+    {
+        var changes = ChangeTracker.Entries<Invoice>()
+            .Where(e => e.State == EntityState.Modified)
+            .Select(e => new CreditNoteIssuer.InvoiceChange(
+                e.Entity,
+                e.Property(i => i.TotalAmount).OriginalValue,
+                e.Property(i => i.PaidAmount).OriginalValue,
+                e.Property(i => i.Status).OriginalValue,
+                e.Property(i => i.DeletedAt).OriginalValue))
+            .ToList();
+        var refunds = ChangeTracker.Entries<Payment>()
+            .Where(e => e.State == EntityState.Added)
+            .Select(e => e.Entity)
+            .ToList();
+        var touched = ChangeTracker.Entries<Invoice>().Select(e => e.Entity).ToList();
+        return CreditNoteIssuer.IssueAsync(this, changes, refunds, touched, nowUtc, ct);
+    }
+
     public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
     {
         // Sync foundations: keep Appointment.UpdatedAt fresh on every write
@@ -1561,6 +1605,7 @@ UPDATE dbo.StudyAssets
         // the same transaction.
         var nowUtc = DateTime.UtcNow;
         await StampLineTaxAsync(cancellationToken);
+        await IssueCreditNotesAsync(nowUtc, cancellationToken);
         foreach (var entry in ChangeTracker.Entries<Appointment>())
         {
             if (entry.State == EntityState.Added || entry.State == EntityState.Modified)

@@ -35,10 +35,11 @@ public static class AppointmentAttendance
     /// <summary>
     /// ATTENDED, NO_SHOW (not attended and its IST day is already over) or UPCOMING (not
     /// attended yet, today or later). Callers pass cancelled visits nowhere near this.
+    /// `visitIst` is Appointment.DateTime, which is India clock time.
     /// </summary>
-    public static string Classify(string? status, DateTime? arrivedAt, DateTime visitUtc, DateTime nowUtc)
+    public static string Classify(string? status, DateTime? arrivedAt, DateTime visitIst, DateTime nowUtc)
     {
         if (IsAttended(status, arrivedAt)) return Attended;
-        return IstDateRange.ToIst(visitUtc).Date < IstDateRange.ToIst(nowUtc).Date ? NoShow : Upcoming;
+        return visitIst.Date < IstDateRange.ToIst(nowUtc).Date ? NoShow : Upcoming;
     }
 }

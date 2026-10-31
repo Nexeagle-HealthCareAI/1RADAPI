@@ -84,6 +84,11 @@ public class CreateAppointmentCommandHandler : IRequestHandler<CreateAppointment
 
     public async Task<Guid> Handle(CreateAppointmentCommand request, CancellationToken cancellationToken)
     {
+        // Visit times are stored as India clock time. A client or integration that sends
+        // a UTC instant ("…Z", a FHIR occurrence) is converted here; a bare
+        // "2026-10-31T10:30" is already India time and is kept as is.
+        request = request with { DateTime = IstDateRange.NormalizeToClock(request.DateTime) };
+
         var patient = await _context.Patients
             .FirstOrDefaultAsync(p => p.PatientId == request.PatientId, cancellationToken);
 

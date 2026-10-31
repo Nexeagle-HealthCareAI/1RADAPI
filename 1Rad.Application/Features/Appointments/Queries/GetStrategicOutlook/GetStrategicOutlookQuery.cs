@@ -1,3 +1,4 @@
+using _1Rad.Application.Common;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -52,17 +53,17 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
             if (request.StartDate.HasValue || request.EndDate.HasValue)
             {
                 rangeStart = request.StartDate ?? DateTime.MinValue;
-                rangeEnd = request.EndDate.HasValue ? request.EndDate.Value.Date.AddDays(1) : DateTime.Today.AddDays(1);
+                rangeEnd = request.EndDate.HasValue ? request.EndDate.Value.Date.AddDays(1) : IstDateRange.NowIst().Date.AddDays(1);
             }
             else
             {
-                var todayDate = (request.ReferenceDate ?? DateTime.Today).Date;
+                var todayDate = (request.ReferenceDate ?? IstDateRange.NowIst().Date).Date;
                 rangeStart = todayDate;
                 rangeEnd = todayDate.AddDays(1);
             }
 
-            var startOfWeek = rangeStart == DateTime.MinValue ? DateTime.Today.AddDays(-6) : rangeStart.AddDays(-6);
-            var last30Days = rangeStart == DateTime.MinValue ? DateTime.Today.AddDays(-30) : rangeStart.AddDays(-30);
+            var startOfWeek = rangeStart == DateTime.MinValue ? IstDateRange.NowIst().Date.AddDays(-6) : rangeStart.AddDays(-6);
+            var last30Days = rangeStart == DateTime.MinValue ? IstDateRange.NowIst().Date.AddDays(-30) : rangeStart.AddDays(-30);
 
             // --- 1. CORE MISSION DATA ---
             //
@@ -160,8 +161,8 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
             try
             {
                 var duration = rangeEnd - rangeStart;
-                var prevStart = rangeStart == DateTime.MinValue ? DateTime.Today.AddDays(-30) : rangeStart - duration;
-                var prevEnd = rangeStart == DateTime.MinValue ? DateTime.Today : rangeStart;
+                var prevStart = rangeStart == DateTime.MinValue ? IstDateRange.NowIst().Date.AddDays(-30) : rangeStart - duration;
+                var prevEnd = rangeStart == DateTime.MinValue ? IstDateRange.NowIst().Date : rangeStart;
 
                 var currentCount = dailyMissions;
                 var previousCount = await _context.Appointments

@@ -58,13 +58,14 @@ public class DailyReferralExcelReportJob : BackgroundService
         var context = scope.ServiceProvider.GetRequiredService<IApplicationDbContext>();
         var emailService = scope.ServiceProvider.GetRequiredService<IEmailService>();
 
-        // IST calendar day and week (Monday start), as UTC windows (columns hold UTC).
+        // IST calendar day and week (Monday start). Appointment.DateTime is India clock
+        // time, so the windows are plain IST dates (the variable names are historical).
         var today = JobSchedule.IstToday(DateTime.UtcNow);
         var startOfWeek = today.AddDays(-(int)today.DayOfWeek + (int)DayOfWeek.Monday);
         if (today < startOfWeek) startOfWeek = startOfWeek.AddDays(-7);
-        var dayStartUtc = IstDateRange.ToUtcStart(today);
+        var dayStartUtc = IstDateRange.ClockStart(today);
         var dayEndUtc = dayStartUtc.AddDays(1);
-        var weekStartUtc = IstDateRange.ToUtcStart(startOfWeek);
+        var weekStartUtc = IstDateRange.ClockStart(startOfWeek);
 
         // Several API instances each run this job; only one sends the emails.
         if (!await JobSchedule.TryClaimAsync(context, "DailyReferralExcelReport", today.ToString("yyyy-MM-dd"), _logger, stoppingToken))

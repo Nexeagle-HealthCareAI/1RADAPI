@@ -38,15 +38,15 @@ public static class AppointmentQueryExtensions
 
         if (request.StartDate.HasValue)
         {
-            // A bare "YYYY-MM-DD" (see IstDateRange) — not to be confused with
+            // A bare "YYYY-MM-DD"; DateTime is India clock time (see IstDateRange) — not to be confused with
             // UpdatedAfter above, which is already a precise UTC instant.
-            query = query.Where(a => a.DateTime >= IstDateRange.ToUtcStart(request.StartDate.Value));
+            query = query.Where(a => a.DateTime >= IstDateRange.ClockStart(request.StartDate.Value));
         }
 
         if (request.EndDate.HasValue)
         {
             // Inclusive of the whole IST day named by EndDate.
-            query = query.Where(a => a.DateTime <= IstDateRange.ToUtcEndInclusive(request.EndDate.Value));
+            query = query.Where(a => a.DateTime <= IstDateRange.ClockEndInclusive(request.EndDate.Value));
         }
 
         if (request.ActiveSince.HasValue)
@@ -56,7 +56,7 @@ public static class AppointmentQueryExtensions
             // N days regardless of status AND any older visit that hasn't
             // reached a finalized status yet, so an old STAT study nobody
             // completed can't silently fall off the board.
-            var recentFrom = IstDateRange.ToUtcStart(request.ActiveSince.Value);
+            var recentFrom = IstDateRange.ClockStart(request.ActiveSince.Value);
             query = query.Where(a =>
                 a.DateTime >= recentFrom
                 || a.Status == null

@@ -129,8 +129,9 @@ public class SourceAnalyticsTests : BaseHandlerTest
         Assert.Equal("UPCOMING", AppointmentAttendance.Classify("BOOKED", null, now.AddHours(3), now));      // later today
         Assert.Equal("UPCOMING", AppointmentAttendance.Classify(null, null, now.AddDays(2), now));
         Assert.Equal("NO_SHOW", AppointmentAttendance.Classify("BOOKED", null, now.AddDays(-1), now));
-        // 23:30 IST is still "today" while it is 22:30 IST (17:00 UTC) - and a NO_SHOW once the IST day has rolled over.
-        var lateSlot = new DateTime(2026, 6, 15, 18, 0, 0, DateTimeKind.Utc);
+        // Visit times are India clock time. A 23:30 slot is still "today" while it is 22:30 IST
+        // (17:00 UTC) - and a NO_SHOW once the IST day has rolled over (20:00 UTC = 01:30 IST).
+        var lateSlot = new DateTime(2026, 6, 15, 23, 30, 0);
         Assert.Equal("UPCOMING", AppointmentAttendance.Classify("BOOKED", null, lateSlot, new DateTime(2026, 6, 15, 17, 0, 0, DateTimeKind.Utc)));
         Assert.Equal("NO_SHOW", AppointmentAttendance.Classify("BOOKED", null, lateSlot, new DateTime(2026, 6, 15, 20, 0, 0, DateTimeKind.Utc)));
     }

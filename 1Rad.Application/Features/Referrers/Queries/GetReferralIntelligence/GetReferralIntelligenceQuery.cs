@@ -89,8 +89,8 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
         if (!string.IsNullOrWhiteSpace(request.SourceKey)) filterKey = request.SourceKey.Trim();
 
         // Bare "YYYY-MM-DD" range -> IST day boundaries (see IstDateRange).
-        DateTime? fromUtc = request.StartDate.HasValue ? IstDateRange.ToUtcStart(request.StartDate.Value) : null;
-        DateTime? toUtc = request.EndDate.HasValue ? IstDateRange.ToUtcEndInclusive(request.EndDate.Value) : null;
+        DateTime? fromUtc = request.StartDate.HasValue ? IstDateRange.ClockStart(request.StartDate.Value) : null;
+        DateTime? toUtc = request.EndDate.HasValue ? IstDateRange.ClockEndInclusive(request.EndDate.Value) : null;
 
         // ── Every non-cancelled visit in range (attendance is decided in memory) ─
         var appointmentsQuery = _context.Appointments
@@ -334,7 +334,7 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
                     : "Paid";
 
                 invoicesByAppt.TryGetValue(m.AppointmentId, out var inv);
-                var ist = IstDateRange.ToIst(m.DateTime);
+                var ist = m.DateTime; // already India clock time
                 var isFirst = firstVisitByPatient.TryGetValue(m.PatientId, out var firstId) && firstId == m.AppointmentId;
 
                 return new ReferredPatientDto(

@@ -203,7 +203,7 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
                 ReferralCutValue = request.CommissionAmount ?? 0,
                 Status = "PENDING",
                 CreatedAt = invoiceCreatedAt,
-                ServiceDate = appointmentDateTime ?? invoiceCreatedAt,
+                ServiceDate = appointmentDateTime ?? IstDateRange.NowIst(), // India clock time, like the visit
             };
 
             foreach (var item in request.Items)
@@ -302,7 +302,7 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
                             // (matching the invoice's own ServiceDate above) instead of
                             // defaulting, so every reader agrees on which day this
                             // freeform/manual commission belongs to.
-                            ServiceDate = appointmentDateTime ?? invoiceCreatedAt,
+                            ServiceDate = appointmentDateTime ?? IstDateRange.NowIst(), // India clock time, like the visit
                             Status = "UNPAID",
                             ReferenceNumber = invoice.InvoiceId,
                             AppointmentId = invoice.AppointmentId,

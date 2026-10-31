@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using _1Rad.Application.Common;
 using _1Rad.Domain.Entities;
 
 namespace _1Rad.Infrastructure.Interop;
@@ -9,7 +10,7 @@ public sealed record FhirPatientRow(
 
 public sealed record FhirServiceRequestRow(
     Guid Id, Guid HospitalId, Guid AppointmentId, string? DisplayId, string? ServiceStatus, string? AppointmentStatus,
-    string? Priority, string? ServiceName, string? Modality, DateTime ScheduledUtc, Guid PatientId, string? PatientName,
+    string? Priority, string? ServiceName, string? Modality, DateTime ScheduledIst, Guid PatientId, string? PatientName,
     string? ReferredBy, DateTime UpdatedAt, DateTime? CancelledAt);
 
 public sealed record FhirSeriesRow(string SeriesUid, string? Modality, string? Description, int Instances, int? SeriesNumber);
@@ -116,7 +117,7 @@ public static class FhirMapper
             ["priority"] = Priority(r.Priority),
             ["code"] = code,
             ["subject"] = Reference("Patient", r.PatientId, r.PatientName),
-            ["occurrenceDateTime"] = Instant(r.ScheduledUtc),
+            ["occurrenceDateTime"] = Instant(IstDateRange.ClockToUtc(r.ScheduledIst)),
         };
         if (!string.IsNullOrWhiteSpace(r.ReferredBy))
             o["requester"] = new JsonObject { ["display"] = r.ReferredBy.Trim() };
