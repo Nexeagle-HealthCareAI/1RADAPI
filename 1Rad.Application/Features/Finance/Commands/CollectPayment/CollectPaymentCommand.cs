@@ -233,8 +233,11 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
             // bill an admin already discounted still works.
             var newCentreAndDeduction = invoice.CentreDiscount + invoice.InstitutionalDeduction;
             if (newCentreAndDeduction > oldCentreAndDeduction + 0.009m)
-                DiscountPolicy.CheckLimit(_context.UserContext, _configuration, invoice.GrossAmount,
+            {
+                var centreSettings = await BillingSettings.GetAsync(_context, invoice.HospitalId, _configuration, cancellationToken);
+                DiscountPolicy.CheckLimit(_context.UserContext, BillingSettings.Overlay(centreSettings, _configuration), invoice.GrossAmount,
                     invoice.CentreDiscount, invoice.InstitutionalDeduction);
+            }
             InvoiceTotals.ApplyDiscountAndFinalize(invoice, totalDiscount);
 
             // Already-settled check, against the FRESH balance (see note above).

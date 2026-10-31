@@ -51,6 +51,11 @@ public class ExportGstr1QueryHandler : IRequestHandler<ExportGstr1Query, Gstr1Fi
         var start = IstDateRange.ToUtcStart(firstDay);
         var endExcl = IstDateRange.ToUtcStart(firstDay.AddMonths(1));
 
+        var settings = await Common.BillingSettings.GetAsync(_db, hospitalId, null, ct);
+        if (!settings.GstEnabled)
+            throw new BusinessRuleViolationException(
+                "GST is switched off for this centre (Admin → Tax & billing), so there is no GSTR-1 to prepare.", "GST_DISABLED");
+
         var hospital = await _db.Hospitals.AsNoTracking().Where(h => h.HospitalId == hospitalId)
             .Select(h => new { h.HospitalName, h.GSTIN }).FirstOrDefaultAsync(ct);
         var gstin = (hospital?.GSTIN ?? string.Empty).Trim().ToUpperInvariant();

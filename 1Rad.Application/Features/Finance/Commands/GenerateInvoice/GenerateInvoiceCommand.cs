@@ -176,7 +176,8 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
             {
                 throw new ArgumentException("Total discount cannot exceed the invoice gross amount.");
             }
-            DiscountPolicy.CheckLimit(_context.UserContext, _configuration, grossAmount, request.CentreDiscount, 0);
+            var centreSettings = await BillingSettings.GetAsync(_context, _context.UserContext.HospitalId, _configuration, cancellationToken);
+            DiscountPolicy.CheckLimit(_context.UserContext, BillingSettings.Overlay(centreSettings, _configuration), grossAmount, request.CentreDiscount, 0);
 
             // ServiceDate is what GetFinancialMatrixQuery (Service Performance,
             // Analytics, and every other matrix tab) filters invoices by — it was

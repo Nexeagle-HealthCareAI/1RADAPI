@@ -84,6 +84,14 @@ public static class CreditNoteIssuer
 
         if (drafts.Count == 0) return drafts;
 
+        // The centre's admin may have switched credit notes, or GST, off.
+        var hospitals = drafts.Select(d => d.HospitalId).Distinct().ToList();
+        var settings = await db.HospitalBillingSettings.IgnoreQueryFilters().AsNoTracking()
+            .Where(b => hospitals.Contains(b.HospitalId)).ToListAsync(ct);
+        drafts.RemoveAll(d => settings.Any(b => b.HospitalId == d.HospitalId && !b.CreditNotesEnabled));
+        if (drafts.Count == 0) return drafts;
+        var gstOff = settings.Where(b => !b.GstEnabled).Select(b => b.HospitalId).ToHashSet();
+
         var ids = drafts.Select(d => d.InvoiceId).Distinct().ToList();
         var items = await db.Invoices.IgnoreQueryFilters().AsNoTracking()
             .Where(i => ids.Contains(i.Id))
@@ -91,7 +99,7 @@ public static class CreditNoteIssuer
             .ToListAsync(ct);
         foreach (var d in drafts)
         {
-            if (d.Kind == CreditNoteKinds.CreditNote)
+            if (d.Kind == CreditNoteKinds.CreditNote && !gstOff.Contains(d.HospitalId))
                 d.TaxAmount = Math.Round(d.Amount * TaxShare(items.Where(i => i.InvoiceId == d.InvoiceId)), 2);
             d.TaxableValue = Math.Round(d.Amount - d.TaxAmount, 2);
 

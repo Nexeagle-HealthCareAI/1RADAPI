@@ -230,10 +230,15 @@ public class PayReferralCommissionsCommandHandler : IRequestHandler<PayReferralC
             return id;
         }
 
+        // The centre's own TDS switch and rates (Admin → Tax & billing).
+        var centre = await BillingSettings.GetAsync(_context, hospitalId, _configuration, ct);
+        var taxConfig = BillingSettings.Overlay(centre, _configuration);
         var category = (request.TdsCategory ?? ReferralTds.None).Trim().ToUpperInvariant();
-        var rule = ReferralTds.RuleFor(category, _configuration);
+        var rule = ReferralTds.RuleFor(category, taxConfig);
         if (category != ReferralTds.None && rule == null)
             throw new ValidationException("TDS category must be COMMISSION, PROFESSIONAL or NONE.");
+        var tdsSwitchedOff = !centre.TdsEnabled && rule != null;
+        if (!centre.TdsEnabled) { category = ReferralTds.None; rule = null; }
         var mode = string.IsNullOrWhiteSpace(request.Mode) ? "CASH" : request.Mode.Trim().ToUpperInvariant();
         if (mode.Length > 20) throw new ValidationException("Payment mode is too long.");
         var reference = string.IsNullOrWhiteSpace(request.Reference) ? null : request.Reference.Trim();
@@ -249,6 +254,8 @@ public class PayReferralCommissionsCommandHandler : IRequestHandler<PayReferralC
         var (fyStart, fyEnd) = FinancialYearBounds(fy);
         var payouts = new List<PayoutSummary>();
         var notices = new List<string>();
+        if (tdsSwitchedOff)
+            notices.Add("TDS is switched off for this centre (Admin → Tax & billing), so nothing is deducted from this payout.");
 
         foreach (var group in paidRows.GroupBy(c => Root(c.ReferrerId)))
         {
@@ -276,7 +283,7 @@ public class PayReferralCommissionsCommandHandler : IRequestHandler<PayReferralC
             var yearBefore = earlier.Sum(e => e.Taxable) + legacy;
             var yearTaxed = earlier.Where(e => e.TdsAmount > 0).Sum(e => e.Taxable);
 
-            var tds = ReferralTds.Compute(rule, ReferralTds.IsValidPan(pan), yearBefore, yearTaxed, taxable, _configuration);
+            var tds = ReferralTds.Compute(rule, ReferralTds.IsValidPan(pan), yearBefore, yearTaxed, taxable, taxConfig);
             var net = taxable - tds.Tds;
 
             if (partner?.IsDoctor == true && category == ReferralTds.Commission)

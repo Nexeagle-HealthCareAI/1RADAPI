@@ -80,6 +80,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<ReferralPayout> ReferralPayouts => Set<ReferralPayout>();
     public DbSet<ReferralPortalView> ReferralPortalViews => Set<ReferralPortalView>();
     public DbSet<CreditNote> CreditNotes => Set<CreditNote>();
+    public DbSet<HospitalBillingSettings> HospitalBillingSettings => Set<HospitalBillingSettings>();
     public DbSet<ReferrerLinkVersion> ReferrerLinkVersions => Set<ReferrerLinkVersion>();
     public DbSet<ReferralBookingRequest> ReferralBookingRequests => Set<ReferralBookingRequest>();
 
@@ -609,6 +610,17 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.IpHash).HasMaxLength(64);
             entity.Property(e => e.UserAgent).HasMaxLength(300);
             entity.HasIndex(e => new { e.HospitalId, e.ReferrerId, e.ViewedAt });
+        });
+        modelBuilder.Entity<HospitalBillingSettings>(entity =>
+        {
+            entity.ToTable("HospitalBillingSettings", "dbo");
+            entity.HasKey(e => e.HospitalId);
+            entity.Property(e => e.DefaultTdsCategory).IsRequired().HasMaxLength(20);
+            foreach (var p in new[] { nameof(HospitalBillingSettings.TdsCommissionRate), nameof(HospitalBillingSettings.TdsProfessionalRate),
+                                      nameof(HospitalBillingSettings.TdsNoPanRate), nameof(HospitalBillingSettings.FrontDeskDiscountLimitPercent) })
+                entity.Property(p).HasPrecision(5, 2);
+            entity.Property(e => e.TdsCommissionThreshold).HasPrecision(18, 2);
+            entity.Property(e => e.TdsProfessionalThreshold).HasPrecision(18, 2);
         });
         modelBuilder.Entity<CreditNote>(entity =>
         {
@@ -1556,8 +1568,31 @@ UPDATE dbo.StudyAssets
                 .Select(s => new { s.Id, s.ServiceCharge!.SacCode, s.ServiceCharge.GstRate })
                 .ToListAsync(ct))
               .ToDictionary(x => x.Id, x => (x.SacCode, x.GstRate));
+
+        // A centre whose admin has switched GST off bills every line at 0%.
+        var invoiceIds = fresh.Select(i => i.InvoiceId).Distinct().ToList();
+        var tracked = ChangeTracker.Entries<Invoice>().Select(e => e.Entity).Where(i => invoiceIds.Contains(i.Id))
+            .ToDictionary(i => i.Id, i => i.HospitalId);
+        var missing = invoiceIds.Where(id => !tracked.ContainsKey(id)).ToList();
+        if (missing.Count > 0)
+            foreach (var x in await Invoices.IgnoreQueryFilters().AsNoTracking().Where(i => missing.Contains(i.Id))
+                         .Select(i => new { i.Id, i.HospitalId }).ToListAsync(ct))
+                tracked[x.Id] = x.HospitalId;
+        var hospitalIds = tracked.Values.Distinct().ToList();
+        var gstOff = (await HospitalBillingSettings.IgnoreQueryFilters().AsNoTracking()
+                .Where(b => hospitalIds.Contains(b.HospitalId) && !b.GstEnabled)
+                .Select(b => b.HospitalId).ToListAsync(ct))
+            .ToHashSet();
+
         foreach (var item in fresh)
         {
+            if (tracked.TryGetValue(item.InvoiceId, out var hid) && gstOff.Contains(hid))
+            {
+                item.SacCode ??= item.AppointmentServiceId is Guid s0 && taxByService.TryGetValue(s0, out var t0) && !string.IsNullOrWhiteSpace(t0.Sac)
+                    ? t0.Sac : GstDefaults.DiagnosticSac;
+                item.GstRate = 0m;
+                continue;
+            }
             if (item.AppointmentServiceId is Guid sid && taxByService.TryGetValue(sid, out var t))
             {
                 item.SacCode = string.IsNullOrWhiteSpace(t.Sac) ? GstDefaults.DiagnosticSac : t.Sac;
