@@ -35,7 +35,8 @@ internal static class ReferrerReassign
         string? degree = null,
         string? address = null,
         string? supportedSpecialty = null,
-        string? supportedDegree = null)
+        string? supportedDegree = null,
+        Guid? newReferrerId = null)
     {
         // Stored UPPERCASE for consistency (#15); blank guards out.
         var name = NameNormalizer.Upper(newReferrerName);
@@ -49,8 +50,11 @@ internal static class ReferrerReassign
         if (appointment == null) return;
 
         // Resolve / create the target referrer (hospital-scoped, case-insensitive).
-        var referrer = await ctx.Referrers
-            .FirstOrDefaultAsync(r => r.Name!.ToLower() == name.ToLower() && r.HospitalId == hospitalId, ct);
+        // Same resolver as booking (#13/#25): a picked partner id wins, then the name
+        // (live, unmerged partners only) - never a namesake's deleted record.
+        var referrer = await ReferrerResolver.ResolveAsync(ctx, hospitalId, newReferrerId, newReferrerName, newReferrerContact, ct);
+        var referrerIsNew = referrer == null;
+        if (referrer != null) name = referrer.Name ?? name;
         if (referrer == null)
         {
             referrer = new Referrer
@@ -63,7 +67,8 @@ internal static class ReferrerReassign
             };
             ctx.Referrers.Add(referrer);
         }
-        if (newReferrerIsDoctor.HasValue) referrer.IsDoctor = newReferrerIsDoctor.Value;
+        // Only a brand-new partner takes its type from this form (#13).
+        if (referrerIsNew && newReferrerIsDoctor.HasValue) referrer.IsDoctor = newReferrerIsDoctor.Value;
 
         var contact = (newReferrerContact ?? string.Empty).Trim();
         if (!string.IsNullOrEmpty(contact))
@@ -77,7 +82,7 @@ internal static class ReferrerReassign
         // Full profile (parity with booking) — only overwrite when a value is given.
         if (!string.IsNullOrWhiteSpace(email)) referrer.Email = email.Trim();
         if (!string.IsNullOrWhiteSpace(address)) referrer.Address = address.Trim();
-        if ((newReferrerIsDoctor ?? referrer.IsDoctor))
+        if (referrer.IsDoctor)
         {
             if (!string.IsNullOrWhiteSpace(specialty)) referrer.Specialty = specialty.Trim();
             if (!string.IsNullOrWhiteSpace(degree)) referrer.Degree = degree.Trim();
@@ -91,10 +96,10 @@ internal static class ReferrerReassign
         // "Other person" (agent) → record the doctor they collect for. Doctors and
         // Self carry no supporting doctor.
         var supDoc = NameNormalizer.Upper(supportedByDoctor);
-        if (!isSelf && newReferrerIsDoctor == false && supDoc.Length > 0)
+        if (!isSelf && !referrer.IsDoctor && supDoc.Length > 0)
         {
             appointment.SupportedByDoctor = supDoc;
-            referrer.SupportedByDoctor = supDoc;
+            if (string.IsNullOrWhiteSpace(referrer.SupportedByDoctor)) referrer.SupportedByDoctor = supDoc;
 
             // Upsert the supporting doctor's own referrer record so their profile
             // (speciality / degree) is stored, mirroring booking.

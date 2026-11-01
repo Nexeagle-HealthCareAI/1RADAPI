@@ -115,7 +115,7 @@ public class CollectPaymentCommandHandlerTests : BaseHandlerTest
     }
 
     [Fact]
-    public async Task Handle_ZeroAmount_ThrowsArgumentException()
+    public async Task Handle_ZeroAmount_OnMissingBill_ThrowsNotFound()
     {
         // Arrange
         var command = new CollectPaymentCommand
@@ -125,13 +125,13 @@ public class CollectPaymentCommandHandlerTests : BaseHandlerTest
             PaymentMethod = "CASH"
         };
 
-        // Act & Assert
-        await Assert.ThrowsAsync<ArgumentException>(
+        // Act & Assert — ₹0 is a valid "discount only" settlement; the bill doesn't exist.
+        await Assert.ThrowsAsync<_1Rad.Domain.Exceptions.NotFoundException>(
             () => _handler.Handle(command, CancellationToken.None));
     }
 
     [Fact]
-    public async Task Handle_NegativeAmount_ThrowsArgumentException()
+    public async Task Handle_NegativeAmount_ThrowsValidationException()
     {
         // Arrange
         var command = new CollectPaymentCommand
@@ -142,12 +142,12 @@ public class CollectPaymentCommandHandlerTests : BaseHandlerTest
         };
 
         // Act & Assert
-        await Assert.ThrowsAsync<ArgumentException>(
+        await Assert.ThrowsAsync<_1Rad.Domain.Exceptions.ValidationException>(
             () => _handler.Handle(command, CancellationToken.None));
     }
 
     [Fact]
-    public async Task Handle_InvoiceNotFound_ThrowsKeyNotFoundException()
+    public async Task Handle_InvoiceNotFound_ThrowsNotFoundException()
     {
         // Arrange
         var command = new CollectPaymentCommand
@@ -158,12 +158,12 @@ public class CollectPaymentCommandHandlerTests : BaseHandlerTest
         };
 
         // Act & Assert
-        await Assert.ThrowsAsync<KeyNotFoundException>(
+        await Assert.ThrowsAsync<_1Rad.Domain.Exceptions.NotFoundException>(
             () => _handler.Handle(command, CancellationToken.None));
     }
 
     [Fact]
-    public async Task Handle_InvoiceFromDifferentHospital_ThrowsKeyNotFoundException()
+    public async Task Handle_InvoiceFromDifferentHospital_ThrowsNotFoundException()
     {
         // Arrange
         var invoiceId = Guid.NewGuid();
@@ -189,12 +189,12 @@ public class CollectPaymentCommandHandlerTests : BaseHandlerTest
         };
 
         // Act & Assert
-        await Assert.ThrowsAsync<KeyNotFoundException>(
+        await Assert.ThrowsAsync<_1Rad.Domain.Exceptions.NotFoundException>(
             () => _handler.Handle(command, CancellationToken.None));
     }
 
     [Fact]
-    public async Task Handle_AlreadyPaidInvoice_ThrowsInvalidOperationException()
+    public async Task Handle_AlreadyPaidInvoice_ThrowsConflictException()
     {
         // Arrange
         var invoiceId = Guid.NewGuid();
@@ -220,12 +220,12 @@ public class CollectPaymentCommandHandlerTests : BaseHandlerTest
         };
 
         // Act & Assert
-        await Assert.ThrowsAsync<InvalidOperationException>(
+        await Assert.ThrowsAsync<_1Rad.Domain.Exceptions.ConflictException>(
             () => _handler.Handle(command, CancellationToken.None));
     }
 
     [Fact]
-    public async Task Handle_CancelledInvoice_ThrowsInvalidOperationException()
+    public async Task Handle_CancelledInvoice_ThrowsBusinessRuleViolation()
     {
         // Arrange
         var invoiceId = Guid.NewGuid();
@@ -251,7 +251,7 @@ public class CollectPaymentCommandHandlerTests : BaseHandlerTest
         };
 
         // Act & Assert
-        await Assert.ThrowsAsync<InvalidOperationException>(
+        await Assert.ThrowsAsync<_1Rad.Domain.Exceptions.BusinessRuleViolationException>(
             () => _handler.Handle(command, CancellationToken.None));
     }
 
@@ -417,5 +417,63 @@ public class CollectPaymentCommandHandlerTests : BaseHandlerTest
         Assert.Equal(0m, invoice.AdditionalCharges);
         Assert.Equal("[]", invoice.AdditionalChargesReason);
         Assert.Empty(Context.InvoiceExtraCharges.Where(charge => charge.InvoiceId == invoiceId));
+    }
+
+    // ── Review B1 / B6 / B7 (Oct 2026) ─────────────────────────────────────
+
+    [Fact]
+    public async Task Handle_StaleRowVersion_IsRefusedWithConflict()
+    {
+        var invoiceId = Guid.NewGuid();
+        Context.Invoices.Add(new Invoice
+        {
+            Id = invoiceId, InvoiceId = "INV-RV-1", HospitalId = HospitalId,
+            GrossAmount = 1000m, TotalAmount = 1000m, Status = "PENDING",
+            RowVersion = new byte[] { 0, 0, 0, 0, 0, 0, 0, 2 },
+        });
+        await Context.SaveChangesAsync();
+
+        await Assert.ThrowsAsync<_1Rad.Domain.Exceptions.ConflictException>(() => _handler.Handle(new CollectPaymentCommand
+        {
+            InvoiceId = invoiceId, Amount = 500m, PaymentMethod = "CASH",
+            RowVersion = Convert.ToBase64String(new byte[] { 0, 0, 0, 0, 0, 0, 0, 1 }),
+        }, CancellationToken.None));
+        Assert.Empty(Context.Payments.Where(p => p.InvoiceId == invoiceId));
+    }
+
+    [Fact]
+    public async Task Handle_PaidAmountComesFromPaymentRows()
+    {
+        var invoiceId = Guid.NewGuid();
+        Context.Invoices.Add(new Invoice
+        {
+            Id = invoiceId, InvoiceId = "INV-ROWS-1", HospitalId = HospitalId,
+            GrossAmount = 1000m, TotalAmount = 1000m, Status = "PARTIAL",
+            PaidAmount = 900m, // drifted: only ₹400 was actually recorded
+        });
+        Context.Payments.Add(new Payment { InvoiceId = invoiceId, HospitalId = HospitalId, Amount = 400m, PaymentMethod = "CASH" });
+        await Context.SaveChangesAsync();
+
+        await _handler.Handle(new CollectPaymentCommand { InvoiceId = invoiceId, Amount = 100m, PaymentMethod = "CASH" }, CancellationToken.None);
+
+        var updated = await Context.Invoices.FindAsync(invoiceId);
+        Assert.Equal(500m, updated!.PaidAmount);
+        Assert.Equal("PARTIAL", updated.Status);
+    }
+
+    [Fact]
+    public async Task Handle_FrontDeskDiscountAboveLimit_IsRefused()
+    {
+        MockUserContext.Setup(x => x.RoleIds).Returns(new[] { 5 }); // Receptionist
+        var invoiceId = Guid.NewGuid();
+        var invoice = new Invoice { Id = invoiceId, InvoiceId = "INV-DISC-1", HospitalId = HospitalId, GrossAmount = 1000m, TotalAmount = 1000m, Status = "PENDING" };
+        invoice.Items.Add(new InvoiceItem { InvoiceId = invoiceId, Description = "CT", Amount = 1000m, Quantity = 1 });
+        Context.Invoices.Add(invoice);
+        await Context.SaveChangesAsync();
+
+        await Assert.ThrowsAsync<_1Rad.Domain.Exceptions.BusinessRuleViolationException>(() => _handler.Handle(new CollectPaymentCommand
+        {
+            InvoiceId = invoiceId, Amount = 700m, PaymentMethod = "CASH", CentreDiscount = 300m,
+        }, CancellationToken.None));
     }
 }

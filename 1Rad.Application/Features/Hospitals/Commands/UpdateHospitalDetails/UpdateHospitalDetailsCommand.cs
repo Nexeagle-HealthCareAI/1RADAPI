@@ -12,4 +12,7 @@ public record UpdateHospitalDetailsCommand(
     string? NABHNumber,
     bool IsAutoBillingEnabled,
     decimal? Latitude = null,
-    decimal? Longitude = null) : IRequest<(bool Success, string? Error)>;
+    decimal? Longitude = null,
+    // Review R9: null = leave as is; "" clears.
+    string? PublicContact = null,
+    string? PublicEmail = null) : IRequest<(bool Success, string? Error)>;

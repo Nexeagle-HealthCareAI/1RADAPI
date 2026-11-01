@@ -20,7 +20,9 @@ public record UpdateReferrerCommand(
     string? Specialty = null,
     string? Degree = null,
     bool IsDoctor = true,
-    string? SupportedByDoctor = null
+    string? SupportedByDoctor = null,
+    // Review R10. Null = leave as is; "" clears.
+    string? Pan = null
 ) : IRequest<bool>;
 
 public class UpdateReferrerCommandHandler : IRequestHandler<UpdateReferrerCommand, bool>
@@ -86,6 +88,13 @@ public class UpdateReferrerCommandHandler : IRequestHandler<UpdateReferrerComman
         referrer.Degree    = string.IsNullOrWhiteSpace(request.Degree)    ? null : request.Degree.Trim();
         referrer.IsDoctor  = request.IsDoctor;
         referrer.SupportedByDoctor = string.IsNullOrWhiteSpace(request.SupportedByDoctor) ? null : request.SupportedByDoctor.Trim();
+        if (request.Pan != null)
+        {
+            var pan = request.Pan.Trim().ToUpperInvariant();
+            if (pan.Length > 0 && !ReferralTds.IsValidPan(pan))
+                throw new ValidationException("PAN should look like ABCDE1234F.");
+            referrer.Pan = pan.Length == 0 ? null : pan;
+        }
 
         await _context.SaveChangesAsync(cancellationToken);
         return true;

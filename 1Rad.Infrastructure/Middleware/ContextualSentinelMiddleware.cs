@@ -121,7 +121,13 @@ public class ContextualSentinelMiddleware
 
                     // Custom role matches — inject one of the required role claims so that
                     // ASP.NET's [Authorize(Roles=...)] evaluation passes downstream.
-                    var grantRole = requiredRoles.First();
+                    // Stand in the LEAST privileged required role (review A4): never an admin
+                    // role when a non-admin one would do, so in-action role checks
+                    // (e.g. who may cancel) still see the custom role for what it is.
+                    var grantRole = requiredRoles.FirstOrDefault(r =>
+                                        !string.Equals(r, RoleConstants.AdminDoctor, StringComparison.OrdinalIgnoreCase)
+                                     && !string.Equals(r, RoleConstants.AdminOperator, StringComparison.OrdinalIgnoreCase))
+                                    ?? requiredRoles.First();
                     var identity = context.User.Identity as ClaimsIdentity;
                     identity?.AddClaim(new Claim(ClaimTypes.Role, grantRole));
 

@@ -48,9 +48,9 @@ public class ApprovalsController : ControllerBase
     [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator}")]
     public async Task<IActionResult> Review(Guid id, [FromBody] ReviewApprovalRequest body)
     {
-        await _mediator.Send(new ReviewApprovalCommand { Id = id, Approve = body.Approve, Note = body.Note });
+        await _mediator.Send(new ReviewApprovalCommand { Id = id, Approve = body.Approve, Note = body.Note, RefundMode = body.RefundMode });
         return Ok(new { ok = true });
     }
 
-    public record ReviewApprovalRequest(bool Approve, string? Note);
+    public record ReviewApprovalRequest(bool Approve, string? Note, string? RefundMode = null);
 }

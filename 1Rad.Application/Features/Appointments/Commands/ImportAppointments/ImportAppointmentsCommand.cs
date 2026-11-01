@@ -1,3 +1,4 @@
+using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Entities;
 using MediatR;
@@ -109,7 +110,7 @@ public class ImportAppointmentsCommandHandler : IRequestHandler<ImportAppointmen
 
                     // 3. Create Appointment
                     DateTime.TryParse(dateStr, out DateTime appDate);
-                    if (appDate == default) appDate = DateTime.Today;
+                    if (appDate == default) appDate = IstDateRange.NowIst().Date; // today in India
 
                     var appointment = new Appointment
                     {

@@ -10,7 +10,10 @@ public record GetReferralCommissionsQuery(
     DateTime? EndDate = null,
     Guid? ReferrerId = null,
     DateTime? UpdatedAfter = null,
-    bool IncludeDeleted = false
+    bool IncludeDeleted = false,
+    // Only rows still open (not paid, not cancelled) - what a partner is owed or owes.
+    // Bounded by what is outstanding, unlike the full history (review #27).
+    bool OpenOnly = false
 ) : IRequest<List<ReferralCommissionDto>>;
 
 public record ReferralCommissionDto(
@@ -99,6 +102,9 @@ public class GetReferralCommissionsQueryHandler : IRequestHandler<GetReferralCom
             commissionsQuery = commissionsQuery.Where(c => c.DeletedAt == null);
         if (request.UpdatedAfter.HasValue)
             commissionsQuery = commissionsQuery.Where(c => c.UpdatedAt > request.UpdatedAfter.Value);
+        if (request.OpenOnly)
+            commissionsQuery = commissionsQuery.Where(c => c.Status != CommissionStatus.Paid
+                                                           && c.Status != CommissionStatus.Cancelled && c.Status != "CANCELLED");
         
         if (request.ReferrerId.HasValue)
         {
@@ -120,10 +126,10 @@ public class GetReferralCommissionsQueryHandler : IRequestHandler<GetReferralCom
         // IstDateRange's doc comment for why a raw comparison silently shifts
         // every day boundary by 5.5 hours.
         if (request.StartDate.HasValue)
-            commissionsQuery = commissionsQuery.Where(c => c.ServiceDate >= IstDateRange.ToUtcStart(request.StartDate.Value));
+            commissionsQuery = commissionsQuery.Where(c => c.ServiceDate >= IstDateRange.ClockStart(request.StartDate.Value));
 
         if (request.EndDate.HasValue)
-            commissionsQuery = commissionsQuery.Where(c => c.ServiceDate <= IstDateRange.ToUtcEndInclusive(request.EndDate.Value));
+            commissionsQuery = commissionsQuery.Where(c => c.ServiceDate <= IstDateRange.ClockEndInclusive(request.EndDate.Value));
 
         // 3. Project with Tactical Joins to resolve missing columns (PatientName/ReferrerName)
         //    plus the linked invoice's collection state so the Referral Hub can show the
@@ -179,7 +185,8 @@ public class GetReferralCommissionsQueryHandler : IRequestHandler<GetReferralCom
                 x.Commission.Status ?? "UNPAID",
                 x.Commission.ReferenceNumber,
                 x.Commission.Remarks,
-                x.PatientDetails?.FullName ?? "Unknown Patient",
+                x.PatientDetails?.FullName
+                    ?? (string.IsNullOrWhiteSpace(x.Commission.PatientName) || x.Commission.PatientName == "N/A" ? "Unknown Patient" : x.Commission.PatientName),
                 x.PatientDetails?.PatientIdentifier,
                 x.PatientDetails?.Age,
                 x.PatientDetails?.Gender,

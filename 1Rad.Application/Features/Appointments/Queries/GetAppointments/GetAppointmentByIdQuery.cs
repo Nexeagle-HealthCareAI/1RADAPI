@@ -101,8 +101,10 @@ public class GetAppointmentByIdQueryHandler : IRequestHandler<GetAppointmentById
                 _context.Referrers
                     .Where(r => r.HospitalId == x.Appointment.HospitalId && r.Name == x.Appointment.ReferredBy)
                     .Select(r => r.Specialty)
-                    .FirstOrDefault()
-            ))
+                    .FirstOrDefault(),
+                // Converted to base64 after the query (below); EF can't translate it here.
+                null
+            ) { RowVersionBytes = x.Appointment.RowVersion })
 
             .FirstOrDefaultAsync(cancellationToken);
 
@@ -132,6 +134,10 @@ public class GetAppointmentByIdQueryHandler : IRequestHandler<GetAppointmentById
             ))
             .ToListAsync(cancellationToken);
 
-        return appointment with { Services = lines };
+        return appointment with
+        {
+            Services = lines,
+            RowVersion = appointment.RowVersionBytes == null ? null : Convert.ToBase64String(appointment.RowVersionBytes),
+        };
     }
 }

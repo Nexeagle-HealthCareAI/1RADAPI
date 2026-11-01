@@ -73,12 +73,12 @@ public class GetDetailedReferralLedgerQueryHandler : IRequestHandler<GetDetailed
         // "<= EndDate" silently dropped the entire last day.)
         if (request.StartDate.HasValue)
         {
-            var fromUtc = IstDateRange.ToUtcStart(request.StartDate.Value);
+            var fromUtc = IstDateRange.ClockStart(request.StartDate.Value);
             commissionsQuery = commissionsQuery.Where(c => c.ServiceDate >= fromUtc);
         }
         if (request.EndDate.HasValue)
         {
-            var toUtc = IstDateRange.ToUtcEndInclusive(request.EndDate.Value);
+            var toUtc = IstDateRange.ClockEndInclusive(request.EndDate.Value);
             commissionsQuery = commissionsQuery.Where(c => c.ServiceDate <= toUtc);
         }
 

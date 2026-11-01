@@ -69,6 +69,7 @@ public class RecordReferralCommissionCommandHandler : IRequestHandler<RecordRefe
             CommissionAmount = amount,
             AccumulatedTotal = 0,
             TransactionDate = DateTime.UtcNow,
+            ServiceDate = IstDateRange.NowIst(), // India clock time, like visit-dated rows (#15)
             Status = "UNPAID",
             ReferenceNumber = request.ReferenceNumber,
             Remarks = request.Remarks,

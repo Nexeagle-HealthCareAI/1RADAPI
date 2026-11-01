@@ -51,12 +51,12 @@ public class GetPatientSourceBreakdownQueryHandler : IRequestHandler<GetPatientS
             .Where(a => a.HospitalId == hospitalId && a.Status != "CANCELLED");
         if (request.StartDate.HasValue)
         {
-            var fromUtc = IstDateRange.ToUtcStart(request.StartDate.Value);
+            var fromUtc = IstDateRange.ClockStart(request.StartDate.Value);
             query = query.Where(a => a.DateTime >= fromUtc);
         }
         if (request.EndDate.HasValue)
         {
-            var toUtc = IstDateRange.ToUtcEndInclusive(request.EndDate.Value);
+            var toUtc = IstDateRange.ClockEndInclusive(request.EndDate.Value);
             query = query.Where(a => a.DateTime <= toUtc);
         }
 

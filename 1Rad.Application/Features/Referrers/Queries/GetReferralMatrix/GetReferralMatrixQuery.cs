@@ -131,8 +131,8 @@ public class GetReferralMatrixQueryHandler : IRequestHandler<GetReferralMatrixQu
         // UTC instants of those IST boundaries, and bucket each visit by its IST wall-clock time
         // below - using the UTC hour/day put an evening visit in the wrong slot (Morning /
         // Afternoon / Evening) or on the next day's column.
-        var startUtc = IstDateRange.ToUtcStart(startDate);
-        var endUtc = IstDateRange.ToUtcEndInclusive(endDate);
+        var startUtc = IstDateRange.ClockStart(startDate); // DateTime is India clock time
+        var endUtc = IstDateRange.ClockEndInclusive(endDate);
 
         var visits = await _context.Appointments
             .AsNoTracking()
@@ -166,7 +166,7 @@ public class GetReferralMatrixQueryHandler : IRequestHandler<GetReferralMatrixQu
                 int total = 0;
                 foreach (var v in g)
                 {
-                    var key = getColKey(IstDateRange.ToIst(v.DateTime));
+                    var key = getColKey(v.DateTime);
                     if (key != null && counts.ContainsKey(key)) { counts[key]++; total++; }
                 }
                 var root = src.Kind == SourceKind.Partner ? attribution.RootEntry(src.RootId) : null;

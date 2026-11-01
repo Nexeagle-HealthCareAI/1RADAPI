@@ -70,7 +70,7 @@ public class GetAppointmentsQueryHandlerTests : BaseHandlerTest
     {
         var day = DateTime.UtcNow.Date;
         var before = NewAppointment(day.AddDays(-1).AddHours(12));
-        var inside = NewAppointment(day.AddHours(6));      // 11:30 IST on `day`
+        var inside = NewAppointment(day.AddHours(6));      // 06:00 IST on `day` (DateTime is India clock time)
         var after = NewAppointment(day.AddDays(1).AddHours(12));
         await Context.SaveChangesAsync();
 

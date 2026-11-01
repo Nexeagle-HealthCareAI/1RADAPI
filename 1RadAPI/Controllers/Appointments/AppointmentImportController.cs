@@ -1,4 +1,5 @@
 using _1Rad.Application.Features.Appointments.Commands.ImportAppointments;
+using _1Rad.Domain.Constants;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -24,6 +25,7 @@ public class AppointmentImportController : ControllerBase
     }
 
     [HttpPost("import")]
+    [Authorize(Roles = RoleSets.Admins)]
     public async Task<IActionResult> Import(IFormFile file)
     {
         if (file == null || file.Length == 0)

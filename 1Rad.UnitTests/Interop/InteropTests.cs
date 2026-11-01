@@ -155,13 +155,13 @@ public class WorklistMapperTests
     {
         var serviceId = Guid.NewGuid();
         var entry = new WorklistEntry(Guid.NewGuid(), serviceId, "APP-101",
-            new DateTime(2026, 10, 30, 4, 30, 0, DateTimeKind.Utc), "EMERGENCY", "CONFIRMED", "Dr Sharma",
+            new DateTime(2026, 10, 30, 10, 0, 0), "EMERGENCY", "CONFIRMED", "Dr Sharma",
             "CT Brain Plain", "CT", "CT", Guid.NewGuid(), "Ram Kumar", "MRN-7", "Male", "45 Y");
 
         var json = WorklistMapper.ToItem(entry, 0).ToJsonString();
 
         json.Should().Contain(DicomUids.FromGuid(serviceId));
-        json.Should().Contain("\"20261030\"").And.Contain("\"100000\"");   // 04:30 UTC = 10:00 IST
+        json.Should().Contain("\"20261030\"").And.Contain("\"100000\"");   // stored as India clock time
         json.Should().Contain("\"APP-101\"").And.Contain("\"APP-101-1\"");
         json.Should().Contain("\"STAT\"").And.Contain("\"ARRIVED\"").And.Contain("\"045Y\"");
     }

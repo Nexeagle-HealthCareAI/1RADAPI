@@ -161,14 +161,14 @@ public class UpdateAppointmentCommandHandlerTests : BaseHandlerTest
 
         // Check referrer auto-creation
         var newReferrer = await Context.Referrers
-            .FirstOrDefaultAsync(r => r.Name == "Dr. Brand New" && r.HospitalId == HospitalId);
+            .FirstOrDefaultAsync(r => r.Name == "DR. BRAND NEW" && r.HospitalId == HospitalId); // stored upper-case (#12)
         Assert.NotNull(newReferrer);
 
         var newCommission = await Context.ReferralCommissions
             .FirstOrDefaultAsync(c => c.AppointmentId == appointment.AppointmentId);
         Assert.NotNull(newCommission);
         Assert.Equal(newReferrer.ReferrerId, newCommission.ReferrerId);
-        Assert.Equal("Dr. Brand New", newCommission.ReferrerName);
+        Assert.Equal("DR. BRAND NEW", newCommission.ReferrerName);
         Assert.Equal(200m, newCommission.CommissionAmount);
     }
 
@@ -295,7 +295,7 @@ public class UpdateAppointmentCommandHandlerTests : BaseHandlerTest
         Assert.Equal("Updated notes", updatedAppointment.Notes);
         Assert.Equal("DR. UPDATED REFERRER", updatedAppointment.ReferredBy);
 
-        var updatedReferrer = await Context.Referrers.SingleAsync(r => r.Name == "Dr. Updated Referrer");
+        var updatedReferrer = await Context.Referrers.SingleAsync(r => r.Name == "DR. UPDATED REFERRER"); // stored upper-case like booking (#12)
         Assert.Equal("9222222222", updatedReferrer.Contact);
         Assert.Equal("Referrer address", updatedReferrer.Address);
 
@@ -446,7 +446,7 @@ public class UpdateAppointmentCommandHandlerTests : BaseHandlerTest
         // A brand-new service line whose cut is bigger than its own price —
         // exactly the case CreateAppointmentCommand/AddBookingServiceCommand
         // already reject at booking time, previously unguarded on edit.
-        await Assert.ThrowsAsync<ArgumentException>(() => _handler.Handle(new UpdateAppointmentCommand(
+        await Assert.ThrowsAsync<_1Rad.Domain.Exceptions.ValidationException>(() => _handler.Handle(new UpdateAppointmentCommand(
             appointment.AppointmentId,
             "Ultrasound",
             "USG",

@@ -66,4 +66,38 @@ public class IstDateRangeTests
 
         IstDateRange.ToUtcStart(withNoise).Should().Be(IstDateRange.ToUtcStart(new DateTime(2026, 9, 16)));
     }
+
+    // ── IST-clock columns (Appointment.DateTime, ServiceDate) ──
+
+    [Fact]
+    public void ClockWindow_IsTheBareIstDay()
+    {
+        var day = new DateTime(2026, 9, 16, 13, 45, 0);
+        IstDateRange.ClockStart(day).Should().Be(new DateTime(2026, 9, 16));
+        IstDateRange.ClockEndInclusive(day).Should().Be(new DateTime(2026, 9, 17).AddTicks(-1));
+
+        var oneAmVisit = new DateTime(2026, 9, 16, 1, 0, 0);       // stored as India clock time
+        (oneAmVisit >= IstDateRange.ClockStart(day) && oneAmVisit <= IstDateRange.ClockEndInclusive(day)).Should().BeTrue();
+        var lateVisitDayBefore = new DateTime(2026, 9, 15, 23, 30, 0);
+        (lateVisitDayBefore >= IstDateRange.ClockStart(day)).Should().BeFalse();
+    }
+
+    [Fact]
+    public void NormalizeToClock_ConvertsUtcAndKeepsBareValues()
+    {
+        IstDateRange.NormalizeToClock(new DateTime(2026, 10, 30, 4, 30, 0, DateTimeKind.Utc))
+            .Should().Be(new DateTime(2026, 10, 30, 10, 0, 0));
+        IstDateRange.NormalizeToClock(new DateTime(2026, 10, 30, 10, 0, 0, DateTimeKind.Unspecified))
+            .Should().Be(new DateTime(2026, 10, 30, 10, 0, 0));
+        IstDateRange.NormalizeToClock(new DateTime(2026, 10, 30, 4, 30, 0, DateTimeKind.Utc)).Kind
+            .Should().Be(DateTimeKind.Unspecified);
+    }
+
+    [Fact]
+    public void ClockToUtc_IsTheInverse()
+    {
+        var utc = IstDateRange.ClockToUtc(new DateTime(2026, 10, 30, 10, 0, 0));
+        utc.Should().Be(new DateTime(2026, 10, 30, 4, 30, 0));
+        utc.Kind.Should().Be(DateTimeKind.Utc);
+    }
 }

@@ -70,7 +70,9 @@ public class HospitalsController : ControllerBase
             request.NABHNumber,
             request.IsAutoBillingEnabled,
             request.Latitude,
-            request.Longitude));
+            request.Longitude,
+            request.PublicContact,
+            request.PublicEmail));
 
         if (!result.Success) return BadRequest(new { message = result.Error });
         return Ok(new { message = "Hospital metadata updated successfully." });
@@ -90,6 +92,34 @@ public class HospitalsController : ControllerBase
         await _db.SaveChangesAsync(HttpContext.RequestAborted);
         return Ok(new { isAutoBillingEnabled = hospital.IsAutoBillingEnabled });
     }
+
+    // The centre's tax and billing switches (GST, credit notes, TDS and its rates,
+    // front-desk discount limit). Everyone at the centre can read them — the billing
+    // screens follow them; only the centre's admins can change them.
+    [HttpGet("{id}/billing-settings")]
+    public async Task<IActionResult> GetBillingSettings(Guid id)
+    {
+        if (!await CanAccessHospitalAsync(id)) return Forbid();
+        var result = await _mediator.Send(new _1Rad.Application.Features.Hospitals.BillingSettings.GetBillingSettingsQuery(id), HttpContext.RequestAborted);
+        return Ok(result);
+    }
+
+    [HttpPut("{id}/billing-settings")]
+    [Authorize(Roles = AdminRoles)]
+    public async Task<IActionResult> UpdateBillingSettings(Guid id, [FromBody] UpdateBillingSettingsRequest r)
+    {
+        if (!await CanAccessHospitalAsync(id)) return Forbid();
+        var result = await _mediator.Send(new _1Rad.Application.Features.Hospitals.BillingSettings.UpdateBillingSettingsCommand(
+            id, r.GstEnabled, r.CreditNotesEnabled, r.TdsEnabled, r.DefaultTdsCategory,
+            r.TdsCommissionRate, r.TdsCommissionThreshold, r.TdsProfessionalRate, r.TdsProfessionalThreshold,
+            r.TdsNoPanRate, r.FrontDeskDiscountLimitPercent), HttpContext.RequestAborted);
+        return Ok(result);
+    }
+
+    public record UpdateBillingSettingsRequest(
+        bool GstEnabled, bool CreditNotesEnabled, bool TdsEnabled, string? DefaultTdsCategory,
+        decimal? TdsCommissionRate, decimal? TdsCommissionThreshold, decimal? TdsProfessionalRate, decimal? TdsProfessionalThreshold,
+        decimal? TdsNoPanRate, decimal? FrontDeskDiscountLimitPercent);
 
     [HttpPost("chain")]
     [Authorize(Roles = AdminRoles)]
@@ -150,6 +180,8 @@ public class UpdateHospitalDetailsRequest
     public bool IsAutoBillingEnabled { get; set; }
     public decimal? Latitude { get; set; }
     public decimal? Longitude { get; set; }
+    public string? PublicContact { get; set; }
+    public string? PublicEmail { get; set; }
 }
 
 public record CreateChainRequest(

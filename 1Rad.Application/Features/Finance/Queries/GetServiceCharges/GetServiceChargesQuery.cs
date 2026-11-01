@@ -13,6 +13,8 @@ public class ServiceChargeDto
     public string ServiceName { get; set; } = string.Empty;
     public decimal Amount { get; set; }
     public decimal ReferralCutValue { get; set; }
+    public string? SacCode { get; set; }
+    public decimal GstRate { get; set; }
 }
 
 
@@ -44,7 +46,9 @@ public class GetServiceChargesQueryHandler : IRequestHandler<GetServiceChargesQu
                     Modality = s.Modality,
                     ServiceName = s.ServiceName,
                     Amount = s.Amount,
-                    ReferralCutValue = s.ReferralCutValue
+                    ReferralCutValue = s.ReferralCutValue,
+                    SacCode = s.SacCode,
+                    GstRate = s.GstRate
                 })
 
                 .OrderBy(s => s.Modality)

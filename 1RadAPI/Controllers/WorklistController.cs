@@ -47,8 +47,9 @@ public class WorklistController : ControllerBase
         else if (!DateTime.TryParseExact(date.Replace("-", ""), "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out day))
             return BadRequest(new { error = "date must be YYYYMMDD." });
         days = Math.Clamp(days, 1, 7);
-        var fromUtc = IstDateRange.ToUtcStart(day);
-        var toUtc = IstDateRange.ToUtcStart(day.AddDays(days));
+        // Appointment.DateTime is India clock time, so the IST days compare directly.
+        var fromUtc = IstDateRange.ClockStart(day);
+        var toUtc = IstDateRange.ClockStart(day.AddDays(days));
 
         var rows = await _db.AppointmentServices.AsNoTracking()
             .Where(s => s.DeletedAt == null

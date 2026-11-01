@@ -8,7 +8,7 @@ public sealed record WorklistEntry(
     Guid AppointmentId,
     Guid ServiceId,
     string? DisplayId,
-    DateTime ScheduledUtc,
+    DateTime ScheduledIst,   // Appointment.DateTime — India clock time
     string? Priority,
     string? AppointmentStatus,
     string? ReferredBy,
@@ -37,7 +37,7 @@ public static class WorklistMapper
 
     public static JsonObject ToItem(WorklistEntry e, int serviceIndex)
     {
-        var localTime = e.ScheduledUtc + Ist;
+        var localTime = e.ScheduledIst;
         var modality = DicomModality(e.ServiceModality) ?? DicomModality(e.AppointmentModality) ?? "OT";
         var procedureId = ProcedureId(e.DisplayId, e.AppointmentId, serviceIndex);
         var description = DicomJsonBuilder.Clean(e.ServiceName, 64);

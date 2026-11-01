@@ -15,5 +15,7 @@ public record ReferrerDto(
     // Payee-first model: kind of referral source + the doctor an agent supports.
     bool IsDoctor = true,
     string? SupportedByDoctor = null,
-    Guid? MergedIntoId = null
+    Guid? MergedIntoId = null,
+    // Tax ID for TDS on payouts (review R10).
+    string? Pan = null
 );

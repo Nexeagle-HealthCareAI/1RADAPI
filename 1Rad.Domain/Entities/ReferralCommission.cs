@@ -14,7 +14,8 @@ public class ReferralCommission : BaseEntity, IHospitalContext
     
     public string Modality { get; set; } = string.Empty;
     
-    [NotMapped]
+    // Stored since migration 110 (review #16). Visit-linked rows take the name from the
+    // visit; manual and payout lines rely on this column.
     public string PatientName { get; set; } = string.Empty;
     
     public Guid? AppointmentId { get; set; }
@@ -36,6 +37,8 @@ public class ReferralCommission : BaseEntity, IHospitalContext
     public DateTime ServiceDate { get; set; } = DateTime.UtcNow;
     public string Status { get; set; } = "UNPAID"; // UNPAID, PAID, Cancelled
     public DateTime? PaymentDate { get; set; }
+    // The payout this row was settled in (migration 106). Null for rows paid before then.
+    public Guid? PayoutId { get; set; }
     public string? ReferenceNumber { get; set; }
     public string? Remarks { get; set; }
 

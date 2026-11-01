@@ -19,10 +19,12 @@ public static class CustomRoleRouteMap
         {
             ["/admin-board"]       = new[] { "personnel", "hospitals", "customroles", "finance/registry", "intelligence", "prescription", "referrers/intelligence", "audit-logs" },
             ["/appointment-board"] = new[] { "appointments", "patients", "referrers", "finance/invoices", "finance/payments", "finance/registry/quick-add", "finance/credit", "approvals" },
-            ["/operations-board"]  = new[] { "appointments" },
+            // Review A4: workflow pages move visits and scans along; they don't edit,
+            // book or cancel ("*" = one path segment, e.g. the appointment id).
+            ["/operations-board"]  = new[] { "appointments/*/status", "appointments/*/services", "appointments/*/comments", "appointments/*/overdue-ack" },
             ["/billing"]           = new[] { "finance", "referrers" },
             ["/approvals"]         = new[] { "approvals" },
-            ["/technician"]        = new[] { "appointments", "study", "study-annotations" },
+            ["/technician"]        = new[] { "appointments/*/status", "appointments/*/services", "appointments/*/comments", "study", "study-annotations" },
             ["/doctor-board"]      = new[] { "reporting", "prescription", "study", "study-annotations" },
             ["/referrals"]         = new[] { "referrers", "intelligence" },
             ["/staff"]             = new[] { "staff", "attendance", "leave", "leave-policy" },
@@ -42,6 +44,21 @@ public static class CustomRoleRouteMap
         return r.StartsWith('/') ? r : "/" + r;
     }
 
+    /// <summary>
+    /// <paramref name="prefix"/> matches the start of <paramref name="rest"/> segment by
+    /// segment; a "*" segment matches any one segment.
+    /// </summary>
+    public static bool Matches(string rest, string prefix)
+    {
+        var path = rest.Split('?', 2)[0].Trim('/');
+        var want = prefix.Trim('/').Split('/');
+        var have = path.Split('/');
+        if (have.Length < want.Length) return false;
+        for (var i = 0; i < want.Length; i++)
+            if (want[i] != "*" && !string.Equals(want[i], have[i], StringComparison.OrdinalIgnoreCase)) return false;
+        return true;
+    }
+
     /// <summary>True when any of the saved page routes grants the given request path.</summary>
     public static bool Grants(IEnumerable<string> savedPageRoutes, string requestPath)
     {
@@ -56,8 +73,7 @@ public static class CustomRoleRouteMap
             if (!PageToApiPrefixes.TryGetValue(Normalise(saved), out var prefixes)) continue;
             foreach (var prefix in prefixes)
             {
-                if (rest == prefix || rest.StartsWith(prefix + "/") || rest.StartsWith(prefix + "?"))
-                    return true;
+                if (Matches(rest, prefix)) return true;
             }
         }
         return false;

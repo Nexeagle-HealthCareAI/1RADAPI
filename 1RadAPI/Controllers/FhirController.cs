@@ -179,8 +179,8 @@ public class FhirController : ControllerBase
         if (occurrence.Count > 0)
         {
             if (!FhirSearch.TryParseDates(occurrence, out var from, out var to)) return Invalid("Bad occurrence value.");
-            if (from != null) { var f = IstDateRange.ToUtcStart(from.Value) + from.Value.TimeOfDay; q = q.Where(s => s.Appointment.DateTime >= f); }
-            if (to != null) { var t = IstDateRange.ToUtcStart(to.Value) + to.Value.TimeOfDay; q = q.Where(s => s.Appointment.DateTime < t); }
+            if (from != null) { var f = from.Value; q = q.Where(s => s.Appointment.DateTime >= f); } // both India clock time
+            if (to != null) { var t = to.Value; q = q.Where(s => s.Appointment.DateTime < t); }
         }
         var status = Q("status").Trim().ToLowerInvariant();
         if (status == "revoked")

@@ -3,6 +3,7 @@ using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using _1Rad.Domain.Entities;
+using _1Rad.Domain.Exceptions;
 
 namespace _1Rad.Application.Features.Finance.Commands.ApplyInvoiceDiscount;
 
@@ -44,14 +45,14 @@ public class ApplyInvoiceDiscountCommandHandler : IRequestHandler<ApplyInvoiceDi
             .FirstOrDefaultAsync(i => i.Id == request.InvoiceId, cancellationToken);
 
         if (invoice == null)
-        {
-            throw new KeyNotFoundException($"Invoice with ID '{request.InvoiceId}' not found.");
-        }
+            throw new NotFoundException("Bill not found.");
 
-        if (invoice.Status == "PAID")
-        {
-            throw new InvalidOperationException("Cannot apply discount to an already paid invoice.");
-        }
+        if (invoice.Status is "PAID" or "CANCELLED")
+            throw new BusinessRuleViolationException(
+                invoice.Status == "PAID"
+                    ? "This bill is already paid. Changes to a paid bill go through Approvals."
+                    : "This bill is cancelled and can't be changed.",
+                "INVOICE_CLOSED");
 
         // Self-heal against the live service list BEFORE recomputing totals below —
         // mirrors CollectPaymentCommand's identical block (see there for the full
@@ -89,6 +90,12 @@ public class ApplyInvoiceDiscountCommandHandler : IRequestHandler<ApplyInvoiceDi
                 _context.Entry(newItem).State = Microsoft.EntityFrameworkCore.EntityState.Added;
             }
         }
+
+        // Review B3: no negative concessions or charges.
+        DiscountPolicy.RejectNegatives(request.CentreDiscount, request.ReferrerDiscount, request.InstitutionalDeduction,
+            request.ExtraCharges?.Select(x => x.Amount));
+        if (request.DiscountAmount < 0 || request.AdditionalCharges < 0)
+            throw new ValidationException("Discounts and charges can't be negative.");
 
         var originalAdditionalCharges = invoice.AdditionalCharges;
         var oldReferrerDiscount = invoice.ReferrerDiscount;
@@ -156,6 +163,15 @@ public class ApplyInvoiceDiscountCommandHandler : IRequestHandler<ApplyInvoiceDi
         // Canonical recompute (Common/InvoiceTotals.cs).
         InvoiceTotals.RecomputeGross(invoice, originalAdditionalCharges);
         InvoiceTotals.ApplyDiscountAndFinalize(invoice, discount);
+
+        // Review B7: a draft can't take the bill below what has already been
+        // collected — that would hide an overpayment. Lowering a part-paid bill that
+        // far is an Edit-payment approval, which refunds the excess properly.
+        if (invoice.PaidAmount > invoice.TotalAmount + 0.01m)
+            throw new BusinessRuleViolationException(
+                $"₹{invoice.PaidAmount:0.##} has already been collected, so the bill can't go below that here. Ask an admin to approve the change; the excess will be refunded.",
+                "DISCOUNT_BELOW_COLLECTED");
+        PaymentLedger.DeriveStatus(invoice);
 
         // A referrer discount saved as a draft comes off the referrer's commission
         // now (review R2). Before, collection later saw "no change" and the doctor

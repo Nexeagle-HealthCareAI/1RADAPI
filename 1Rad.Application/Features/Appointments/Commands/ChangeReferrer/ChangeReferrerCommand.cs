@@ -43,6 +43,8 @@ public record ChangeReferrerCommand : IRequest<ChangeReferrerResult>
     // The supporting doctor's own profile (when the referrer is an Other person).
     public string? NewReferrerSupportedSpecialty { get; init; }
     public string? NewReferrerSupportedDegree { get; init; }
+    // The partner picked on screen (review #13). Wins over the typed name.
+    public Guid? NewReferrerId { get; init; }
 }
 
 public class ChangeReferrerCommandHandler : IRequestHandler<ChangeReferrerCommand, ChangeReferrerResult>
@@ -90,7 +92,8 @@ public class ChangeReferrerCommandHandler : IRequestHandler<ChangeReferrerComman
             email: request.NewReferrerEmail, specialty: request.NewReferrerSpecialty,
             degree: request.NewReferrerDegree, address: request.NewReferrerAddress,
             supportedSpecialty: request.NewReferrerSupportedSpecialty,
-            supportedDegree: request.NewReferrerSupportedDegree);
+            supportedDegree: request.NewReferrerSupportedDegree,
+            newReferrerId: request.NewReferrerId);
 
         await _context.SaveChangesAsync(ct);
 

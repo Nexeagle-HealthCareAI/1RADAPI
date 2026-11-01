@@ -77,7 +77,9 @@ public record HospitalDetailsDto(
     HospitalAdminDto? Admin,
     List<HospitalUserDto> Users,
     List<HospitalDoctorDto> Doctors,
-    HospitalStatsDto Stats
+    HospitalStatsDto Stats,
+    string? PublicContact = null,
+    string? PublicEmail = null
 );
 
 /// <summary>
