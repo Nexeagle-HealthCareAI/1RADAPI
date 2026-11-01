@@ -616,9 +616,10 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.ToTable("HospitalBillingSettings", "dbo");
             entity.HasKey(e => e.HospitalId);
             entity.Property(e => e.DefaultTdsCategory).IsRequired().HasMaxLength(20);
-            foreach (var p in new[] { nameof(HospitalBillingSettings.TdsCommissionRate), nameof(HospitalBillingSettings.TdsProfessionalRate),
-                                      nameof(HospitalBillingSettings.TdsNoPanRate), nameof(HospitalBillingSettings.FrontDeskDiscountLimitPercent) })
-                entity.Property(p).HasPrecision(5, 2);
+            entity.Property(e => e.TdsCommissionRate).HasPrecision(5, 2);
+            entity.Property(e => e.TdsProfessionalRate).HasPrecision(5, 2);
+            entity.Property(e => e.TdsNoPanRate).HasPrecision(5, 2);
+            entity.Property(e => e.FrontDeskDiscountLimitPercent).HasPrecision(5, 2);
             entity.Property(e => e.TdsCommissionThreshold).HasPrecision(18, 2);
             entity.Property(e => e.TdsProfessionalThreshold).HasPrecision(18, 2);
         });
@@ -1568,7 +1569,7 @@ UPDATE dbo.StudyAssets
                 .Where(s => serviceIds.Contains(s.Id) && s.ServiceCharge != null)
                 .Select(s => new { s.Id, s.ServiceCharge!.SacCode, s.ServiceCharge.GstRate })
                 .ToListAsync(ct))
-              .ToDictionary(x => x.Id, x => (x.SacCode, x.GstRate));
+              .ToDictionary(x => x.Id, x => (Sac: x.SacCode, Rate: x.GstRate));
 
         // A centre whose admin has switched GST off bills every line at 0%.
         var invoiceIds = fresh.Select(i => i.InvoiceId).Distinct().ToList();
