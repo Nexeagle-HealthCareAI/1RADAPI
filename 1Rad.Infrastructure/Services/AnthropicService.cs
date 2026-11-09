@@ -42,6 +42,14 @@ public class AnthropicService : IAnthropicService
     public async Task<string> GenerateAsync(string systemPrompt, string userPrompt, CancellationToken cancellationToken = default)
         => (await SendAsync(systemPrompt, userPrompt, cancellationToken)).Text;
 
+    public string ModelName => _model;
+
+    public async Task<AiJsonResult> GenerateWithUsageAsync(string systemPrompt, string userPrompt, CancellationToken cancellationToken = default)
+    {
+        var (text, usage) = await SendAsync(systemPrompt, userPrompt, cancellationToken);
+        return new AiJsonResult(text, usage);
+    }
+
     public async Task<string> GenerateJsonAsync(string systemPrompt, string userPrompt, object? responseSchema, CancellationToken cancellationToken = default)
         => (await GenerateJsonWithUsageAsync(systemPrompt, userPrompt, responseSchema, cancellationToken)).Text;
 

@@ -29,5 +29,12 @@ public interface IAnthropicService
     /// optimise spend. The system prompt is sent with prompt caching enabled, so
     /// a recurring system prefix is billed at a fraction of the input rate.
     /// </summary>
+    /// <summary>The model id requests go to (for usage logs).</summary>
+    string ModelName => "claude";
+
+    /// <summary>Like <see cref="GenerateAsync"/> but also returns real token usage.</summary>
+    async Task<AiJsonResult> GenerateWithUsageAsync(string systemPrompt, string userPrompt, CancellationToken cancellationToken = default)
+        => new AiJsonResult(await GenerateAsync(systemPrompt, userPrompt, cancellationToken), new AiUsage(0, 0, 0, 0));
+
     Task<AiJsonResult> GenerateJsonWithUsageAsync(string systemPrompt, string userPrompt, object? responseSchema, CancellationToken cancellationToken = default);
 }

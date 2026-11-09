@@ -72,6 +72,8 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<ApprovalRequest> ApprovalRequests => Set<ApprovalRequest>();
     public DbSet<IdempotencyRecord> IdempotencyKeys => Set<IdempotencyRecord>();
     public DbSet<RadAiQuestionLog> RadAiQuestionLogs => Set<RadAiQuestionLog>();
+    public DbSet<CentreAiPolicy> CentreAiPolicies => Set<CentreAiPolicy>();
+    public DbSet<ReportAiUsageLog> ReportAiUsageLogs => Set<ReportAiUsageLog>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<StudyAnnotation> StudyAnnotations => Set<StudyAnnotation>();
     public DbSet<JobRun> JobRuns => Set<JobRun>();
@@ -147,6 +149,23 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.Model).HasMaxLength(20);
             entity.HasIndex(e => new { e.HospitalId, e.CreatedAt });
             entity.HasIndex(e => new { e.HospitalId, e.Covered });
+        });
+
+        // Report-AI rules per centre and one usage row per AI request (schema 114).
+        modelBuilder.Entity<CentreAiPolicy>(entity =>
+        {
+            entity.ToTable("CentreAiPolicies", "dbo");
+            entity.HasKey(e => e.HospitalId);
+            entity.Property(e => e.HospitalId).ValueGeneratedNever();
+        });
+        modelBuilder.Entity<ReportAiUsageLog>(entity =>
+        {
+            entity.ToTable("ReportAiUsageLogs", "dbo");
+            entity.HasKey(e => e.ReportAiUsageLogId);
+            entity.Property(e => e.Feature).IsRequired().HasMaxLength(40);
+            entity.Property(e => e.Model).HasMaxLength(60);
+            entity.Property(e => e.Outcome).IsRequired().HasMaxLength(12);
+            entity.HasIndex(e => new { e.HospitalId, e.CreatedAt });
         });
 
         // Portal-link versions (revocation). One row per partner, created on first revoke.

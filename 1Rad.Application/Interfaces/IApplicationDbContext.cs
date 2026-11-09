@@ -49,6 +49,8 @@ public interface IApplicationDbContext
     DbSet<StaffLeaveRequest> StaffLeaveRequests { get; }
     DbSet<ApprovalRequest> ApprovalRequests { get; }
     DbSet<RadAiQuestionLog> RadAiQuestionLogs { get; }
+    DbSet<CentreAiPolicy> CentreAiPolicies { get; }
+    DbSet<ReportAiUsageLog> ReportAiUsageLogs { get; }
     DbSet<AuditLog> AuditLogs { get; }
     DbSet<StudyAnnotation> StudyAnnotations { get; }
     DbSet<JobRun> JobRuns { get; }

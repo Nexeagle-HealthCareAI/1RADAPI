@@ -57,8 +57,12 @@ public class FormatReportCommandHandler : IRequestHandler<FormatReportCommand, F
     private readonly IRadiologyCorpus _corpus;
     private readonly IApplicationDbContext _context;
 
-    public FormatReportCommandHandler(IAnthropicService ai, IRadiologyPack pack, IRadiologyCorpus corpus, IApplicationDbContext context)
+    private readonly IReportAiGate? _gate;
+    private const string Feature = "format";
+
+    public FormatReportCommandHandler(IAnthropicService ai, IRadiologyPack pack, IRadiologyCorpus corpus, IApplicationDbContext context, IReportAiGate? gate = null)
     {
+        _gate = gate;
         _ai = ai;
         _pack = pack;
         _corpus = corpus;
@@ -73,26 +77,16 @@ public class FormatReportCommandHandler : IRequestHandler<FormatReportCommand, F
         if (!_pack.IsAvailable || !_pack.HasTest(request.Modality, request.TestCode))
             return Fail($"No formatter template for {request.Modality}/{request.TestCode}.");
 
-        // De-identify before the text leaves our server — same PHI map as the
-        // inline co-pilot (patient name / PTID / phone -> placeholders), restored
-        // into the model's response so the radiologist still sees the real names.
-        var phi = new List<string?>();
-        if (request.ImagingStudyId is Guid sid && sid != Guid.Empty)
+        var refusal = _gate is null ? null : await _gate.CheckAsync(Feature, cancellationToken);
+        if (refusal != null)
         {
-            var info = await _context.ImagingStudies
-                .Where(s => s.Id == sid)
-                .Select(s => new { s.PatientName, s.DicomPatientId })
-                .FirstOrDefaultAsync(cancellationToken);
-            if (info != null) { phi.Add(info.PatientName); phi.Add(info.DicomPatientId); }
+            await _gate!.RecordAsync(Feature, null, null, 0, "refused", cancellationToken);
+            return Fail(refusal);
         }
-        else if (request.AppointmentId is Guid aid && aid != Guid.Empty)
-        {
-            var info = await _context.Appointments
-                .Where(a => a.AppointmentId == aid)
-                .Select(a => new { Name = a.PatientName, Ptid = a.Patient.PatientIdentifier, Phone = a.Mobile })
-                .FirstOrDefaultAsync(cancellationToken);
-            if (info != null) { phi.Add(info.Name); phi.Add(info.Ptid); phi.Add(info.Phone); }
-        }
+
+        // De-identify before the text leaves our server — the same identifiers
+        // as every other AI feature, restored into the model's response.
+        var phi = await PatientPhi.CollectAsync(_context, request.AppointmentId, request.ImagingStudyId, cancellationToken);
         var (safeText, phiMap) = PhiRedactor.Redact(raw, phi);
 
         // Layer 1 — deterministic spell pass (no AI): fix known typos and obvious
@@ -113,16 +107,19 @@ public class FormatReportCommandHandler : IRequestHandler<FormatReportCommand, F
         string modelJson;
         try
         {
-            modelJson = await _ai.GenerateJsonAsync(system, userPayload, _pack.BuildResponseSchema(), cancellationToken);
+            var res = await _ai.GenerateJsonWithUsageAsync(system, userPayload, _pack.BuildResponseSchema(), cancellationToken);
+            modelJson = res.Text;
+            if (_gate != null) await _gate.RecordAsync(Feature, _ai.ModelName, res.Usage, phiMap.Count, "ok", cancellationToken);
         }
         catch (Exception ex)
         {
+            if (_gate != null) await _gate.RecordAsync(Feature, _ai.ModelName, null, phiMap.Count, "error", cancellationToken);
             // Fallback: never block report delivery on a third-party API. Turn a
             // transient rate-limit / overload into a clear, actionable message.
             var busy = ex.Message.Contains("429") || ex.Message.Contains("529") || ex.Message.Contains("503");
             return Fail(busy
                 ? "The AI formatter is busy right now. Please wait a few seconds and try again."
-                : ex.Message);
+                : "The AI formatter could not answer just now. Your text is unchanged.");
         }
 
         FormatterPayload? parsed;
