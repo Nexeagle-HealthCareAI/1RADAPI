@@ -2406,6 +2406,29 @@ namespace _1RadAPI.Controllers
                     {
                         asset.AppointmentId = study.AppointmentId;
                     }
+
+                    // The study's report moves with its images: key it to the visit
+                    // (and the study's service line) so the visit's Reporting page
+                    // finds it instead of starting a second report for the same
+                    // images. It keeps its ImagingStudyId link too. Skipped when the
+                    // visit already has a report for that study.
+                    var studyReports = await _context.DiagnosticReports
+                        .IgnoreQueryFilters()
+                        .Where(r => r.ImagingStudyId == study.Id && r.HospitalId == study.HospitalId
+                                 && r.AppointmentId == null && r.DeletedAt == null)
+                        .ToListAsync();
+                    foreach (var rep in studyReports)
+                    {
+                        var svcId = study.AppointmentServiceId;
+                        var visitHasOne = await _context.DiagnosticReports
+                            .IgnoreQueryFilters()
+                            .AnyAsync(r => r.AppointmentId == study.AppointmentId && r.DeletedAt == null
+                                        && (svcId == null || r.AppointmentServiceId == svcId));
+                        if (visitHasOne) continue;
+                        rep.AppointmentId = study.AppointmentId;
+                        rep.AppointmentServiceId = svcId;
+                        rep.UpdatedAt = DateTime.UtcNow;
+                    }
                 }
 
                 await _context.SaveChangesAsync(default);

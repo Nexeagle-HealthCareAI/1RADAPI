@@ -37,7 +37,11 @@ public record ReportDeltaDto(
     // Phase B2 Track 3 — OCC concurrency token. Frontend stores it
     // alongside the cached report and echoes it back on save so the
     // server can detect a stale write.
-    byte[]? RowVersion = null
+    byte[]? RowVersion = null,
+    // Which study on the visit this report belongs to (multi-study visits),
+    // and its sign-off state — so the offline cache keeps one row per study.
+    Guid? AppointmentServiceId = null,
+    string? Status = null
 );
 
 public class GetReportsDeltaQueryHandler : IRequestHandler<GetReportsDeltaQuery, List<ReportDeltaDto>>
@@ -90,7 +94,9 @@ public class GetReportsDeltaQueryHandler : IRequestHandler<GetReportsDeltaQuery,
                 r.UpdatedAt,
                 r.DeletedAt,
                 r.ReportingMode,
-                r.RowVersion
+                r.RowVersion,
+                r.AppointmentServiceId,
+                r.Status
             ))
             .ToListAsync(cancellationToken);
     }
