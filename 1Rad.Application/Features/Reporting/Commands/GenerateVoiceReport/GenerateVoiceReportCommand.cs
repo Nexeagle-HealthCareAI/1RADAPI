@@ -188,6 +188,26 @@ public class GenerateVoiceReportCommandHandler
         if (string.IsNullOrWhiteSpace(html))
             return new GenerateVoiceReportResult(false, null, "The AI response did not contain a valid HTML report.");
 
+        // Keep the draft so the signed report can later be compared with it.
+        try
+        {
+            var uc = _context.UserContext;
+            var isStudy = request.ImagingStudyId is Guid vs && vs != Guid.Empty;
+            _context.ReportAiDrafts.Add(new Domain.Entities.ReportAiDraft
+            {
+                HospitalId = uc.HospitalId,
+                AppointmentId = isStudy ? null : phiAppointmentId,
+                AppointmentServiceId = isStudy ? null : request.AppointmentServiceId,
+                ImagingStudyId = isStudy ? request.ImagingStudyId : null,
+                Source = "voice",
+                Model = _ai.ModelName,
+                Findings = html,
+                CreatedByUserId = uc.UserId == Guid.Empty ? null : uc.UserId,
+            });
+            await _context.SaveChangesAsync(cancellationToken);
+        }
+        catch { /* best effort */ }
+
         return new GenerateVoiceReportResult(true, html, null);
     }
 

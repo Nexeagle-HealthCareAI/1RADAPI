@@ -14,7 +14,10 @@ public record AiPolicyDto(
     bool AllowCloudDictation,
     int MonthlyCallLimit,
     bool UsesDefaultLimit,
-    int UsedThisMonth);
+    int UsedThisMonth,
+    bool VisionDraftEnabled = false,
+    bool CaptureApprovedCases = false,
+    int ApprovedCasesKept = 0);
 
 public class GetAiPolicyQueryHandler : IRequestHandler<GetAiPolicyQuery, AiPolicyDto>
 {
@@ -26,17 +29,22 @@ public class GetAiPolicyQueryHandler : IRequestHandler<GetAiPolicyQuery, AiPolic
         var p = await _db.CentreAiPolicies.AsNoTracking().FirstOrDefaultAsync(ct);
         var since = ReportAiGate.MonthStartUtc(DateTime.UtcNow);
         var used = await _db.ReportAiUsageLogs.CountAsync(l => l.CreatedAt >= since && l.Outcome != "refused", ct);
+        var kept = await _db.ApprovedReportCases.CountAsync(ct);
         return new AiPolicyDto(
             p?.ReportAiEnabled ?? true,
             p?.AllowCloudDictation ?? false,
             p?.MonthlyCallLimit ?? ReportAiGate.DefaultMonthlyCallLimit,
             p?.MonthlyCallLimit == null,
-            used);
+            used,
+            p?.VisionDraftEnabled ?? false,
+            p?.CaptureApprovedCases ?? false,
+            kept);
     }
 }
 
 /// <summary>Admin: change the centre's report-AI rules.</summary>
-public record SetAiPolicyCommand(bool ReportAiEnabled, bool AllowCloudDictation, int? MonthlyCallLimit) : IRequest<AiPolicyDto>;
+public record SetAiPolicyCommand(bool ReportAiEnabled, bool AllowCloudDictation, int? MonthlyCallLimit,
+    bool? VisionDraftEnabled = null, bool? CaptureApprovedCases = null) : IRequest<AiPolicyDto>;
 
 public class SetAiPolicyCommandHandler : IRequestHandler<SetAiPolicyCommand, AiPolicyDto>
 {
@@ -60,6 +68,9 @@ public class SetAiPolicyCommandHandler : IRequestHandler<SetAiPolicyCommand, AiP
         p.ReportAiEnabled = request.ReportAiEnabled;
         p.AllowCloudDictation = request.AllowCloudDictation;
         p.MonthlyCallLimit = request.MonthlyCallLimit;
+        // Older screens don't send these — keep what was set.
+        if (request.VisionDraftEnabled.HasValue) p.VisionDraftEnabled = request.VisionDraftEnabled.Value;
+        if (request.CaptureApprovedCases.HasValue) p.CaptureApprovedCases = request.CaptureApprovedCases.Value;
         p.UpdatedAt = DateTime.UtcNow;
         p.UpdatedByUserId = uc.UserId == Guid.Empty ? null : uc.UserId;
         await _db.SaveChangesAsync(ct);

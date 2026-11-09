@@ -70,7 +70,23 @@ public class AnthropicService : IAnthropicService
         return new AiJsonResult(text, usage);
     }
 
-    private async Task<(string Text, AiUsage Usage)> SendAsync(string systemPrompt, string userPrompt, CancellationToken cancellationToken)
+    public async Task<AiJsonResult> GenerateJsonWithImagesAsync(string systemPrompt, string userPrompt, IReadOnlyList<byte[]> jpegImages, CancellationToken cancellationToken = default)
+    {
+        var sys = systemPrompt + "\n\nOUTPUT FORMAT: Respond with a SINGLE valid JSON object and NOTHING else — no prose, no markdown code fences.";
+        var blocks = new List<object>();
+        var n = 0;
+        foreach (var jpeg in jpegImages)
+        {
+            n++;
+            blocks.Add(new { type = "text", text = $"Image {n}:" });
+            blocks.Add(new { type = "image", source = new { type = "base64", media_type = "image/jpeg", data = Convert.ToBase64String(jpeg) } });
+        }
+        blocks.Add(new { type = "text", text = userPrompt });
+        var (text, usage) = await SendAsync(sys, blocks, cancellationToken);
+        return new AiJsonResult(text, usage);
+    }
+
+    private async Task<(string Text, AiUsage Usage)> SendAsync(string systemPrompt, object userContent, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(_apiKey))
             throw new InvalidOperationException("Anthropic API key is not configured (set Anthropic__ApiKey).");
@@ -99,7 +115,7 @@ public class AnthropicService : IAnthropicService
             },
             messages = new[]
             {
-                new { role = "user", content = userPrompt }
+                new { role = "user", content = userContent }
             }
         };
 

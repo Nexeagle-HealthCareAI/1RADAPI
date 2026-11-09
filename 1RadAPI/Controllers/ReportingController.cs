@@ -16,6 +16,7 @@ using _1Rad.Application.Features.Reporting.Queries.BuildTermFrequency;
 using _1Rad.Application.Common.Exceptions;
 using _1Rad.Application.Features.Reporting.Queries.GetTemplates;
 using _1Rad.Application.Features.Reporting.AiPolicy;
+using _1Rad.Application.Features.Reporting.ImageLinks;
 using _1Rad.Application.Common;
 using System;
 using System.Collections.Generic;
@@ -68,6 +69,49 @@ namespace _1RadAPI.Controllers
             try { return Ok(new { success = true, data = await _mediator.Send(body, ct) }); }
             catch (ArgumentException ex) { return BadRequest(new { success = false, error = ex.Message }); }
         }
+
+        // ── Key images and AI drafting from images ─────────────────────────
+        public record KeyImageBody(Guid? AppointmentId, Guid? AppointmentServiceId, Guid? ImagingStudyId,
+            Guid? StudyAssetId, string? SeriesInstanceUid, string? SopInstanceUid, int? FrameIndex, int? SliceIndex, string? Note);
+        public record ReportOwnerBody(Guid? AppointmentId, Guid? AppointmentServiceId, Guid? ImagingStudyId);
+
+        [HttpGet("key-images")]
+        public async Task<IActionResult> GetKeyImages([FromQuery] Guid? appointmentId, [FromQuery] Guid? serviceId, [FromQuery] Guid? studyId, CancellationToken ct)
+            => Ok(new { success = true, data = await _mediator.Send(new GetKeyImagesQuery(new ReportOwner(appointmentId, serviceId, studyId)), ct) });
+
+        [HttpPost("key-images")]
+        [Authorize(Roles = RoleConstants.AdminDoctor + "," + RoleConstants.Doctor + "," + RoleConstants.Technician)]
+        public async Task<IActionResult> AddKeyImage([FromBody] KeyImageBody b, CancellationToken ct)
+        {
+            try
+            {
+                var dto = await _mediator.Send(new AddKeyImageCommand(new ReportOwner(b.AppointmentId, b.AppointmentServiceId, b.ImagingStudyId),
+                    b.StudyAssetId, b.SeriesInstanceUid, b.SopInstanceUid ?? string.Empty, b.FrameIndex, b.SliceIndex, b.Note), ct);
+                return Ok(new { success = true, data = dto });
+            }
+            catch (ArgumentException ex) { return BadRequest(new { success = false, error = ex.Message }); }
+            catch (KeyNotFoundException ex) { return NotFound(new { success = false, error = ex.Message }); }
+        }
+
+        [HttpDelete("key-images/{id:guid}")]
+        [Authorize(Roles = RoleConstants.AdminDoctor + "," + RoleConstants.Doctor + "," + RoleConstants.Technician)]
+        public async Task<IActionResult> RemoveKeyImage(Guid id, CancellationToken ct)
+            => await _mediator.Send(new RemoveKeyImageCommand(id), ct)
+                ? Ok(new { success = true })
+                : NotFound(new { success = false, error = "Key image not found." });
+
+        /// <summary>Draft findings + impression from the key images. Draft only — the doctor reviews, edits and signs.</summary>
+        [HttpPost("vision-draft")]
+        [Authorize(Roles = RoleConstants.AdminDoctor + "," + RoleConstants.Doctor)]
+        public async Task<IActionResult> VisionDraft([FromBody] ReportOwnerBody b, CancellationToken ct)
+        {
+            var res = await _mediator.Send(new VisionDraftCommand(new ReportOwner(b.AppointmentId, b.AppointmentServiceId, b.ImagingStudyId)), ct);
+            return Ok(new { success = res.Success, data = res, error = res.Error });
+        }
+
+        [HttpPost("ai-drafts/{id:guid}/applied")]
+        public async Task<IActionResult> MarkDraftApplied(Guid id, CancellationToken ct)
+            => Ok(new { success = await _mediator.Send(new MarkAiDraftAppliedCommand(id), ct) });
 
         [HttpGet("ai-usage")]
         [Authorize(Roles = RoleConstants.AdminDoctor + "," + RoleConstants.AdminOperator)]

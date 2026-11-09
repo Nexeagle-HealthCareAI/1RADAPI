@@ -20,6 +20,18 @@ public class CentreAiPolicy : BaseEntity, IHospitalContext
     /// </summary>
     public bool AllowCloudDictation { get; set; }
 
+    /// <summary>
+    /// Draft a report from the doctor's key images with the AI. Off by default:
+    /// it sends (de-identified) pictures to the AI provider.
+    /// </summary>
+    public bool VisionDraftEnabled { get; set; }
+
+    /// <summary>
+    /// Keep each Final report, de-identified, with its key-image references and
+    /// any AI draft, to improve the centre's AI later. Off by default.
+    /// </summary>
+    public bool CaptureApprovedCases { get; set; }
+
     /// <summary>Report-AI requests allowed per calendar month; null = server default.</summary>
     public int? MonthlyCallLimit { get; set; }
 
