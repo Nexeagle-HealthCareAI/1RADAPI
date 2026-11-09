@@ -143,7 +143,7 @@ public class FinalizeReportCommandHandler : IRequestHandler<FinalizeReportComman
         report.SignerName = user.FullName;
         report.SignerCredentials = string.IsNullOrWhiteSpace(request.Credentials)
             ? BuildCredentials(user)
-            : request.Credentials!.Trim();
+            : WithRegistration(request.Credentials!.Trim(), user);
         report.SignedAt = nowUtc;
         report.SignedContentHash = contentHash;
         report.UpdatedAt = nowUtc;
@@ -277,11 +277,22 @@ public class FinalizeReportCommandHandler : IRequestHandler<FinalizeReportComman
         return report;
     }
 
+    // The sign-off dialog pre-fills degree + specialty only. The printed
+    // report must also carry the radiologist's registration number, so add it
+    // to the snapshot when the typed credentials don't already mention it.
+    private static string WithRegistration(string credentials, User user)
+    {
+        var reg = user.LicenseNo?.Trim();
+        if (string.IsNullOrEmpty(reg) || credentials.Contains(reg, StringComparison.OrdinalIgnoreCase))
+            return credentials;
+        return string.IsNullOrEmpty(credentials) ? $"Reg. {reg}" : $"{credentials}, Reg. {reg}";
+    }
+
     private static string BuildCredentials(User user)
     {
         var parts = new List<string>();
         if (!string.IsNullOrWhiteSpace(user.Degree)) parts.Add(user.Degree!.Trim());
-        if (!string.IsNullOrWhiteSpace(user.LicenseNo)) parts.Add($"Lic. {user.LicenseNo!.Trim()}");
+        if (!string.IsNullOrWhiteSpace(user.LicenseNo)) parts.Add($"Reg. {user.LicenseNo!.Trim()}");
         return string.Join(", ", parts);
     }
 }

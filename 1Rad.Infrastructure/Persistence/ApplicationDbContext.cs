@@ -947,6 +947,11 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.FontFamily).HasMaxLength(100);
             entity.Property(e => e.LetterheadBlobUrl).HasMaxLength(500);
             entity.Property(e => e.OverflowBackgroundMode).HasMaxLength(50).HasDefaultValue("REUSE");
+            entity.Property(e => e.PaperMode).HasMaxLength(20).HasDefaultValue(PaperModes.Letterhead);
+            entity.Property(e => e.HeaderImageBlobUrl).HasMaxLength(500);
+            entity.Property(e => e.FooterImageBlobUrl).HasMaxLength(500);
+            entity.Property(e => e.LogoBlobUrl).HasMaxLength(500);
+            entity.Property(e => e.AccentColor).HasMaxLength(20);
 
             entity.HasOne(e => e.Doctor)
                 .WithMany()

@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System;
+using System.Linq;
 using System.Threading.Tasks;
 
 namespace _1RadAPI.Controllers
@@ -49,18 +50,72 @@ namespace _1RadAPI.Controllers
             {
                 var hospitalId = _userContext.HospitalId;
                 var protocol = await _context.PrescriptionProtocols
-                    .Include(p => p.Doctor)
+                    .AsNoTracking()
                     .Where(p => p.HospitalId == hospitalId)
                     .OrderByDescending(p => p.LetterheadBlobUrl != null)
                     .ThenBy(p => p.CreatedAt)
                     .FirstOrDefaultAsync();
 
+                // Centre details for the STANDARD design (and the PDF header in
+                // LETTERHEAD mode) — read from the Hospital record so there is
+                // one place to correct the name / address / registration.
+                var centre = await _context.Hospitals
+                    .AsNoTracking()
+                    .Where(h => h.HospitalId == hospitalId)
+                    .Select(h => new
+                    {
+                        name = h.HospitalName,
+                        address = h.HospitalAddress,
+                        phone = h.PublicContact,
+                        email = h.PublicEmail,
+                        registrationNumber = h.RegistrationNumber,
+                        nabhNumber = h.NABHNumber,
+                    })
+                    .FirstOrDefaultAsync();
+
                 if (protocol == null)
                 {
-                    return Ok(new { success = true, data = (object?)null, message = "No custom branding profile found. Using system defaults." });
+                    // No setup yet: the standard design, built from the centre.
+                    return Ok(new
+                    {
+                        success = true,
+                        data = (object?)null,
+                        defaults = new { paperMode = PaperModes.Standard, showRegistration = true, showQr = true, pdfStandardHeader = true },
+                        centre,
+                        message = "No custom branding profile found. Using system defaults."
+                    });
                 }
 
-                return Ok(new { success = true, data = protocol });
+                // A flat projection (not the entity) so the response never
+                // carries the Doctor user record.
+                return Ok(new
+                {
+                    success = true,
+                    data = new
+                    {
+                        protocol.Id,
+                        protocol.HospitalId,
+                        protocol.HeaderMargin,
+                        protocol.LeftMargin,
+                        protocol.RightMargin,
+                        protocol.BottomMargin,
+                        protocol.FontSize,
+                        protocol.FontColor,
+                        protocol.FontFamily,
+                        protocol.LetterheadBlobUrl,
+                        protocol.OverflowBackgroundMode,
+                        protocol.PaperMode,
+                        protocol.HeaderImageBlobUrl,
+                        protocol.FooterImageBlobUrl,
+                        protocol.LogoBlobUrl,
+                        protocol.AccentColor,
+                        protocol.ShowRegistration,
+                        protocol.ShowQr,
+                        protocol.PdfStandardHeader,
+                        protocol.UpdatedAt,
+                        centre,
+                    }
+                });
             }
             catch (Exception ex)
             {
@@ -79,6 +134,18 @@ namespace _1RadAPI.Controllers
             try
             {
                 var hospitalId = _userContext.HospitalId;
+
+                var paperMode = string.IsNullOrWhiteSpace(request.PaperMode)
+                    ? null
+                    : request.PaperMode.Trim().ToUpperInvariant();
+                if (paperMode != null && !PaperModes.IsValid(paperMode))
+                {
+                    return BadRequest(new { success = false, error = "Paper mode must be IMAGES, STANDARD or LETTERHEAD." });
+                }
+                if (request.AccentColor != null && !System.Text.RegularExpressions.Regex.IsMatch(request.AccentColor, "^#[0-9A-Fa-f]{6}$"))
+                {
+                    return BadRequest(new { success = false, error = "Colour must look like #0F52BA." });
+                }
 
                 // STRATEGIC VALIDATION
                 if (request.HeaderMargin < 8 || request.LeftMargin < 8 || request.RightMargin < 8 || request.BottomMargin < 8)
@@ -117,6 +184,46 @@ namespace _1RadAPI.Controllers
                     }
                 }
 
+                // Report-paper pictures: a new file replaces the old one; a
+                // Remove* flag clears it; otherwise the stored one is kept.
+                async Task<string?> UploadOrKeep(IFormFile? file, bool remove, string? current)
+                {
+                    if (file != null)
+                    {
+                        if (file.Length > 8 * 1024 * 1024)
+                            throw new InvalidOperationException($"{file.FileName} is larger than 8 MB.");
+                        if (!(file.ContentType?.StartsWith("image/") ?? false))
+                            throw new InvalidOperationException($"{file.FileName} must be a picture (PNG or JPG).");
+                        using var s = file.OpenReadStream();
+                        return await _blobService.UploadFileAsync(s, file.FileName, file.ContentType);
+                    }
+                    return remove ? null : current;
+                }
+
+                string? headerUrl, footerUrl, logoUrl;
+                try
+                {
+                    headerUrl = await UploadOrKeep(request.HeaderImageFile, request.RemoveHeaderImage, protocol?.HeaderImageBlobUrl);
+                    footerUrl = await UploadOrKeep(request.FooterImageFile, request.RemoveFooterImage, protocol?.FooterImageBlobUrl);
+                    logoUrl = await UploadOrKeep(request.LogoFile, request.RemoveLogo, protocol?.LogoBlobUrl);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return BadRequest(new { success = false, error = ex.Message });
+                }
+                catch (Exception ex)
+                {
+                    return StatusCode(500, new { success = false, error = $"Could not upload the picture. {ex.Message}" });
+                }
+                if (request.RemoveLetterhead && request.LetterheadFile == null) letterheadUrl = null;
+
+                paperMode ??= protocol?.PaperMode ?? PaperModes.Letterhead;
+
+                if (paperMode == PaperModes.Images && (headerUrl == null || footerUrl == null))
+                {
+                    return BadRequest(new { success = false, error = "Upload both a header picture and a footer picture, or choose another way." });
+                }
+
                 if (protocol == null)
                 {
                     protocol = new PrescriptionProtocol
@@ -136,6 +243,14 @@ namespace _1RadAPI.Controllers
                         FontFamily = request.FontFamily,
                         LetterheadBlobUrl = letterheadUrl,
                         OverflowBackgroundMode = request.OverflowBackgroundMode ?? "REUSE",
+                        PaperMode = paperMode,
+                        HeaderImageBlobUrl = headerUrl,
+                        FooterImageBlobUrl = footerUrl,
+                        LogoBlobUrl = logoUrl,
+                        AccentColor = request.AccentColor,
+                        ShowRegistration = request.ShowRegistration ?? true,
+                        ShowQr = request.ShowQr ?? true,
+                        PdfStandardHeader = request.PdfStandardHeader ?? true,
                         CreatedAt = DateTime.UtcNow,
                         UpdatedAt = DateTime.UtcNow
                     };
@@ -152,12 +267,21 @@ namespace _1RadAPI.Controllers
                     protocol.FontFamily = request.FontFamily;
                     protocol.LetterheadBlobUrl = letterheadUrl;
                     protocol.OverflowBackgroundMode = request.OverflowBackgroundMode ?? "REUSE";
+                    protocol.PaperMode = paperMode;
+                    protocol.HeaderImageBlobUrl = headerUrl;
+                    protocol.FooterImageBlobUrl = footerUrl;
+                    protocol.LogoBlobUrl = logoUrl;
+                    // Old clients (no paper fields) keep the stored values.
+                    if (request.AccentColor != null) protocol.AccentColor = request.AccentColor;
+                    if (request.ShowRegistration.HasValue) protocol.ShowRegistration = request.ShowRegistration.Value;
+                    if (request.ShowQr.HasValue) protocol.ShowQr = request.ShowQr.Value;
+                    if (request.PdfStandardHeader.HasValue) protocol.PdfStandardHeader = request.PdfStandardHeader.Value;
                     protocol.UpdatedAt = DateTime.UtcNow;
                 }
 
                 await _context.SaveChangesAsync(default);
 
-                return Ok(new { success = true, data = protocol });
+                return await GetProtocol(protocol.DoctorId);
             }
             catch (Exception ex)
             {
@@ -178,5 +302,20 @@ namespace _1RadAPI.Controllers
         public string? FontFamily { get; set; }
         public string? OverflowBackgroundMode { get; set; } // 'REUSE' or 'BLANK'
         public IFormFile? LetterheadFile { get; set; } = null;
+        public bool RemoveLetterhead { get; set; }
+
+        // Report paper (migration 111). All optional: an older client that
+        // sends none of these keeps the centre's stored paper settings.
+        public string? PaperMode { get; set; } // IMAGES | STANDARD | LETTERHEAD
+        public IFormFile? HeaderImageFile { get; set; }
+        public IFormFile? FooterImageFile { get; set; }
+        public IFormFile? LogoFile { get; set; }
+        public bool RemoveHeaderImage { get; set; }
+        public bool RemoveFooterImage { get; set; }
+        public bool RemoveLogo { get; set; }
+        public string? AccentColor { get; set; }
+        public bool? ShowRegistration { get; set; }
+        public bool? ShowQr { get; set; }
+        public bool? PdfStandardHeader { get; set; }
     }
 }
