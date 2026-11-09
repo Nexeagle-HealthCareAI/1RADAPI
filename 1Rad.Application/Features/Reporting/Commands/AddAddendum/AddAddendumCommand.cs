@@ -29,16 +29,23 @@ public class AddAddendumCommandHandler : IRequestHandler<AddAddendumCommand, Dia
     private readonly IApplicationDbContext _context;
     private readonly IPasswordHasher _passwordHasher;
 
-    public AddAddendumCommandHandler(IApplicationDbContext context, IPasswordHasher passwordHasher)
+    private readonly IDistributedRateLimiter? _limiter;
+
+    public AddAddendumCommandHandler(IApplicationDbContext context, IPasswordHasher passwordHasher,
+        IDistributedRateLimiter? limiter = null)
     {
         _context = context;
         _passwordHasher = passwordHasher;
+        _limiter = limiter;
     }
 
     public async Task<DiagnosticReport> Handle(AddAddendumCommand request, CancellationToken cancellationToken)
     {
         var hospitalId = _context.UserContext.HospitalId;
         var doctorId = _context.UserContext.UserId;
+
+        // Only doctors amend a signed report.
+        ReportSignOff.EnsureCanSign(_context.UserContext);
 
         if (string.IsNullOrWhiteSpace(request.Text))
             throw new ArgumentException("Addendum text is required.", nameof(request.Text));
@@ -47,8 +54,8 @@ public class AddAddendumCommandHandler : IRequestHandler<AddAddendumCommand, Dia
         var user = await _context.Users.FirstOrDefaultAsync(u => u.UserId == doctorId, cancellationToken);
         if (user == null)
             throw new UnauthorizedAccessException("Signing user not found.");
-        if (string.IsNullOrEmpty(user.PasswordHash) || !_passwordHasher.Verify(request.Password ?? string.Empty, user.PasswordHash))
-            throw new UnauthorizedAccessException("Password verification failed — the addendum was not added.");
+        await ReportSignOff.VerifyPasswordAsync(user, request.Password, _passwordHasher, _limiter,
+            "Password verification failed — the addendum was not added.", cancellationToken);
 
         // Resolve owner (appointment XOR study), tenant-checked.
         Appointment? appointment = null;
@@ -167,7 +174,7 @@ public class AddAddendumCommandHandler : IRequestHandler<AddAddendumCommand, Dia
     {
         var parts = new List<string>();
         if (!string.IsNullOrWhiteSpace(user.Degree)) parts.Add(user.Degree!.Trim());
-        if (!string.IsNullOrWhiteSpace(user.LicenseNo)) parts.Add($"Lic. {user.LicenseNo!.Trim()}");
+        if (!string.IsNullOrWhiteSpace(user.LicenseNo)) parts.Add($"Reg. {user.LicenseNo!.Trim()}");
         return string.Join(", ", parts);
     }
 }

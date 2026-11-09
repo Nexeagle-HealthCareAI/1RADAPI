@@ -30,6 +30,36 @@ public sealed class SqlRateLimiter : IDistributedRateLimiter
         _logger = logger;
     }
 
+    public async Task<int> PeekAsync(string key, TimeSpan window, CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        var windowStart = new DateTime(now.Ticks - now.Ticks % window.Ticks, DateTimeKind.Utc);
+        if (key.Length > 200) key = key[..200];
+
+        if (!_db.Database.IsRelational())
+            return InMemory.TryGetValue((key, windowStart), out var c) ? c : 0;
+
+        try
+        {
+            var conn = _db.Database.GetDbConnection();
+            if (conn.State != ConnectionState.Open) await conn.OpenAsync(ct);
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT ISNULL((SELECT Hits FROM dbo.RateLimitCounters WHERE LimitKey = @k AND WindowStart = @w), 0);";
+            var ambient = _db.Database.CurrentTransaction?.GetDbTransaction();
+            if (ambient != null) cmd.Transaction = ambient;
+            DbParameter P(string n, object v) { var p = cmd.CreateParameter(); p.ParameterName = n; p.Value = v; return p; }
+            cmd.Parameters.Add(P("@k", key));
+            cmd.Parameters.Add(P("@w", windowStart));
+            return Convert.ToInt32(await cmd.ExecuteScalarAsync(ct));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Fail open, like TryAcquireAsync: a limiter outage must not block signing.
+            _logger.LogWarning(ex, "Rate limiter peek failed for {Key}; allowing.", key);
+            return 0;
+        }
+    }
+
     public async Task<(bool Allowed, TimeSpan RetryAfter)> TryAcquireAsync(string key, int limit, TimeSpan window, CancellationToken ct)
     {
         var now = DateTime.UtcNow;

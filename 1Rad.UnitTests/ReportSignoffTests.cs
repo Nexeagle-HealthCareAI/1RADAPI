@@ -25,6 +25,10 @@ public class ReportSignoffTests : BaseHandlerTest
         _hasher.Setup(h => h.Verify(It.IsAny<string>(), It.IsAny<string>()))
                .Returns((string pwd, string _) => pwd == "correct");
 
+        // The signer holds the Doctor role in this centre (token "rid") —
+        // only doctors may sign (ReportSignOff.EnsureCanSign).
+        MockUserContext.Setup(x => x.RoleIds).Returns(new[] { 3 });
+
         // Seed the signing user (matches the mocked UserContext.UserId).
         Context.Users.Add(new User
         {

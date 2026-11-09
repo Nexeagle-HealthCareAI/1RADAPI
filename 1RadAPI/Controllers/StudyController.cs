@@ -2438,6 +2438,16 @@ namespace _1RadAPI.Controllers
                 if (study!.AppointmentId != null)
                     return BadRequest(new { success = false, error = "This study is linked to an appointment; manage its imaging from the appointment instead." });
 
+                // A signed report (Preliminary, Final or Addended) is a medical
+                // record: never delete it, and never delete the study under it.
+                var hasSignedReport = await _context.DiagnosticReports
+                    .IgnoreQueryFilters()
+                    .AnyAsync(r => r.ImagingStudyId == study.Id
+                                && r.HospitalId == study.HospitalId
+                                && r.Status != ReportStatuses.Draft);
+                if (hasSignedReport)
+                    return Conflict(new { success = false, code = "STUDY_HAS_SIGNED_REPORT", error = "This study has a signed report, so it can't be deleted." });
+
                 var assets = await _context.StudyAssets
                     .IgnoreQueryFilters()
                     .Where(a => a.ImagingStudyId == study.Id)
@@ -2482,11 +2492,12 @@ namespace _1RadAPI.Controllers
                     await Task.WhenAll(batch);
                 }
 
-                // DB cleanup: study-based reports (NoAction FK) → assets (cascade
-                // deletes their slices) → the study itself.
+                // DB cleanup: the study's unsigned DRAFT reports (NoAction FK;
+                // signed ones were refused above) → assets (cascade deletes their
+                // slices) → the study itself.
                 var reports = await _context.DiagnosticReports
                     .IgnoreQueryFilters()
-                    .Where(r => r.ImagingStudyId == study.Id)
+                    .Where(r => r.ImagingStudyId == study.Id && r.Status == ReportStatuses.Draft)
                     .ToListAsync();
                 if (reports.Count > 0) _context.DiagnosticReports.RemoveRange(reports);
                 _context.StudyAssets.RemoveRange(assets);
