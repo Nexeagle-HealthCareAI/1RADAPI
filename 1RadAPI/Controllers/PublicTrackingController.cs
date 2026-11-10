@@ -3,6 +3,7 @@ using _1Rad.Application.Interfaces;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace _1RadAPI.Controllers;
 
@@ -55,15 +56,23 @@ public class PublicTrackingController : ControllerBase
 public class AppointmentTrackingTokenController : ControllerBase
 {
     private readonly ITrackingTokenService _tokenService;
+    private readonly IApplicationDbContext _context;
 
-    public AppointmentTrackingTokenController(ITrackingTokenService tokenService)
+    public AppointmentTrackingTokenController(ITrackingTokenService tokenService, IApplicationDbContext context)
     {
         _tokenService = tokenService;
+        _context = context;
     }
 
+    // Only for a visit in the caller's own centre: the per-centre query filter
+    // applies here, so another centre's appointment id is simply "not found".
+    // (The public endpoint reads across centres, so the token must never be
+    // issued for a visit the caller can't see.)
     [HttpGet("{id:guid}/tracking-token")]
-    public IActionResult Issue(Guid id)
+    public async Task<IActionResult> Issue(Guid id)
     {
+        var mine = await _context.Appointments.AsNoTracking().AnyAsync(a => a.AppointmentId == id);
+        if (!mine) return NotFound(new { success = false, error = "Appointment not found." });
         var token = _tokenService.Issue(id);
         return Ok(new { success = true, token });
     }

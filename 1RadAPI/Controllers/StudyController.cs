@@ -2406,6 +2406,29 @@ namespace _1RadAPI.Controllers
                     {
                         asset.AppointmentId = study.AppointmentId;
                     }
+
+                    // The study's report moves with its images: key it to the visit
+                    // (and the study's service line) so the visit's Reporting page
+                    // finds it instead of starting a second report for the same
+                    // images. It keeps its ImagingStudyId link too. Skipped when the
+                    // visit already has a report for that study.
+                    var studyReports = await _context.DiagnosticReports
+                        .IgnoreQueryFilters()
+                        .Where(r => r.ImagingStudyId == study.Id && r.HospitalId == study.HospitalId
+                                 && r.AppointmentId == null && r.DeletedAt == null)
+                        .ToListAsync();
+                    foreach (var rep in studyReports)
+                    {
+                        var svcId = study.AppointmentServiceId;
+                        var visitHasOne = await _context.DiagnosticReports
+                            .IgnoreQueryFilters()
+                            .AnyAsync(r => r.AppointmentId == study.AppointmentId && r.DeletedAt == null
+                                        && (svcId == null || r.AppointmentServiceId == svcId));
+                        if (visitHasOne) continue;
+                        rep.AppointmentId = study.AppointmentId;
+                        rep.AppointmentServiceId = svcId;
+                        rep.UpdatedAt = DateTime.UtcNow;
+                    }
                 }
 
                 await _context.SaveChangesAsync(default);
@@ -2437,6 +2460,16 @@ namespace _1RadAPI.Controllers
                 // through the appointment instead.
                 if (study!.AppointmentId != null)
                     return BadRequest(new { success = false, error = "This study is linked to an appointment; manage its imaging from the appointment instead." });
+
+                // A signed report (Preliminary, Final or Addended) is a medical
+                // record: never delete it, and never delete the study under it.
+                var hasSignedReport = await _context.DiagnosticReports
+                    .IgnoreQueryFilters()
+                    .AnyAsync(r => r.ImagingStudyId == study.Id
+                                && r.HospitalId == study.HospitalId
+                                && r.Status != ReportStatuses.Draft);
+                if (hasSignedReport)
+                    return Conflict(new { success = false, code = "STUDY_HAS_SIGNED_REPORT", error = "This study has a signed report, so it can't be deleted." });
 
                 var assets = await _context.StudyAssets
                     .IgnoreQueryFilters()
@@ -2482,11 +2515,12 @@ namespace _1RadAPI.Controllers
                     await Task.WhenAll(batch);
                 }
 
-                // DB cleanup: study-based reports (NoAction FK) → assets (cascade
-                // deletes their slices) → the study itself.
+                // DB cleanup: the study's unsigned DRAFT reports (NoAction FK;
+                // signed ones were refused above) → assets (cascade deletes their
+                // slices) → the study itself.
                 var reports = await _context.DiagnosticReports
                     .IgnoreQueryFilters()
-                    .Where(r => r.ImagingStudyId == study.Id)
+                    .Where(r => r.ImagingStudyId == study.Id && r.Status == ReportStatuses.Draft)
                     .ToListAsync();
                 if (reports.Count > 0) _context.DiagnosticReports.RemoveRange(reports);
                 _context.StudyAssets.RemoveRange(assets);

@@ -61,8 +61,18 @@ public record TrackReportDto(
     string Advice,
     bool IsFinalized,
     DateTime? FinalizedAt,
-    Guid? DoctorId
+    Guid? DoctorId,
+    // Multi-study visits + the sign-off, so the patient page can show each
+    // study's signed report with who signed it and any addenda.
+    Guid? AppointmentServiceId = null,
+    string? ServiceName = null,
+    string? SignerName = null,
+    string? SignerCredentials = null,
+    DateTime? SignedAt = null,
+    IReadOnlyList<TrackAddendumDto>? Addenda = null
 );
+
+public record TrackAddendumDto(string Text, string AuthorName, string? AuthorCredentials, DateTime SignedAt);
 
 // Patient-safe slice of the doctor's PrescriptionProtocol. This is the same
 // branding the patient already sees on their printed prescription: letterhead
@@ -84,8 +94,9 @@ public record TrackBrandingDto(
 
 public record TrackingResponseDto(
     TrackAppointmentDto Appointment,
-    TrackReportDto? Report,
-    TrackBrandingDto? Branding
+    TrackReportDto? Report,          // the first signed report (older clients)
+    TrackBrandingDto? Branding,
+    IReadOnlyList<TrackReportDto>? Reports = null   // every signed report on the visit, one per study
 );
 
 public record GetTrackingDataQuery(Guid AppointmentId) : IRequest<TrackingResponseDto?>;
@@ -103,12 +114,24 @@ public class GetTrackingDataQueryHandler : IRequestHandler<GetTrackingDataQuery,
         GetTrackingDataQuery request,
         CancellationToken cancellationToken)
     {
-        // No hospital-context filter — anonymous endpoint, access control is
-        // the signed token verified at the controller layer.
+        // Anonymous endpoint: the caller has no centre, so the global
+        // per-centre filter would hide every visit. Access control is the
+        // signed token (verified in the controller, bound to this one
+        // appointment id), so we bypass the filter and pin every query below
+        // to the visit's OWN centre explicitly.
+        var hospitalId = await _context.Appointments
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .Where(a => a.AppointmentId == request.AppointmentId)
+            .Select(a => (Guid?)a.HospitalId)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (hospitalId == null) return null;
+
         var appt = await _context.Appointments
+            .IgnoreQueryFilters()
             .AsNoTracking()
             .Include(a => a.Patient)
-            .Where(a => a.AppointmentId == request.AppointmentId)
+            .Where(a => a.AppointmentId == request.AppointmentId && a.HospitalId == hospitalId.Value)
             .Select(a => new TrackAppointmentDto(
                 a.AppointmentId,
                 a.DisplayId ?? string.Empty,
@@ -142,8 +165,10 @@ public class GetTrackingDataQueryHandler : IRequestHandler<GetTrackingDataQuery,
         // out so a patient never sees a "cancelled" row on the public
         // page.
         var services = await _context.AppointmentServices
+            .IgnoreQueryFilters()
             .AsNoTracking()
             .Where(s => s.AppointmentId == request.AppointmentId
+                     && s.HospitalId == hospitalId.Value
                      && s.DeletedAt == null
                      && s.Status != "CANCELLED")
             .OrderBy(s => s.UpdatedAt)
@@ -161,32 +186,75 @@ public class GetTrackingDataQueryHandler : IRequestHandler<GetTrackingDataQuery,
 
         // Only attach the report body when it's actually finalized. We don't
         // want patients reading half-typed drafts.
-        var report = await _context.DiagnosticReports
+        // Signed reports only (Final / Addended), never a draft — one per
+        // study on a multi-study visit, in study order.
+        var signed = await _context.DiagnosticReports
+            .IgnoreQueryFilters()
             .AsNoTracking()
-            .Where(r => r.AppointmentId == request.AppointmentId)
-            .Select(r => new TrackReportDto(
-                r.ReportingMode ?? "Narrative",
-                r.Findings ?? string.Empty,
-                r.Impression ?? string.Empty,
-                r.Advice ?? string.Empty,
-                r.IsFinalized,
-                r.FinalizedAt,
-                r.DoctorId
-            ))
-            .FirstOrDefaultAsync(cancellationToken);
+            .Where(r => r.AppointmentId == request.AppointmentId
+                     && r.HospitalId == hospitalId.Value
+                     && r.DeletedAt == null
+                     && r.IsFinalized)
+            .OrderBy(r => r.FinalizedAt ?? r.SignedAt ?? r.CreatedAt)
+            .Select(r => new
+            {
+                r.Id,
+                Dto = new TrackReportDto(
+                    r.ReportingMode ?? "Narrative",
+                    r.Findings ?? string.Empty,
+                    r.Impression ?? string.Empty,
+                    r.Advice ?? string.Empty,
+                    r.IsFinalized,
+                    r.FinalizedAt,
+                    r.DoctorId,
+                    r.AppointmentServiceId,
+                    null,
+                    r.SignerName,
+                    r.SignerCredentials,
+                    r.SignedAt,
+                    null),
+            })
+            .ToListAsync(cancellationToken);
 
-        if (report != null && !report.IsFinalized) report = null;
+        var reportIds = signed.Select(x => x.Id).ToList();
+        var addenda = reportIds.Count == 0
+            ? new List<ReportAddendumRow>()
+            : await _context.ReportAddenda
+                .IgnoreQueryFilters()
+                .AsNoTracking()
+                .Where(a => reportIds.Contains(a.ReportId) && a.HospitalId == hospitalId.Value)
+                .OrderBy(a => a.SortOrder)
+                .Select(a => new ReportAddendumRow(a.ReportId, a.Text, a.AuthorName, a.AuthorCredentials, a.SignedAt))
+                .ToListAsync(cancellationToken);
+
+        var serviceNames = services.ToDictionary(x => x.Id, x => x.ServiceName);
+        var serviceOrder = services.Select((x, i) => (x.Id, i)).ToDictionary(t => t.Id, t => t.i);
+        var reports = signed
+            .Select(x => x.Dto with
+            {
+                ServiceName = x.Dto.AppointmentServiceId is Guid sid && serviceNames.TryGetValue(sid, out var n) ? n : null,
+                Addenda = addenda.Where(a => a.ReportId == x.Id)
+                    .Select(a => new TrackAddendumDto(a.Text, a.AuthorName, a.AuthorCredentials, a.SignedAt))
+                    .ToList(),
+            })
+            .OrderBy(r => r.AppointmentServiceId is Guid sid && serviceOrder.TryGetValue(sid, out var i) ? i : int.MaxValue)
+            .ToList();
+        var report = reports.FirstOrDefault();
 
         // Branding is only relevant when there's a finalized report to render
         // — the live tracker view uses a flat dark UI, no letterhead. Pulling
         // it conditionally also keeps the response small for cases that don't
         // need it.
         TrackBrandingDto? branding = null;
-        if (report != null && report.DoctorId.HasValue)
+        if (report != null)
         {
+            // The report paper is one setting per centre (migration 79).
             branding = await _context.PrescriptionProtocols
+                .IgnoreQueryFilters()
                 .AsNoTracking()
-                .Where(p => p.DoctorId == report.DoctorId.Value)
+                .Where(p => p.HospitalId == hospitalId.Value)
+                .OrderByDescending(p => p.LetterheadBlobUrl != null)
+                .ThenBy(p => p.CreatedAt)
                 .Select(p => new TrackBrandingDto(
                     p.LetterheadBlobUrl,
                     p.FontFamily,
@@ -201,6 +269,8 @@ public class GetTrackingDataQueryHandler : IRequestHandler<GetTrackingDataQuery,
                 .FirstOrDefaultAsync(cancellationToken);
         }
 
-        return new TrackingResponseDto(appt, report, branding);
+        return new TrackingResponseDto(appt, report, branding, reports);
     }
 }
+
+internal sealed record ReportAddendumRow(Guid ReportId, string Text, string AuthorName, string? AuthorCredentials, DateTime SignedAt);

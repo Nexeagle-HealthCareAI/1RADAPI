@@ -1,4 +1,5 @@
 using MediatR;
+using _1Rad.Application.Common;
 using _1Rad.Application.Common.Exceptions;
 using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Entities;
@@ -99,6 +100,16 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
 
         var ownerHospitalId = appointment?.HospitalId ?? study!.HospitalId;
 
+        // The service line must belong to this visit — otherwise a crafted
+        // request could hang a report off another visit's service.
+        if (appointment != null && request.AppointmentServiceId is Guid svcId)
+        {
+            var belongs = await _context.AppointmentServices
+                .AnyAsync(s => s.Id == svcId && s.AppointmentId == appointment.AppointmentId, cancellationToken);
+            if (!belongs)
+                throw new ArgumentException("That service is not part of this visit.", nameof(request.AppointmentServiceId));
+        }
+
         // Upsert keyed by (AppointmentId, AppointmentServiceId). The
         // service-scoped lookup is the multi-service path; the fallback
         // (no AppointmentServiceId in the request OR no per-service
@@ -165,10 +176,17 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
         }
         else
         {
-            // Update existing report
+            // Update existing report. The author may edit; a doctor may take
+            // over a draft written by a non-doctor (technician typing for the
+            // radiologist) and becomes its author; doctors don't silently take
+            // each other's drafts.
             if (report.DoctorId != doctorId)
             {
-                throw new UnauthorizedAccessException("You do not have permission to modify this report.");
+                var mayTakeOver = await ReportSignOff.MayTakeOverAsync(
+                    _context, report.DoctorId, doctorId, _context.UserContext.RoleIds, hospitalId, cancellationToken);
+                if (!mayTakeOver)
+                    throw new UnauthorizedAccessException("This report is being written by another doctor.");
+                if (!ReportStatuses.IsLocked(report.Status)) report.DoctorId = doctorId;
             }
 
             // 21 CFR Part 11 immutability: a signed-FINAL (or addended) report's
@@ -249,8 +267,13 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
         {
             await _context.SaveChangesAsync(cancellationToken);
         }
-        catch (DbUpdateConcurrencyException)
+        catch (Exception ex) when (ex is DbUpdateConcurrencyException || IsDuplicateStudyReport(ex))
         {
+            // Also: two screens started the SAME study's report at once — the
+            // one-report-per-(visit, study) index (migration 113) refused the
+            // second insert. Answer it like a concurrent edit so the editor
+            // takes the saved copy and offers Undo, instead of a 500.
+            //
             // OCC mismatch — another writer updated the row between our
             // read and our save. Fetch the canonical current state so the
             // controller can hand it back to the client with 409 Conflict.
@@ -311,5 +334,16 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
 
         return report;
     }
-}
 
+    // SQL Server unique-index violation (2601/2627) on the per-study index,
+    // detected by name so the Application layer needs no SqlClient reference.
+    private static bool IsDuplicateStudyReport(Exception ex)
+    {
+        for (var e = ex; e != null; e = e.InnerException)
+        {
+            if (e.Message.Contains("UX_DiagnosticReports_Appointment_Service", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+}

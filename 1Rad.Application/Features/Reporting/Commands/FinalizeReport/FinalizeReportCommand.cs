@@ -42,19 +42,25 @@ public class FinalizeReportCommandHandler : IRequestHandler<FinalizeReportComman
     private readonly IApplicationDbContext _context;
     private readonly IPasswordHasher _passwordHasher;
     private readonly IReportReadyNotifier? _reportReady;
+    private readonly IDistributedRateLimiter? _limiter;
 
     public FinalizeReportCommandHandler(IApplicationDbContext context, IPasswordHasher passwordHasher,
-        IReportReadyNotifier? reportReady = null)
+        IReportReadyNotifier? reportReady = null, IDistributedRateLimiter? limiter = null)
     {
         _context = context;
         _passwordHasher = passwordHasher;
         _reportReady = reportReady;
+        _limiter = limiter;
     }
 
     public async Task<DiagnosticReport> Handle(FinalizeReportCommand request, CancellationToken cancellationToken)
     {
         var hospitalId = _context.UserContext.HospitalId;
         var doctorId = _context.UserContext.UserId;
+
+        // Only doctors sign — checked before the password so other roles can't
+        // use this endpoint at all.
+        ReportSignOff.EnsureCanSign(_context.UserContext);
 
         var target = (request.TargetStatus ?? string.Empty).Trim();
         if (target != ReportStatuses.Preliminary && target != ReportStatuses.Final)
@@ -70,10 +76,8 @@ public class FinalizeReportCommandHandler : IRequestHandler<FinalizeReportComman
         {
             throw new UnauthorizedAccessException("Signing user not found.");
         }
-        if (string.IsNullOrEmpty(user.PasswordHash) || !_passwordHasher.Verify(request.Password ?? string.Empty, user.PasswordHash))
-        {
-            throw new UnauthorizedAccessException("Password verification failed — your signature was not applied.");
-        }
+        await ReportSignOff.VerifyPasswordAsync(user, request.Password, _passwordHasher, _limiter,
+            "Password verification failed — your signature was not applied.", cancellationToken);
 
         // ── Resolve the report owner (appointment XOR study), tenant-checked. ──
         Appointment? appointment = null;
@@ -97,6 +101,17 @@ public class FinalizeReportCommandHandler : IRequestHandler<FinalizeReportComman
             if (appointment == null) throw new KeyNotFoundException($"Appointment with ID '{request.AppointmentId}' not found.");
             if (appointment.HospitalId != hospitalId)
                 throw new UnauthorizedAccessException("You do not have permission to sign a report for this appointment.");
+        }
+
+        // On a visit with several studies the sign-off must say WHICH study:
+        // signing "the visit" used to sign whichever report came first and
+        // mark the whole visit REPORTED.
+        if (appointment != null && !request.AppointmentServiceId.HasValue)
+        {
+            var liveStudies = await _context.AppointmentServices
+                .CountAsync(s => s.AppointmentId == appointment.AppointmentId && s.DeletedAt == null, cancellationToken);
+            if (liveStudies > 1)
+                throw new ArgumentException("This visit has more than one study — open the study you are signing and sign it there.");
         }
 
         // ── Load the report to be signed (must already be saved). ──
@@ -125,8 +140,10 @@ public class FinalizeReportCommandHandler : IRequestHandler<FinalizeReportComman
 
         // Only the authoring radiologist may sign their report. (DoctorId is
         // stamped on the draft; an unowned legacy draft is claimed by the signer.)
-        if (report.DoctorId.HasValue && report.DoctorId.Value != doctorId)
-            throw new UnauthorizedAccessException("You do not have permission to sign this report.");
+        // A doctor may also sign a draft typed by a non-doctor (technician).
+        if (report.DoctorId.HasValue && report.DoctorId.Value != doctorId
+            && !await ReportSignOff.MayTakeOverAsync(_context, report.DoctorId, doctorId, _context.UserContext.RoleIds, hospitalId, cancellationToken))
+            throw new UnauthorizedAccessException("This report belongs to another doctor — only they can sign it.");
 
         // A Final/Addended report is immutable — re-signing isn't allowed
         // (corrections go through an addendum).
@@ -137,7 +154,7 @@ public class FinalizeReportCommandHandler : IRequestHandler<FinalizeReportComman
         var contentHash = ReportHashing.HashContent(report.Findings, report.Impression, report.Advice);
 
         // ── Apply the signature. ──
-        if (report.DoctorId == null) report.DoctorId = doctorId;
+        report.DoctorId = doctorId; // the signer is the author of record
         report.Status = target;
         report.SignedByUserId = doctorId;
         report.SignerName = user.FullName;
