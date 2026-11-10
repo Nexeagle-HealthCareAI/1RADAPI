@@ -49,10 +49,16 @@ public static class PhiRedactor
         {
             // Whole words only: no letter/digit immediately before or after.
             var pattern = $@"(?<![\p{{L}}\p{{N}}]){Regex.Escape(raw)}(?![\p{{L}}\p{{N}}])";
-            if (!Regex.IsMatch(work, pattern, RegexOptions.IgnoreCase)) continue;
-            var placeholder = Next();
-            map[placeholder] = raw;
-            work = Regex.Replace(work, pattern, placeholder, RegexOptions.IgnoreCase);
+            // Matching ignores case, but each distinct spelling gets its own placeholder, so Restore puts back
+            // exactly what was written ("pooja" stays "pooja", "POOJA" stays "POOJA"), not the stored spelling.
+            work = Regex.Replace(work, pattern, m =>
+            {
+                var existing = map.FirstOrDefault(kv => kv.Value == m.Value).Key;
+                if (existing != null) return existing;
+                var placeholder = Next();
+                map[placeholder] = m.Value;
+                return placeholder;
+            }, RegexOptions.IgnoreCase);
         }
 
         foreach (var re in new[] { Email, Mobile, TwelveDigitId })
