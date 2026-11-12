@@ -73,8 +73,8 @@ public class GetDailyCheckQueryHandler : IRequestHandler<GetDailyCheckQuery, Dai
         // NO_BILL: a visit that went ahead but has no live bill.
         foreach (var v in visits.Where(v => !Cancelled(v.Status) && (v.ArrivedAt != null || IsDone(v.Status))))
         {
-            var live = billByVisit.TryGetValue(v.AppointmentId, out var bs) && bs.Any(b => !Cancelled(b.Status));
-            if (!live)
+            var hasBill = billByVisit.TryGetValue(v.AppointmentId, out var bs) && bs.Any(b => !Cancelled(b.Status));
+            if (!hasBill)
                 issues.Add(new DailyCheckIssue("NO_BILL", "high", "Visit with no bill", v.DisplayId, null, null, v.AppointmentId, v.PatientName, null));
         }
 
