@@ -53,7 +53,7 @@ public record ChainCopyResult(Guid HospitalId, bool BillingCopied, int PricesAdd
 /// <summary>
 /// Copying one centre's setup to another, and keeping linked centres in step.
 /// Billing = every rule in HospitalBillingSettings (discount limits, reason rule,
-/// partner payout rule, GST, credit notes, TDS). Prices = the price list, matched
+/// partner payout rule, GST, credit notes, TDS) and automatic billing. Prices = the price list, matched
 /// by modality + test name. Tests that exist only at the target are never deleted:
 /// they may be on old bills, and the owner board lists them so the owner decides.
 /// Report templates belong to each centre, so a new price is copied without one
@@ -64,6 +64,12 @@ public static class ChainSetup
 {
     public static async Task<bool> CopyBillingAsync(IApplicationDbContext db, Guid fromId, Guid toId, CancellationToken ct)
     {
+        // Automatic billing (a bill made by itself when a visit is completed) lives on the
+        // centre itself, not in HospitalBillingSettings; it is part of "billing rules" too.
+        var autoBill = await db.Hospitals.AsNoTracking().Where(h => h.HospitalId == fromId).Select(h => (bool?)h.IsAutoBillingEnabled).FirstOrDefaultAsync(ct);
+        var target = await db.Hospitals.FirstOrDefaultAsync(h => h.HospitalId == toId, ct);
+        if (autoBill.HasValue && target != null) target.IsAutoBillingEnabled = autoBill.Value;
+
         var src = await db.HospitalBillingSettings.IgnoreQueryFilters().AsNoTracking().FirstOrDefaultAsync(s => s.HospitalId == fromId, ct);
         var dst = await db.HospitalBillingSettings.IgnoreQueryFilters().FirstOrDefaultAsync(s => s.HospitalId == toId, ct);
         if (src == null)

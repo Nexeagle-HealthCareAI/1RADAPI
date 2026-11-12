@@ -27,7 +27,7 @@ public class OwnerBoardTests : BaseHandlerTest
         var desk = new Role { RoleId = 4, RoleName = "Receptionist" };
         Context.Roles.AddRange(admin, desk);
         Context.Hospitals.AddRange(
-            new Hospital { HospitalId = HospitalId, HospitalName = "Main Road", CreatedAt = DateTime.UtcNow.AddYears(-2) },
+            new Hospital { HospitalId = HospitalId, HospitalName = "Main Road", CreatedAt = DateTime.UtcNow.AddYears(-2), IsAutoBillingEnabled = true },
             new Hospital { HospitalId = _second, HospitalName = "Lake Town", CreatedAt = DateTime.UtcNow.AddYears(-1) },
             new Hospital { HospitalId = _third, HospitalName = "Salt Lake", CreatedAt = DateTime.UtcNow },
             new Hospital { HospitalId = _notMine, HospitalName = "Someone else", CreatedAt = DateTime.UtcNow });
@@ -75,6 +75,7 @@ public class OwnerBoardTests : BaseHandlerTest
         s.DiscountReasonRequired.Should().BeTrue();
         s.PartnerPayWhenBilled.Should().BeFalse();
         s.TdsCommissionRate.Should().Be(2);
+        (await Context.Hospitals.SingleAsync(h => h.HospitalId == _second)).IsAutoBillingEnabled.Should().BeTrue("automatic billing is a billing rule too");
 
         var prices = await Context.ServiceCharges.IgnoreQueryFilters().Where(x => x.HospitalId == _second).ToListAsync();
         prices.Should().HaveCount(3, "USG Abdomen stays — it is only at Lake Town and may be on old bills");

@@ -37,7 +37,7 @@ public record GetOwnerApprovalsQuery : IRequest<List<OwnerApprovalItem>>;
 
 public record OwnerReviewApprovalCommand(Guid HospitalId, Guid Id, bool Approve, string? Note, string? RefundMode = null) : IRequest<bool>;
 
-public record OwnerSetupCentre(OwnerCentreInfo Centre, BillingSettingsDto Billing, int PriceCount);
+public record OwnerSetupCentre(OwnerCentreInfo Centre, BillingSettingsDto Billing, int PriceCount, bool AutoBilling = false);
 public record OwnerPriceRow(string Modality, string Test, Dictionary<Guid, decimal> Prices);
 public record OwnerSetupDto(Guid? MainHospitalId, List<OwnerSetupCentre> Centres, List<OwnerPriceRow> Prices, bool PricesCut);
 
@@ -163,11 +163,14 @@ public class OwnerBoardHandlers :
             .Take(MaxPriceRows * Math.Max(1, ids.Count) + 1)
             .ToListAsync(ct);
 
+        var autoBill = await _db.Hospitals.AsNoTracking().Where(h => ids.Contains(h.HospitalId))
+            .Select(h => new { h.HospitalId, h.IsAutoBillingEnabled }).ToListAsync(ct);
         var centres = new List<OwnerSetupCentre>();
         foreach (var c in info)
         {
             var billing = await _mediator.Send(new GetBillingSettingsQuery(c.HospitalId), ct);
-            centres.Add(new OwnerSetupCentre(c, billing, prices.Count(p => p.HospitalId == c.HospitalId)));
+            centres.Add(new OwnerSetupCentre(c, billing, prices.Count(p => p.HospitalId == c.HospitalId),
+                autoBill.FirstOrDefault(a => a.HospitalId == c.HospitalId)?.IsAutoBillingEnabled ?? false));
         }
 
         var grouped = prices

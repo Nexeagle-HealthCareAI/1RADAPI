@@ -91,7 +91,7 @@ public class DailyFinancialReportJob : BackgroundService
                 // 3. Calculate Expenses (Total outflow logged today)
                 var expenses = await context.Expenses
                     .IgnoreQueryFilters()
-                    .Where(e => e.HospitalId == hospital.HospitalId && e.TransactionDate >= dayStartUtc && e.TransactionDate < dayEndUtc)
+                    .Where(e => e.HospitalId == hospital.HospitalId && e.DeletedAt == null && e.TransactionDate >= dayStartUtc && e.TransactionDate < dayEndUtc)
                     .SumAsync(e => e.Amount, stoppingToken);
 
                 // 4. Calculate Referral Commissions Logged Today
