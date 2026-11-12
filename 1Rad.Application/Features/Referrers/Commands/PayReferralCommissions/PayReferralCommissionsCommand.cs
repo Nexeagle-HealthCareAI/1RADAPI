@@ -113,6 +113,7 @@ public class PayReferralCommissionsCommandHandler : IRequestHandler<PayReferralC
             rows.Where(c => c.AppointmentId.HasValue)
                 .Select(c => (c.Id, c.AppointmentId, c.ReferenceNumber)).ToList(),
             ct);
+        var whenBilled = await PatientPaymentStatus.PayWhenBilledAsync(_context, hospitalId, ct);
 
         var paid = new List<Guid>();
         var skipped = new List<SkippedCommission>();
@@ -145,9 +146,9 @@ public class PayReferralCommissionsCommandHandler : IRequestHandler<PayReferralC
             if (c.AppointmentId.HasValue)
             {
                 payability.TryGetValue(c.Id, out var patientStatus);
-                if (!PatientPaymentStatus.IsPayable(patientStatus))
+                if (!PatientPaymentStatus.IsPayable(patientStatus, whenBilled))
                 {
-                    skipped.Add(new SkippedCommission(id, "The patient has not paid yet."));
+                    skipped.Add(new SkippedCommission(id, whenBilled ? "No bill for this visit yet." : "The patient has not paid yet."));
                     continue;
                 }
             }

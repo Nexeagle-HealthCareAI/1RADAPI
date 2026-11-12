@@ -34,6 +34,8 @@ public class HospitalBillingSettings : IHospitalContext
     public decimal? AccountantDiscountLimitPercent { get; set; }
     /// <summary>On: every discount needs a reason (the new Money screens always send one). Migration 116.</summary>
     public bool DiscountReasonRequired { get; set; }
+    /// <summary>On (default): a partner's share can be paid once the bill is made; off: only after the patient pays in full. Migration 118.</summary>
+    public bool PartnerPayWhenBilled { get; set; } = true;
 
     public Guid? UpdatedByUserId { get; set; }
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;

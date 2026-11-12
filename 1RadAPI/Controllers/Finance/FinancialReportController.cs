@@ -84,6 +84,16 @@ public class FinancialReportController : ControllerBase
     public record CloseDayRequest(DateTime Date, decimal CountedCash, string? Note,
         Dictionary<string, int>? NoteCounts = null, string? DifferenceReason = null, decimal? FloatKept = null, string? HandedTo = null);
 
+    // Money ▸ Overview: four numbers that add up, the cash view, tests, days, what needs the owner.
+    [HttpGet("overview")]
+    [Authorize(Roles = RoleSets.FinanceReports)]
+    public async Task<IActionResult> Overview([FromQuery] DateTime? from, [FromQuery] DateTime? to)
+    {
+        var today = _1Rad.Application.Common.IstDateRange.ToIst(DateTime.UtcNow).Date;
+        var result = await _mediator.Send(new _1Rad.Application.Features.Finance.Overview.GetMoneyOverviewQuery(from ?? today, to ?? from ?? today));
+        return Ok(result);
+    }
+
     // Money ▸ Cash book: the last N days, closed or not, and what moved each day.
     [HttpGet("daybook/days")]
     [Authorize(Roles = RoleSets.Billing)]

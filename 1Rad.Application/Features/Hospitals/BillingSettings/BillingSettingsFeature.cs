@@ -19,7 +19,7 @@ public record BillingSettingsDto(
     decimal TdsCommissionRate, decimal TdsCommissionThreshold, decimal TdsProfessionalRate, decimal TdsProfessionalThreshold,
     decimal TdsNoPanRate, decimal FrontDeskDiscountLimitPercent,
     bool Customised, DateTime? UpdatedAt, string? UpdatedBy, BillingSettingsDefaults Defaults,
-    decimal? AccountantDiscountLimitPercent = null, bool DiscountReasonRequired = false);
+    decimal? AccountantDiscountLimitPercent = null, bool DiscountReasonRequired = false, bool PartnerPayWhenBilled = true);
 
 public record BillingSettingsDefaults(
     decimal TdsCommissionRate, decimal TdsCommissionThreshold, decimal TdsProfessionalRate, decimal TdsProfessionalThreshold,
@@ -36,7 +36,7 @@ public record UpdateBillingSettingsCommand(
     // them, leaves them as they are: a value sets the accountant limit,
     // ClearAccountantLimit = true removes it (no limit), null keeps it.
     decimal? AccountantDiscountLimitPercent = null, bool? ClearAccountantLimit = null,
-    bool? DiscountReasonRequired = null) : IRequest<BillingSettingsDto>;
+    bool? DiscountReasonRequired = null, bool? PartnerPayWhenBilled = null) : IRequest<BillingSettingsDto>;
 
 public class BillingSettingsHandlers :
     IRequestHandler<GetBillingSettingsQuery, BillingSettingsDto>,
@@ -86,6 +86,7 @@ public class BillingSettingsHandlers :
         if (c.AccountantDiscountLimitPercent.HasValue) row.AccountantDiscountLimitPercent = c.AccountantDiscountLimitPercent;
         else if (c.ClearAccountantLimit == true) row.AccountantDiscountLimitPercent = null;
         if (c.DiscountReasonRequired.HasValue) row.DiscountReasonRequired = c.DiscountReasonRequired.Value;
+        if (c.PartnerPayWhenBilled.HasValue) row.PartnerPayWhenBilled = c.PartnerPayWhenBilled.Value;
         row.UpdatedByUserId = _db.UserContext.UserId == Guid.Empty ? null : _db.UserContext.UserId;
         row.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
@@ -108,7 +109,7 @@ public class BillingSettingsHandlers :
             row != null, row?.UpdatedAt, by,
             new BillingSettingsDefaults(d.TdsCommissionRate, d.TdsCommissionThreshold, d.TdsProfessionalRate, d.TdsProfessionalThreshold,
                 d.TdsNoPanRate, d.FrontDeskDiscountLimitPercent),
-            e.AccountantDiscountLimitPercent, e.DiscountReasonRequired);
+            e.AccountantDiscountLimitPercent, e.DiscountReasonRequired, e.PartnerPayWhenBilled);
     }
 
     private static void Rate(decimal? v, string what)

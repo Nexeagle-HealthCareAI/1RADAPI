@@ -26,7 +26,8 @@ public static class BillingSettings
         decimal TdsNoPanRate,
         decimal FrontDeskDiscountLimitPercent,
         decimal? AccountantDiscountLimitPercent = null,
-        bool DiscountReasonRequired = false);
+        bool DiscountReasonRequired = false,
+        bool PartnerPayWhenBilled = true);
 
     public static Effective Defaults(IConfiguration? config) => Resolve(null, config);
 
@@ -46,7 +47,8 @@ public static class BillingSettings
             row?.TdsNoPanRate ?? ReferralTds.NoPanRate(config),
             row?.FrontDeskDiscountLimitPercent ?? DiscountPolicy.FrontDeskLimitPercent(config),
             row?.AccountantDiscountLimitPercent,
-            row?.DiscountReasonRequired ?? false);
+            row?.DiscountReasonRequired ?? false,
+            row?.PartnerPayWhenBilled ?? true);
     }
 
     public static async Task<Effective> GetAsync(IApplicationDbContext db, Guid hospitalId, IConfiguration? config, CancellationToken ct)

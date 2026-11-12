@@ -252,12 +252,18 @@ public class GetDoctorPortalQueryHandler : IRequestHandler<GetDoctorPortalQuery,
 
         // Unpaid, positive incentive split by whether the patient has paid yet.
         // patients[] is 1:1 with commissions[] (same order).
+        // The centre decides whether a share is payable once the bill is made or only
+        // after the patient pays (migration 118).
+        var whenBilled = await PatientPaymentStatus.PayWhenBilledAsync(_context, hospitalId, ct);
         decimal payableNow = 0m, awaitingPatient = 0m;
         for (var i = 0; i < commissions.Count; i++)
         {
             var c = commissions[i];
             if (string.Equals(c.Status, "PAID", StringComparison.OrdinalIgnoreCase) || c.CommissionAmount <= 0m) continue;
-            if (patients[i].PaymentStatus is "PAID") payableNow += c.CommissionAmount;
+            // The bill's state, not the portal label (which reads UNPAID for "no bill yet" too).
+            string? billState = c.AppointmentId == null ? PatientPaymentStatus.Paid
+                : paymentByAppt.TryGetValue(c.AppointmentId.Value, out var st) ? st : null;
+            if (PatientPaymentStatus.IsPayable(billState, whenBilled)) payableNow += c.CommissionAmount;
             else awaitingPatient += c.CommissionAmount;
         }
 
