@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Configuration;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -92,6 +93,24 @@ public class FinancialReportController : ControllerBase
         var today = _1Rad.Application.Common.IstDateRange.ToIst(DateTime.UtcNow).Date;
         var result = await _mediator.Send(new _1Rad.Application.Features.Finance.Overview.GetMoneyOverviewQuery(from ?? today, to ?? from ?? today));
         return Ok(result);
+    }
+
+    // Money ▸ Overview, "the centre at a glance": today against yesterday and last week,
+    // the month so far against the month before, by modality, by referrer, what needs you.
+    // month = "YYYY-MM" (default this month).
+    [HttpGet("glance")]
+    [Authorize(Roles = RoleSets.FinanceReports)]
+    public async Task<IActionResult> Glance([FromQuery] string? month, [FromServices] IConfiguration configuration)
+    {
+        DateTime? m = null;
+        if (!string.IsNullOrWhiteSpace(month))
+        {
+            if (!DateTime.TryParseExact(month + "-01", "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var parsed))
+                return BadRequest(new { message = "month must look like 2026-11." });
+            m = parsed;
+        }
+        var late = configuration.GetValue<int?>("Worklist:OverdueThresholdMinutes") ?? 180;
+        return Ok(await _mediator.Send(new _1Rad.Application.Features.Finance.Overview.GetCentreGlanceQuery(m, late)));
     }
 
     // Money ▸ Cash book: the last N days, closed or not, and what moved each day.
