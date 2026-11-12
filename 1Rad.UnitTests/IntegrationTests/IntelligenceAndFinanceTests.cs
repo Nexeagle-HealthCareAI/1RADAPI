@@ -157,8 +157,9 @@ public class IntelligenceAndFinanceTests
         result.Kpis.UniversalRegistry.Should().BeGreaterThan(0);
         result.Kpis.DailyMissions.Should().BeGreaterThanOrEqualTo(0);
         result.Kpis.FinancialYield.Should().BeGreaterThanOrEqualTo(0);
-        result.Kpis.AverageLatencyMinutes.Should().BeGreaterThan(0);
-        result.Kpis.GrowthPercentage.Should().BeGreaterThanOrEqualTo(0);
+        // 0 when no report was signed in the period: the outlook never invents a figure (Nov 2026).
+        result.Kpis.AverageLatencyMinutes.Should().BeGreaterThanOrEqualTo(0);
+        double.IsFinite(result.Kpis.GrowthPercentage).Should().BeTrue();
     }
 
     [Fact]

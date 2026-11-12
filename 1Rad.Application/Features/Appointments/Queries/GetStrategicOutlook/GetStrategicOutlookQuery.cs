@@ -21,15 +21,6 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
     private readonly IApplicationDbContext _context;
     private readonly IUserContext _userContext;
 
-    private readonly Dictionary<string, decimal> _modalityWeights = new()
-    {
-        { "MRI", 250m },
-        { "CT", 150m },
-        { "USG", 75m },
-        { "X-RAY", 45m },
-        { "PET", 300m }
-    };
-
     public GetStrategicOutlookQueryHandler(IApplicationDbContext context, IUserContext userContext)
     {
         _context = context;
@@ -62,7 +53,11 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
                 rangeEnd = todayDate.AddDays(1);
             }
 
-            var startOfWeek = rangeStart == DateTime.MinValue ? IstDateRange.NowIst().Date.AddDays(-6) : rangeStart.AddDays(-6);
+            // Patients-per-day chart: the 7 days that end the chosen period (or today, if the
+            // period runs past today). It used to start 6 days before the period began, so
+            // "This month" showed the end of last month (fixed Nov 2026).
+            var trendEnd = rangeEnd < IstDateRange.NowIst().Date.AddDays(1) ? rangeEnd : IstDateRange.NowIst().Date.AddDays(1);
+            var startOfWeek = trendEnd.Date.AddDays(-7);
             var last30Days = rangeStart == DateTime.MinValue ? IstDateRange.NowIst().Date.AddDays(-30) : rangeStart.AddDays(-30);
 
             // --- 1. CORE MISSION DATA ---
@@ -113,7 +108,8 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
                 // by its own modality (CT line gets the CT weight,
                 // X-Ray line gets the X-Ray weight) instead of weighting
                 // the whole visit by its primary modality only.
-                financialYield = todayServiceLines.Sum(s => _modalityWeights.ContainsKey(s.Modality) ? _modalityWeights[s.Modality] : 80m);
+                // Nov 2026: no made-up money — if bills cannot be read, the yield is 0.
+                financialYield = 0;
             }
 
             // --- 2.1 OPERATIONAL EXPENSES ---
@@ -132,32 +128,31 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
             var netProfit = financialYield - operationalExpenses;
 
             // Calculate actual average report turnaround latency in minutes (TAT)
-            int avgLatency = 38;
+            // Average minutes from report start to signing, for reports signed in this period.
+            // 0 = nothing signed (the dashboard shows "—"); it is never made up (Nov 2026).
+            int avgLatency = 0;
             try
             {
                 var reportsWithTat = await _context.DiagnosticReports
-                    .Where(r => r.HospitalId == hospitalId && r.IsFinalized && r.FinalizedAt != null && r.CreatedAt != null)
+                    .Where(r => r.HospitalId == hospitalId && r.IsFinalized && r.FinalizedAt != null && r.CreatedAt != null
+                                && (rangeStart == DateTime.MinValue || r.FinalizedAt >= rangeStart.AddMinutes(-330))
+                                && r.FinalizedAt < rangeEnd.AddMinutes(-330))
                     .Select(r => new { r.CreatedAt, r.FinalizedAt })
                     .ToListAsync(cancellationToken);
 
                 if (reportsWithTat.Any())
                 {
                     var totalMinutes = reportsWithTat.Sum(r => (r.FinalizedAt.Value - r.CreatedAt.Value).TotalMinutes);
-                    avgLatency = (int)Math.Round(totalMinutes / reportsWithTat.Count);
-                    if (avgLatency <= 0) avgLatency = 12; // Safety lower limit
-                }
-                else
-                {
-                    avgLatency = 38 + (dailyMissions % 7);
+                    avgLatency = Math.Max(0, (int)Math.Round(totalMinutes / reportsWithTat.Count));
                 }
             }
             catch
             {
-                avgLatency = 38 + (dailyMissions % 7);
+                avgLatency = 0;
             }
 
             // Calculate actual growth percentage of this timeframe volume vs. preceding period
-            double growthPercentage = 14.2; // Default fallback
+            double growthPercentage = 0; // never a made-up figure (was 14.2)
             try
             {
                 var duration = rangeEnd - rangeStart;
@@ -184,7 +179,7 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
             }
             catch
             {
-                growthPercentage = 14.2;
+                growthPercentage = 0;
             }
 
             var kpis = new KpiSnapshot(
@@ -246,11 +241,8 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
 
                 foreach (var m in modalityStats)
                 {
+                    // Only money actually billed; no estimate from a price list (Nov 2026).
                     var actualRevenue = todayInvoiceLineRevenue.Where(x => x.Modality == m.Label).Sum(x => x.LineTotal);
-                    if (actualRevenue == 0)
-                    {
-                        actualRevenue = m.Count * (_modalityWeights.ContainsKey(m.Label) ? _modalityWeights[m.Label] : 80m);
-                    }
                     revenueBreakdown.Add(new ModalityRevenue(
                         m.Label,
                         actualRevenue,
@@ -262,7 +254,7 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
             {
                 revenueBreakdown = modalityStats.Select(m => new ModalityRevenue(
                     m.Label,
-                    m.Count * (_modalityWeights.ContainsKey(m.Label) ? _modalityWeights[m.Label] : 80m),
+                    0m,
                     colors.ContainsKey(m.Label) ? colors[m.Label] : "#94a3b8"
                 )).ToList();
             }
