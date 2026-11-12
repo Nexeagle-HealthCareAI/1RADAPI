@@ -39,7 +39,8 @@ public static class DayBookModes
     {
         var m = (mode ?? string.Empty).Trim().ToUpperInvariant();
         if (m.Length == 0 || m == PaymentLedger.WalletMode || m == "WALLET" || m == "CREDIT") return null;
-        if (m is "CASH" or "UPI" or "CARD") return m;
+        if (m is "CASH" or "UPI" or "CARD" or "BANK") return m;
+        if (m is "NEFT" or "IMPS" or "RTGS" or "CHEQUE" or "BANK TRANSFER") return "BANK";
         if (m.Contains("UPI") || m.Contains("GPAY") || m.Contains("PHONEPE") || m.Contains("PAYTM")) return "UPI";
         if (m.Contains("CARD")) return "CARD";
         return "OTHER";

@@ -112,14 +112,16 @@ public class HospitalsController : ControllerBase
         var result = await _mediator.Send(new _1Rad.Application.Features.Hospitals.BillingSettings.UpdateBillingSettingsCommand(
             id, r.GstEnabled, r.CreditNotesEnabled, r.TdsEnabled, r.DefaultTdsCategory,
             r.TdsCommissionRate, r.TdsCommissionThreshold, r.TdsProfessionalRate, r.TdsProfessionalThreshold,
-            r.TdsNoPanRate, r.FrontDeskDiscountLimitPercent), HttpContext.RequestAborted);
+            r.TdsNoPanRate, r.FrontDeskDiscountLimitPercent,
+            r.AccountantDiscountLimitPercent, r.ClearAccountantLimit, r.DiscountReasonRequired), HttpContext.RequestAborted);
         return Ok(result);
     }
 
     public record UpdateBillingSettingsRequest(
         bool GstEnabled, bool CreditNotesEnabled, bool TdsEnabled, string? DefaultTdsCategory,
         decimal? TdsCommissionRate, decimal? TdsCommissionThreshold, decimal? TdsProfessionalRate, decimal? TdsProfessionalThreshold,
-        decimal? TdsNoPanRate, decimal? FrontDeskDiscountLimitPercent);
+        decimal? TdsNoPanRate, decimal? FrontDeskDiscountLimitPercent,
+        decimal? AccountantDiscountLimitPercent = null, bool? ClearAccountantLimit = null, bool? DiscountReasonRequired = null);
 
     [HttpPost("chain")]
     [Authorize(Roles = AdminRoles)]

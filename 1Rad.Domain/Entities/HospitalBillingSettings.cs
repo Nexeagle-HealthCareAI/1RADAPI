@@ -30,6 +30,10 @@ public class HospitalBillingSettings : IHospitalContext
 
     /// <summary>Most the front desk may take off a bill (centre discount + deduction), as % of the bill.</summary>
     public decimal? FrontDeskDiscountLimitPercent { get; set; }
+    /// <summary>Most an accountant may take off a bill, as %. Null = no limit (admins never have one). Migration 116.</summary>
+    public decimal? AccountantDiscountLimitPercent { get; set; }
+    /// <summary>On: every discount needs a reason (the new Money screens always send one). Migration 116.</summary>
+    public bool DiscountReasonRequired { get; set; }
 
     public Guid? UpdatedByUserId { get; set; }
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;

@@ -232,9 +232,18 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
         // InvoiceTotals.RecomputeGross's fallback branch.
         var originalAdditionalCharges = invoice.AdditionalCharges;
 
+        var oldCentreAndDeduction = invoice.CentreDiscount + invoice.InstitutionalDeduction;
         invoice.CentreDiscount = centre ?? invoice.CentreDiscount;
         invoice.ReferrerDiscount = referrer ?? invoice.ReferrerDiscount;
         invoice.InstitutionalDeduction = deduction ?? invoice.InstitutionalDeduction;
+        // Money ▸ Collect sends a discount above the asker's limit here. The bill keeps
+        // the reason that was asked and who approved it (migration 116).
+        if (invoice.CentreDiscount + invoice.InstitutionalDeduction > oldCentreAndDeduction + 0.009m)
+        {
+            var why = (req.Reason ?? string.Empty).Trim();
+            if (why.Length > 0) invoice.DiscountReason = why.Length > 200 ? why[..200] : why;
+            invoice.DiscountByUserId = _context.UserContext.UserId == Guid.Empty ? invoice.DiscountByUserId : _context.UserContext.UserId;
+        }
 
         if (extraCharges != null)
         {

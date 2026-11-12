@@ -512,6 +512,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             // Migration 102 (review B1): two collections on one bill can't both write PaidAmount.
             entity.Property(e => e.RowVersion).IsRowVersion();
             entity.Property(e => e.InvoiceId).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.DiscountReason).HasMaxLength(200);
             entity.Property(e => e.PatientName).IsRequired().HasMaxLength(255); 
             entity.Property(e => e.GrossAmount).HasPrecision(18, 2);
             entity.Property(e => e.DiscountAmount).HasPrecision(18, 2);
@@ -606,6 +607,8 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.PaymentMethod).IsRequired().HasMaxLength(50);
             entity.Property(e => e.Kind).IsRequired().HasMaxLength(20).HasDefaultValue(PaymentKinds.Payment);
             entity.Property(e => e.Reason).HasMaxLength(500);
+            entity.Property(e => e.Reference).HasMaxLength(60);
+            entity.Property(e => e.ReceiptNumber).HasMaxLength(20);
 
             entity.HasOne(e => e.Invoice)
                 .WithMany(i => i.Payments)
@@ -675,6 +678,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.TdsProfessionalRate).HasPrecision(5, 2);
             entity.Property(e => e.TdsNoPanRate).HasPrecision(5, 2);
             entity.Property(e => e.FrontDeskDiscountLimitPercent).HasPrecision(5, 2);
+            entity.Property(e => e.AccountantDiscountLimitPercent).HasPrecision(5, 2);
             entity.Property(e => e.TdsCommissionThreshold).HasPrecision(18, 2);
             entity.Property(e => e.TdsProfessionalThreshold).HasPrecision(18, 2);
         });

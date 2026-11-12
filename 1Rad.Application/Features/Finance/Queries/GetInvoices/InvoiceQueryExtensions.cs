@@ -23,7 +23,12 @@ public static class InvoiceQueryExtensions
             query = query.Where(i => i.UpdatedAt > since);
         }
 
-        if (!string.IsNullOrEmpty(request.Status) && request.Status != "ALL")
+        if (string.Equals(request.Status, "DUE", StringComparison.OrdinalIgnoreCase))
+        {
+            // Money ▸ Bills "Still to pay": unpaid and part paid together.
+            query = query.Where(i => i.Status == "PENDING" || i.Status == "PARTIAL");
+        }
+        else if (!string.IsNullOrEmpty(request.Status) && request.Status != "ALL")
         {
             query = query.Where(i => i.Status == request.Status);
         }
@@ -33,7 +38,8 @@ public static class InvoiceQueryExtensions
             var search = request.Search.ToLower().Trim();
             query = query.Where(i => 
                 (i.Patient != null && i.Patient.FullName != null && i.Patient.FullName.ToLower().Contains(search)) || 
-                (i.InvoiceId != null && i.InvoiceId.ToLower().Contains(search)));
+                (i.InvoiceId != null && i.InvoiceId.ToLower().Contains(search)) ||
+                (i.Patient != null && i.Patient.Mobile != null && search.Length >= 4 && i.Patient.Mobile.Contains(search)));
         }
 
         // StartDate/EndDate arrive as a bare "YYYY-MM-DD" (date picker) — a
