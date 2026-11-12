@@ -117,8 +117,10 @@ public class GetDayBookQueryHandler : IRequestHandler<GetDayBookQuery, DayBookDt
             .Select(r => new { r.PaidAt, r.Mode, r.Net, r.CreatedByUserId, r.PayoutNumber, r.PayeeName })
             .ToListAsync(ct);
         var expenses = await _db.Expenses.AsNoTracking()
-            .Where(e => e.HospitalId == hospitalId && e.DeletedAt == null && e.TransactionDate >= start && e.TransactionDate <= end)
-            .Select(e => new { e.TransactionDate, e.PaymentMode, e.Amount, e.Description, e.VendorName })
+            // Only money that actually left, on the day it left (migration 119).
+            .Where(e => e.HospitalId == hospitalId && e.DeletedAt == null && e.Status == "Paid"
+                        && (e.PaidAt ?? e.TransactionDate) >= start && (e.PaidAt ?? e.TransactionDate) <= end)
+            .Select(e => new { TransactionDate = e.PaidAt ?? e.TransactionDate, e.PaymentMode, e.Amount, e.Description, e.VendorName })
             .ToListAsync(ct);
 
         var userIds = payments.Select(p => p.CreatedByUserId).Concat(credits.Select(c => c.CreatedByUserId))

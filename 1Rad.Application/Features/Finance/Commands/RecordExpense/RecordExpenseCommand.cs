@@ -1,3 +1,4 @@
+using _1Rad.Application.Common;
 using MediatR;
 using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Entities;
@@ -69,12 +70,13 @@ public class RecordExpenseCommandHandler : IRequestHandler<RecordExpenseCommand,
                 ReferenceNumber = request.ReferenceNumber,
                 VendorName = request.VendorName,
                 CostCenter = request.CostCenter,
-                Status = request.Status ?? "Paid",
+                Status = ExpenseStates.Normalise(request.Status ?? "Paid"),
                 TransactionDate = request.TransactionDate ?? DateTime.UtcNow,
                 HospitalId = _context.UserContext.HospitalId,
                 CreatedAt = DateTime.UtcNow
             };
 
+            if (expense.Status == "Paid") expense.PaidAt = DateTime.UtcNow;
             _context.Expenses.Add(expense);
             await _context.SaveChangesAsync(cancellationToken);
 
@@ -85,6 +87,10 @@ public class RecordExpenseCommandHandler : IRequestHandler<RecordExpenseCommand,
             throw;
         }
         catch (ArgumentException)
+        {
+            throw;
+        }
+        catch (_1Rad.Domain.Exceptions.ValidationException)
         {
             throw;
         }

@@ -25,6 +25,8 @@ public record GetExpensesQuery : IRequest<PagedExpenseResult>
     // PageSize = 0 means “return everything” (sync engine path).
     public int PageSize { get; init; } = 0;
     public string? Cursor { get; init; }
+    // Money ▸ Expenses: "TOPAY" (not paid yet) or "PAID".
+    public string? State { get; init; }
 }
 
 public class ExpenseDto
@@ -43,6 +45,9 @@ public class ExpenseDto
     public DateTime CreatedAt { get; set; }
     public DateTime? UpdatedAt { get; set; }
     public DateTime? DeletedAt { get; set; }
+    public DateTime? PaidAt { get; set; }
+    /// <summary>Made by Staff &amp; salary: changed there, not here.</summary>
+    public bool FromPayroll { get; set; }
 }
 
 public class GetExpensesQueryHandler : IRequestHandler<GetExpensesQuery, PagedExpenseResult>
@@ -120,7 +125,9 @@ public class GetExpensesQueryHandler : IRequestHandler<GetExpensesQuery, PagedEx
                     TransactionDate = e.TransactionDate,
                     CreatedAt = e.CreatedAt,
                     UpdatedAt = e.UpdatedAt,
-                    DeletedAt = e.DeletedAt
+                    DeletedAt = e.DeletedAt,
+                    PaidAt = e.PaidAt,
+                    FromPayroll = e.LinkedDisbursementId != null
                 })
                 .Take(takeCount)
                 .ToListAsync(cancellationToken);

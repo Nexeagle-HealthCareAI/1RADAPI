@@ -84,7 +84,7 @@ public class GetMoneyOverviewQueryHandler : IRequestHandler<GetMoneyOverviewQuer
 
         var expensesPaid = await _db.Expenses.AsNoTracking()
             .Where(e => e.HospitalId == hospitalId && e.DeletedAt == null && e.Status == "Paid"
-                        && e.TransactionDate >= start && e.TransactionDate <= end)
+                        && (e.PaidAt ?? e.TransactionDate) >= start && (e.PaidAt ?? e.TransactionDate) <= end)
             .SumAsync(e => (decimal?)e.Amount, ct) ?? 0m;
 
         var tests = (await live.SelectMany(i => i.Items)

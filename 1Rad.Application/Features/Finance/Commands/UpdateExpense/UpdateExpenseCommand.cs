@@ -1,3 +1,4 @@
+using _1Rad.Application.Common;
 using MediatR;
 using _1Rad.Application.Interfaces;
 using Microsoft.EntityFrameworkCore;
@@ -41,6 +42,8 @@ public class UpdateExpenseCommandHandler : IRequestHandler<UpdateExpenseCommand,
 
         if (string.IsNullOrWhiteSpace(request.Description))
             throw new ArgumentException("Description is required.", nameof(request.Description));
+        if (expense.LinkedDisbursementId != null)
+            throw new _1Rad.Domain.Exceptions.BusinessRuleViolationException("This expense comes from Staff & salary. Change it there.");
 
         if (string.IsNullOrWhiteSpace(request.Category))
             throw new ArgumentException("Category is required.", nameof(request.Category));
@@ -56,7 +59,10 @@ public class UpdateExpenseCommandHandler : IRequestHandler<UpdateExpenseCommand,
         expense.ReferenceNumber = request.ReferenceNumber;
         expense.VendorName = request.VendorName;
         expense.CostCenter = request.CostCenter;
-        expense.Status = request.Status ?? expense.Status;
+        var next = ExpenseStates.Normalise(request.Status ?? expense.Status);
+        if (next == "Paid" && expense.Status != "Paid") expense.PaidAt = DateTime.UtcNow;
+        if (next != "Paid") expense.PaidAt = null;
+        expense.Status = next;
         expense.TransactionDate = request.TransactionDate ?? expense.TransactionDate;
 
         await _context.SaveChangesAsync(cancellationToken);
