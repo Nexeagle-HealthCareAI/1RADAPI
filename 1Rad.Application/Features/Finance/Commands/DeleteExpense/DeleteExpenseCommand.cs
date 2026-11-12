@@ -25,7 +25,11 @@ public class DeleteExpenseCommandHandler : IRequestHandler<DeleteExpenseCommand,
             throw new Exception("Expense not found or unauthorized.");
         }
 
-        _context.Expenses.Remove(expense);
+        if (expense.LinkedDisbursementId != null)
+            throw new _1Rad.Domain.Exceptions.BusinessRuleViolationException("This expense comes from Staff & salary. Change it there.");
+        // Soft delete (review B28): offline copies see the tombstone, and the history stays.
+        expense.DeletedAt = DateTime.UtcNow;
+        expense.UpdatedAt = DateTime.UtcNow;
         await _context.SaveChangesAsync(cancellationToken);
 
         return true;

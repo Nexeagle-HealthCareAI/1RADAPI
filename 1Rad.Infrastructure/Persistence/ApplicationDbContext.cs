@@ -72,6 +72,11 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<ApprovalRequest> ApprovalRequests => Set<ApprovalRequest>();
     public DbSet<IdempotencyRecord> IdempotencyKeys => Set<IdempotencyRecord>();
     public DbSet<RadAiQuestionLog> RadAiQuestionLogs => Set<RadAiQuestionLog>();
+    public DbSet<CentreAiPolicy> CentreAiPolicies => Set<CentreAiPolicy>();
+    public DbSet<ReportAiUsageLog> ReportAiUsageLogs => Set<ReportAiUsageLog>();
+    public DbSet<ReportKeyImage> ReportKeyImages => Set<ReportKeyImage>();
+    public DbSet<ReportAiDraft> ReportAiDrafts => Set<ReportAiDraft>();
+    public DbSet<ApprovedReportCase> ApprovedReportCases => Set<ApprovedReportCase>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<StudyAnnotation> StudyAnnotations => Set<StudyAnnotation>();
     public DbSet<JobRun> JobRuns => Set<JobRun>();
@@ -81,6 +86,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<ReferralPortalView> ReferralPortalViews => Set<ReferralPortalView>();
     public DbSet<CreditNote> CreditNotes => Set<CreditNote>();
     public DbSet<HospitalBillingSettings> HospitalBillingSettings => Set<HospitalBillingSettings>();
+    public DbSet<HospitalSettingsLink> HospitalSettingsLinks => Set<HospitalSettingsLink>();
     public DbSet<ReferrerLinkVersion> ReferrerLinkVersions => Set<ReferrerLinkVersion>();
     public DbSet<ReferralBookingRequest> ReferralBookingRequests => Set<ReferralBookingRequest>();
 
@@ -147,6 +153,56 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.Model).HasMaxLength(20);
             entity.HasIndex(e => new { e.HospitalId, e.CreatedAt });
             entity.HasIndex(e => new { e.HospitalId, e.Covered });
+        });
+
+        // Report-AI rules per centre and one usage row per AI request (schema 114).
+        modelBuilder.Entity<CentreAiPolicy>(entity =>
+        {
+            entity.ToTable("CentreAiPolicies", "dbo");
+            entity.HasKey(e => e.HospitalId);
+            entity.Property(e => e.HospitalId).ValueGeneratedNever();
+        });
+        modelBuilder.Entity<ReportAiUsageLog>(entity =>
+        {
+            entity.ToTable("ReportAiUsageLogs", "dbo");
+            entity.HasKey(e => e.ReportAiUsageLogId);
+            entity.Property(e => e.Feature).IsRequired().HasMaxLength(40);
+            entity.Property(e => e.Model).HasMaxLength(60);
+            entity.Property(e => e.Outcome).IsRequired().HasMaxLength(12);
+            entity.HasIndex(e => new { e.HospitalId, e.CreatedAt });
+        });
+
+        // Report ↔ image links and AI drafting groundwork (schema 115).
+        modelBuilder.Entity<ReportKeyImage>(entity =>
+        {
+            entity.ToTable("ReportKeyImages", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.SeriesInstanceUid).HasMaxLength(64);
+            entity.Property(e => e.SopInstanceUid).IsRequired().HasMaxLength(64);
+            entity.Property(e => e.Note).HasMaxLength(200);
+            entity.HasIndex(e => new { e.AppointmentId, e.AppointmentServiceId });
+            entity.HasIndex(e => e.ImagingStudyId);
+        });
+        modelBuilder.Entity<ReportAiDraft>(entity =>
+        {
+            entity.ToTable("ReportAiDrafts", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Source).IsRequired().HasMaxLength(12);
+            entity.Property(e => e.Model).HasMaxLength(60);
+            entity.HasIndex(e => new { e.AppointmentId, e.AppointmentServiceId });
+            entity.HasIndex(e => e.ImagingStudyId);
+        });
+        modelBuilder.Entity<ApprovedReportCase>(entity =>
+        {
+            entity.ToTable("ApprovedReportCases", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Modality).HasMaxLength(20);
+            entity.Property(e => e.StudyName).HasMaxLength(200);
+            entity.Property(e => e.StudyInstanceUid).HasMaxLength(64);
+            entity.Property(e => e.AiDraftSource).HasMaxLength(12);
+            entity.Property(e => e.SignedContentHash).IsRequired().HasMaxLength(128);
+            entity.HasIndex(e => e.DiagnosticReportId).IsUnique();
+            entity.HasIndex(e => new { e.HospitalId, e.Modality });
         });
 
         // Portal-link versions (revocation). One row per partner, created on first revoke.
@@ -457,6 +513,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             // Migration 102 (review B1): two collections on one bill can't both write PaidAmount.
             entity.Property(e => e.RowVersion).IsRowVersion();
             entity.Property(e => e.InvoiceId).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.DiscountReason).HasMaxLength(200);
             entity.Property(e => e.PatientName).IsRequired().HasMaxLength(255); 
             entity.Property(e => e.GrossAmount).HasPrecision(18, 2);
             entity.Property(e => e.DiscountAmount).HasPrecision(18, 2);
@@ -551,6 +608,8 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.PaymentMethod).IsRequired().HasMaxLength(50);
             entity.Property(e => e.Kind).IsRequired().HasMaxLength(20).HasDefaultValue(PaymentKinds.Payment);
             entity.Property(e => e.Reason).HasMaxLength(500);
+            entity.Property(e => e.Reference).HasMaxLength(60);
+            entity.Property(e => e.ReceiptNumber).HasMaxLength(20);
 
             entity.HasOne(e => e.Invoice)
                 .WithMany(i => i.Payments)
@@ -577,8 +636,13 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.ToTable("DayCloses", "dbo");
             entity.HasKey(e => e.Id);
             foreach (var p in new[] { nameof(DayClose.ExpectedCash), nameof(DayClose.CountedCash), nameof(DayClose.Variance),
-                                      nameof(DayClose.ExpectedUpi), nameof(DayClose.ExpectedCard), nameof(DayClose.ExpectedOther) })
+                                      nameof(DayClose.ExpectedUpi), nameof(DayClose.ExpectedCard), nameof(DayClose.ExpectedOther),
+                                      nameof(DayClose.OpeningFloat), nameof(DayClose.ExpectedBank), nameof(DayClose.FloatKept),
+                                      nameof(DayClose.HandedOver) })
                 entity.Property(p).HasPrecision(18, 2);
+            entity.Property(e => e.NoteCounts).HasMaxLength(400);
+            entity.Property(e => e.DifferenceReason).HasMaxLength(120);
+            entity.Property(e => e.HandedTo).HasMaxLength(100);
             entity.Property(e => e.Note).HasMaxLength(500);
             entity.Property(e => e.ClosedByName).HasMaxLength(200);
             entity.HasIndex(e => new { e.HospitalId, e.BusinessDate }).IsUnique();
@@ -620,8 +684,17 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.TdsProfessionalRate).HasPrecision(5, 2);
             entity.Property(e => e.TdsNoPanRate).HasPrecision(5, 2);
             entity.Property(e => e.FrontDeskDiscountLimitPercent).HasPrecision(5, 2);
+            entity.Property(e => e.AccountantDiscountLimitPercent).HasPrecision(5, 2);
             entity.Property(e => e.TdsCommissionThreshold).HasPrecision(18, 2);
             entity.Property(e => e.TdsProfessionalThreshold).HasPrecision(18, 2);
+        });
+
+        // Owner board: a centre following another centre's setup (migration 120).
+        modelBuilder.Entity<HospitalSettingsLink>(entity =>
+        {
+            entity.ToTable("HospitalSettingsLinks", "dbo");
+            entity.HasKey(e => e.HospitalId);
+            entity.HasIndex(e => e.SourceHospitalId);
         });
         modelBuilder.Entity<CreditNote>(entity =>
         {

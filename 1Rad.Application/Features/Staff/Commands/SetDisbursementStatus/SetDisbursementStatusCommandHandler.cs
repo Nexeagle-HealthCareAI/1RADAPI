@@ -66,6 +66,7 @@ public class SetDisbursementStatusCommandHandler : IRequestHandler<SetDisburseme
             expense.PaymentMode     = disbursement.PaymentMode;
             expense.ReferenceNumber = disbursement.Reference;
             expense.TransactionDate = disbursement.PaidOnDate.ToDateTime(TimeOnly.MinValue);
+            expense.PaidAt          = expense.Status == "Paid" ? expense.TransactionDate : null; // migration 119
         }
 
         await _context.SaveChangesAsync(cancellationToken);

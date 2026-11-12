@@ -38,11 +38,15 @@ public record PartnerBalanceDto(
     decimal Deficit,
     decimal PaidThisYear,
     DateTime? LastPaidAt,
-    int AliasCount);
+    int AliasCount,
+    // Money ▸ Partners (migration 118): part of PayableNow on bills the patient still owes.
+    decimal PatientOwes = 0m,
+    int PatientOwesCount = 0);
 
-public record OutstandingTotals(decimal PayableNow, decimal AwaitingPatient, decimal Deficit, int PartnersToPay);
+public record OutstandingTotals(decimal PayableNow, decimal AwaitingPatient, decimal Deficit, int PartnersToPay, decimal PatientOwes = 0m);
 
-public record ReferrersOutstandingResult(List<PartnerBalanceDto> Items, int Total, int Page, int PageSize, OutstandingTotals Totals, string FinancialYear);
+public record ReferrersOutstandingResult(List<PartnerBalanceDto> Items, int Total, int Page, int PageSize, OutstandingTotals Totals, string FinancialYear,
+    bool PayWhenBilled = true);
 
 public class GetReferrersOutstandingQueryHandler : IRequestHandler<GetReferrersOutstandingQuery, ReferrersOutstandingResult>
 {
@@ -95,20 +99,26 @@ public class GetReferrersOutstandingQueryHandler : IRequestHandler<GetReferrersO
             .GroupBy(b => b.AppointmentId!.Value)
             .ToDictionary(g => g.Key, g => g.OrderByDescending(b => b.PaidAmount).First());
 
-        bool PatientPaid(Guid? appointmentId)
+        var whenBilled = await PatientPaymentStatus.PayWhenBilledAsync(_context, hospitalId, ct);
+        string? BillState(Guid? appointmentId)
         {
-            if (!appointmentId.HasValue) return true; // a manual line has no patient bill to wait for
-            if (!billByAppt.TryGetValue(appointmentId.Value, out var b)) return false;
-            return PatientPaymentStatus.IsPayable(PatientPaymentStatus.Resolve(b.PaidAmount, b.TotalAmount, b.Status));
+            if (!appointmentId.HasValue) return PatientPaymentStatus.Paid; // a manual line has no patient bill to wait for
+            if (!billByAppt.TryGetValue(appointmentId.Value, out var b)) return null;
+            return PatientPaymentStatus.Resolve(b.PaidAmount, b.TotalAmount, b.Status);
         }
 
-        var acc = new Dictionary<Guid, (decimal Pay, int PayN, decimal Wait, int WaitN, decimal Def)>();
+        var acc = new Dictionary<Guid, (decimal Pay, int PayN, decimal Wait, int WaitN, decimal Def, decimal Owes, int OwesN)>();
         foreach (var c in open)
         {
             var root = Root(c.ReferrerId);
             acc.TryGetValue(root, out var a);
+            var state = BillState(c.AppointmentId);
             if (c.CommissionAmount < 0) a.Def += -c.CommissionAmount;
-            else if (PatientPaid(c.AppointmentId)) { a.Pay += c.CommissionAmount; a.PayN++; }
+            else if (PatientPaymentStatus.IsPayable(state, whenBilled))
+            {
+                a.Pay += c.CommissionAmount; a.PayN++;
+                if (PatientPaymentStatus.PatientOwes(state)) { a.Owes += c.CommissionAmount; a.OwesN++; }
+            }
             else { a.Wait += c.CommissionAmount; a.WaitN++; }
             acc[root] = a;
         }
@@ -146,7 +156,8 @@ public class GetReferrersOutstandingQueryHandler : IRequestHandler<GetReferrersO
                     !string.IsNullOrWhiteSpace(p.Pan),
                     a.Pay, a.PayN, a.Wait, a.WaitN, a.Def,
                     paid.Year, paid.Last,
-                    aliasCounts.TryGetValue(p.ReferrerId, out var n) ? n : 0);
+                    aliasCounts.TryGetValue(p.ReferrerId, out var n) ? n : 0,
+                    a.Owes, a.OwesN);
             })
             .ToList();
 
@@ -163,7 +174,7 @@ public class GetReferrersOutstandingQueryHandler : IRequestHandler<GetReferrersO
 
         var totals = new OutstandingTotals(
             rows.Sum(r => r.PayableNow), rows.Sum(r => r.AwaitingPatient), rows.Sum(r => r.Deficit),
-            rows.Count(r => r.PayableNow > 0));
+            rows.Count(r => r.PayableNow > 0), rows.Sum(r => r.PatientOwes));
 
         rows = show switch
         {
@@ -183,6 +194,6 @@ public class GetReferrersOutstandingQueryHandler : IRequestHandler<GetReferrersO
 
         return new ReferrersOutstandingResult(
             ordered.Skip((page - 1) * pageSize).Take(pageSize).ToList(),
-            ordered.Count, page, pageSize, totals, fy);
+            ordered.Count, page, pageSize, totals, fy, whenBilled);
     }
 }

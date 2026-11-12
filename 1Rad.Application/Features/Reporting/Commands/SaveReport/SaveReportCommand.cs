@@ -267,8 +267,13 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
         {
             await _context.SaveChangesAsync(cancellationToken);
         }
-        catch (DbUpdateConcurrencyException)
+        catch (Exception ex) when (ex is DbUpdateConcurrencyException || IsDuplicateStudyReport(ex))
         {
+            // Also: two screens started the SAME study's report at once — the
+            // one-report-per-(visit, study) index (migration 113) refused the
+            // second insert. Answer it like a concurrent edit so the editor
+            // takes the saved copy and offers Undo, instead of a 500.
+            //
             // OCC mismatch — another writer updated the row between our
             // read and our save. Fetch the canonical current state so the
             // controller can hand it back to the client with 409 Conflict.
@@ -329,5 +334,16 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
 
         return report;
     }
-}
 
+    // SQL Server unique-index violation (2601/2627) on the per-study index,
+    // detected by name so the Application layer needs no SqlClient reference.
+    private static bool IsDuplicateStudyReport(Exception ex)
+    {
+        for (var e = ex; e != null; e = e.InnerException)
+        {
+            if (e.Message.Contains("UX_DiagnosticReports_Appointment_Service", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+}

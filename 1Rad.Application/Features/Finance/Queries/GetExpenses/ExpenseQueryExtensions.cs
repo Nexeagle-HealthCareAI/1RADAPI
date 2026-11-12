@@ -22,6 +22,11 @@ public static class ExpenseQueryExtensions
             query = query.Where(e => e.UpdatedAt > since);
         }
 
+        if (string.Equals(request.State, "TOPAY", StringComparison.OrdinalIgnoreCase))
+            query = query.Where(e => e.Status != "Paid");
+        else if (string.Equals(request.State, "PAID", StringComparison.OrdinalIgnoreCase))
+            query = query.Where(e => e.Status == "Paid");
+
         if (!string.IsNullOrEmpty(request.Category) && request.Category != "ALL")
         {
             query = query.Where(e => e.Category == request.Category);

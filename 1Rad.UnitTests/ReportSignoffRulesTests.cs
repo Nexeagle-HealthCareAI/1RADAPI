@@ -195,6 +195,61 @@ public class ReportSignoffRulesTests : BaseHandlerTest
         await act.Should().ThrowAsync<ArgumentException>();
     }
 
+    private async Task<(Appointment Visit, AppointmentService Usg, AppointmentService Ct)> TwoStudyVisitAsync()
+    {
+        var patient = new Patient { PatientId = Guid.NewGuid(), HospitalId = HospitalId, FullName = "ZZ TEST", PatientIdentifier = $"AUTO-{Guid.NewGuid():N}" };
+        var visit = new Appointment { AppointmentId = Guid.NewGuid(), HospitalId = HospitalId, PatientId = patient.PatientId, PatientName = "ZZ" };
+        var usg = new AppointmentService { Id = Guid.NewGuid(), AppointmentId = visit.AppointmentId, HospitalId = HospitalId, ServiceName = "USG Abdomen", Modality = "USG" };
+        var ct = new AppointmentService { Id = Guid.NewGuid(), AppointmentId = visit.AppointmentId, HospitalId = HospitalId, ServiceName = "CT Head", Modality = "CT" };
+        Context.Patients.Add(patient);
+        Context.Appointments.Add(visit);
+        Context.AppointmentServices.AddRange(usg, ct);
+        await Context.SaveChangesAsync();
+        return (visit, usg, ct);
+    }
+
+    [Fact]
+    public async Task On_a_two_study_visit_signing_must_name_the_study()
+    {
+        var (visit, usg, _) = await TwoStudyVisitAsync();
+        await Save().Handle(new SaveReportCommand
+        {
+            AppointmentId = visit.AppointmentId.ToString(), AppointmentServiceId = usg.Id,
+            Findings = "Liver normal.", Impression = "Normal.", ReportingMode = "Narrative",
+        }, CancellationToken.None);
+
+        var visitLevel = () => Finalize().Handle(new FinalizeReportCommand
+        {
+            AppointmentId = visit.AppointmentId.ToString(), TargetStatus = ReportStatuses.Final, Password = "correct",
+        }, CancellationToken.None);
+        await visitLevel.Should().ThrowAsync<ArgumentException>().WithMessage("*more than one study*");
+
+        var report = await Finalize().Handle(new FinalizeReportCommand
+        {
+            AppointmentId = visit.AppointmentId.ToString(), AppointmentServiceId = usg.Id, TargetStatus = ReportStatuses.Final, Password = "correct",
+        }, CancellationToken.None);
+        report.Status.Should().Be(ReportStatuses.Final);
+    }
+
+    [Fact]
+    public async Task Each_study_on_a_visit_keeps_its_own_report()
+    {
+        var (visit, usg, ct) = await TwoStudyVisitAsync();
+        foreach (var (svc, text) in new[] { (usg, "USG text"), (ct, "CT text") })
+        {
+            await Save().Handle(new SaveReportCommand
+            {
+                AppointmentId = visit.AppointmentId.ToString(), AppointmentServiceId = svc.Id,
+                Findings = text, Impression = "x", ReportingMode = "Narrative",
+            }, CancellationToken.None);
+        }
+
+        var rows = Context.DiagnosticReports.Where(r => r.AppointmentId == visit.AppointmentId).ToList();
+        rows.Should().HaveCount(2);
+        rows.Single(r => r.AppointmentServiceId == usg.Id).Findings.Should().Be("USG text");
+        rows.Single(r => r.AppointmentServiceId == ct.Id).Findings.Should().Be("CT text");
+    }
+
     private sealed class FakeLimiter : IDistributedRateLimiter
     {
         private readonly ConcurrentDictionary<string, int> _hits = new();

@@ -146,6 +146,8 @@ public class ReferralPartnerIdentityTests : BaseHandlerTest
     [Fact]
     public async Task Outstanding_SplitsPayableAwaitingAndDeficit_AndRollsUpDuplicates()
     {
+        // The "only after the patient pays" rule (centre setting, migration 118).
+        Context.HospitalBillingSettings.Add(new HospitalBillingSettings { HospitalId = HospitalId, PartnerPayWhenBilled = false });
         var primary = AddReferrer("DR A");
         var dupe = AddReferrer("DR A.", mergedInto: primary.ReferrerId);
         var paidVisit = AddVisit(); AddBill(paidVisit, 1000m, 1000m);

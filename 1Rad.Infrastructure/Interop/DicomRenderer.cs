@@ -106,8 +106,13 @@ public static class DicomRenderer
 
     private static byte Clamp(double v) => (byte)Math.Clamp((int)Math.Round(v), 0, 255);
 
-    /// <summary>Render frame <paramref name="frameIndex"/> (0-based) of a stored file. Null when not renderable.</summary>
-    public static byte[]? Render(byte[] dicomBytes, int frameIndex, RenderOptions options)
+    /// <summary>
+    /// Render frame <paramref name="frameIndex"/> (0-based) of a stored file. Null when not renderable.
+    /// <paramref name="beforeEncode"/> may change the display pixels (pixels, isRgb, width, height)
+    /// before encoding — e.g. to black out burned-in text.
+    /// </summary>
+    public static byte[]? Render(byte[] dicomBytes, int frameIndex, RenderOptions options,
+        Action<byte[], bool, int, int>? beforeEncode = null)
     {
         DicomCodecs.Ensure();
         using var ms = new MemoryStream(dicomBytes, writable: false);
@@ -142,6 +147,7 @@ public static class DicomRenderer
 
         var display = ToDisplayPixels(frame, options.WindowCenter, options.WindowWidth);
         if (display == null) return null;
+        beforeEncode?.Invoke(display.Value.Pixels, display.Value.Rgb, frame.Columns, frame.Rows);
         return Encode(display.Value.Pixels, display.Value.Rgb, frame.Columns, frame.Rows, options);
     }
 

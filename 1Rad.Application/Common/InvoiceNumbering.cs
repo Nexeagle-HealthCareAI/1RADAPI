@@ -45,3 +45,20 @@ public static class InvoiceNumbering
         return Format(fy, seq);
     }
 }
+
+/// <summary>
+/// Receipt numbers (migration 116): "RCP-2627-00001", a running series per centre
+/// and financial year from dbo.SequenceCounters (key "RECEIPT_FY_2026-27"). One
+/// number per collection; every payment row of that collection carries it.
+/// </summary>
+public static class ReceiptNumbering
+{
+    public static string Format(string fyLabel, int sequence) => $"RCP-{InvoiceNumbering.Compact(fyLabel)}-{sequence:D5}";
+
+    public static async Task<string> NextAsync(IApplicationDbContext db, Guid hospitalId, DateTime utcNow, CancellationToken ct)
+    {
+        var fy = InvoiceNumbering.FinancialYearLabel(utcNow);
+        var seq = await db.NextSequenceValueAsync(hospitalId, $"RECEIPT_FY_{fy}", 1, ct);
+        return Format(fy, seq);
+    }
+}

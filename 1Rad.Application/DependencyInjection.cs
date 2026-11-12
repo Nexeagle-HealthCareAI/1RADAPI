@@ -19,6 +19,7 @@ public static class DependencyInjection
         // over already-hydrated in-memory rows, independently unit-testable
         // without a DbContext. Stateless => safe as scoped or singleton; scoped
         // to match the rest of this registration's lifetime style.
+        services.AddScoped<_1Rad.Application.Interfaces.IReportAiGate, _1Rad.Application.Common.ReportAiGate>();
         services.AddScoped<ITemporalAggregationCalculator, TemporalAggregationCalculator>();
         services.AddScoped<IModalityRevenueCalculator, ModalityRevenueCalculator>();
         services.AddScoped<IAgingAnalysisCalculator, AgingAnalysisCalculator>();

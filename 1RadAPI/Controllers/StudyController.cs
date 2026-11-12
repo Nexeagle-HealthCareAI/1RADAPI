@@ -1299,32 +1299,6 @@ namespace _1RadAPI.Controllers
             }
         }
 
-        [HttpPost("complete")]
-        public async Task<IActionResult> CompleteStudy([FromBody] StudyCompletionRequest request)
-        {
-            try
-            {
-                var appointment = await _context.Appointments
-                    .Include(a => a.StudyAssets)
-                    .FirstOrDefaultAsync(a => a.AppointmentId == request.AppointmentId);
-
-                if (appointment == null) return NotFound(new { success = false, error = "MISSION NOT FOUND: The specified appointment does not exist." });
-
-                appointment.TechnicianComments = request.Comments;
-                appointment.Status = "SCANNED"; // MARK AS READY FOR RADIOLOGIST
-                appointment.ScannedAt = DateTime.UtcNow;
-                appointment.TechnicianId = _userContext.UserId;
-
-                await _context.SaveChangesAsync(default);
-
-                return Ok(new { success = true, status = "READY_FOR_REPORT", comments = request.Comments });
-            }
-            catch (Exception ex)
-            {
-                return StatusCode(500, new { success = false, error = $"MISSION FINALIZATION FAILURE: {ex.Message}" });
-            }
-        }
-
         [HttpPost("upload-token")]
         public async Task<IActionResult> RequestSasUploadToken([FromBody] SasUploadTokenRequest request)
         {
@@ -2406,6 +2380,29 @@ namespace _1RadAPI.Controllers
                     {
                         asset.AppointmentId = study.AppointmentId;
                     }
+
+                    // The study's report moves with its images: key it to the visit
+                    // (and the study's service line) so the visit's Reporting page
+                    // finds it instead of starting a second report for the same
+                    // images. It keeps its ImagingStudyId link too. Skipped when the
+                    // visit already has a report for that study.
+                    var studyReports = await _context.DiagnosticReports
+                        .IgnoreQueryFilters()
+                        .Where(r => r.ImagingStudyId == study.Id && r.HospitalId == study.HospitalId
+                                 && r.AppointmentId == null && r.DeletedAt == null)
+                        .ToListAsync();
+                    foreach (var rep in studyReports)
+                    {
+                        var svcId = study.AppointmentServiceId;
+                        var visitHasOne = await _context.DiagnosticReports
+                            .IgnoreQueryFilters()
+                            .AnyAsync(r => r.AppointmentId == study.AppointmentId && r.DeletedAt == null
+                                        && (svcId == null || r.AppointmentServiceId == svcId));
+                        if (visitHasOne) continue;
+                        rep.AppointmentId = study.AppointmentId;
+                        rep.AppointmentServiceId = svcId;
+                        rep.UpdatedAt = DateTime.UtcNow;
+                    }
                 }
 
                 await _context.SaveChangesAsync(default);
@@ -2631,12 +2628,6 @@ namespace _1RadAPI.Controllers
         // appointment.
         public Guid? AppointmentServiceId { get; set; }
         public IFormFile File { get; set; }
-    }
-
-    public class StudyCompletionRequest
-    {
-        public Guid AppointmentId { get; set; }
-        public string Comments { get; set; }
     }
 
     public class SasUploadTokenRequest

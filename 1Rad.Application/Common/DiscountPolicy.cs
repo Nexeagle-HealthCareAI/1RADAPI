@@ -10,7 +10,9 @@ namespace _1Rad.Application.Common;
 /// sent, and negative values raised the bill.
 ///
 ///   • No negative discount, deduction or extra charge, anywhere.
-///   • Admins and accountants may give any concession up to the bill.
+///   • Admins may give any concession up to the bill.
+///   • Accountants may too, unless the centre set Billing:AccountantDiscountLimitPercent
+///     (Money ▸ Setup, migration 116).
 ///   • Everyone else (front desk, custom roles) may give a centre discount plus
 ///     deduction of at most Billing:FrontDeskDiscountLimitPercent of the bill
 ///     (default 10%). Above that the change goes through an Edit-payment approval.
@@ -41,15 +43,39 @@ public static class DiscountPolicy
             throw new ValidationException("An extra charge can't be negative.");
     }
 
+    private static readonly int[] AdminRoleIds = { 1, 2 };   // AdminDoctor, Admin
+    private const int AccountantRoleId = 6;
+
+    public static decimal? AccountantLimitPercent(IConfiguration? config)
+    {
+        var raw = config?["Billing:AccountantDiscountLimitPercent"];
+        return decimal.TryParse(raw, System.Globalization.NumberStyles.Number,
+                   System.Globalization.CultureInfo.InvariantCulture, out var v) && v >= 0 && v <= 100
+            ? v : null;
+    }
+
+    /// <summary>
+    /// The most this user may take off a bill, as % of the bill; null = no limit.
+    /// Admins: none. Accountants: none unless the centre set one (Money ▸ Setup,
+    /// migration 116). Everyone else: the front-desk limit.
+    /// </summary>
+    public static decimal? LimitPercentFor(IUserContext user, IConfiguration? config)
+    {
+        if (user.RoleIds.Any(r => AdminRoleIds.Contains(r))) return null;
+        if (user.RoleIds.Contains(AccountantRoleId)) return AccountantLimitPercent(config);
+        return FrontDeskLimitPercent(config);
+    }
+
     /// <summary>Throws when the signed-in user may not give this much.</summary>
     public static void CheckLimit(IUserContext user, IConfiguration? config, decimal gross, decimal centre, decimal deduction)
     {
-        if (HasFinanceRole(user) || gross <= 0) return;
-        var pct = FrontDeskLimitPercent(config);
-        var allowed = Math.Round(gross * pct / 100m, 2);
+        if (gross <= 0) return;
+        var pct = LimitPercentFor(user, config);
+        if (pct == null) return;
+        var allowed = Math.Round(gross * pct.Value / 100m, 2);
         if (centre + deduction > allowed + 0.009m)
             throw new BusinessRuleViolationException(
-                $"The front desk can give up to {pct:0.##}% off (₹{allowed:0.##} on this bill). For more, ask an accountant or admin, or raise a payment-edit request.",
+                $"You can give up to {pct:0.##}% off (₹{allowed:0.##} on this bill). For more, send it to the owner for approval.",
                 "DISCOUNT_NEEDS_APPROVAL");
     }
 }

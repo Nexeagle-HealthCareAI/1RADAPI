@@ -121,7 +121,7 @@ public class GetStrategicOutlookQueryHandler : IRequestHandler<GetStrategicOutlo
             try
             {
                 operationalExpenses = await _context.Expenses
-                    .Where(e => e.HospitalId == hospitalId && e.TransactionDate >= rangeStart && e.TransactionDate < rangeEnd)
+                    .Where(e => e.HospitalId == hospitalId && e.DeletedAt == null && e.TransactionDate >= rangeStart && e.TransactionDate < rangeEnd)
                     .SumAsync(e => e.Amount, cancellationToken);
             }
             catch

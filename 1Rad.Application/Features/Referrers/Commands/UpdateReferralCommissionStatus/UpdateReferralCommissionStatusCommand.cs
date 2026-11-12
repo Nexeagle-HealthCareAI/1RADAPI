@@ -60,8 +60,11 @@ public class UpdateReferralCommissionStatusCommandHandler : IRequestHandler<Upda
                 new[] { (commission.Id, commission.AppointmentId, commission.ReferenceNumber) },
                 cancellationToken);
             payability.TryGetValue(commission.Id, out var patientStatus);
-            if (!PatientPaymentStatus.IsPayable(patientStatus))
-                throw new BusinessRuleViolationException("The patient has not paid for this visit yet, so the referral commission cannot be paid out.");
+            var whenBilled = await PatientPaymentStatus.PayWhenBilledAsync(_context, commission.HospitalId, cancellationToken);
+            if (!PatientPaymentStatus.IsPayable(patientStatus, whenBilled))
+                throw new BusinessRuleViolationException(whenBilled
+                    ? "This visit has no bill yet (or it was cancelled), so the referral commission cannot be paid out."
+                    : "The patient has not paid for this visit yet, so the referral commission cannot be paid out.");
         }
 
         var actor = await CommissionActor.ResolveAsync(_context, cancellationToken);

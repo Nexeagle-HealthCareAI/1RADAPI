@@ -34,7 +34,8 @@ public class ExpenseController : ControllerBase
         [FromQuery] DateTime? updatedAfter,
         [FromQuery] bool includeDeleted = false,
         [FromQuery] int pageSize = 0,
-        [FromQuery] string? cursor = null)
+        [FromQuery] string? cursor = null,
+        [FromQuery] string? state = null)
     {
         var result = await _mediator.Send(new GetExpensesQuery
         {
@@ -46,6 +47,7 @@ public class ExpenseController : ControllerBase
             IncludeDeleted = includeDeleted,
             PageSize = pageSize,
             Cursor = cursor,
+            State = state,
         });
         // Sync-engine / legacy callers send no pageSize — keep returning a plain array.
         if (!result.IsPaged)
@@ -77,6 +79,17 @@ public class ExpenseController : ControllerBase
         await _mediator.Send(new _1Rad.Application.Features.Finance.Commands.DeleteExpense.DeleteExpenseCommand(id));
         return Ok();
     }
+
+    // Money ▸ Expenses: mark a "to pay" expense as paid, now, from the drawer / UPI / bank.
+    [HttpPost("expenses/{id:guid}/pay")]
+    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Accountant}")]
+    public async Task<IActionResult> PayExpense(Guid id, [FromBody] PayExpenseRequest body)
+    {
+        var ok = await _mediator.Send(new _1Rad.Application.Features.Finance.Commands.PayExpense.PayExpenseCommand(id, body.Mode, body.Reference));
+        return Ok(ok);
+    }
+
+    public record PayExpenseRequest(string Mode, string? Reference);
 
     [HttpPut("expenses/{id}/status")]
     [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Accountant}")]

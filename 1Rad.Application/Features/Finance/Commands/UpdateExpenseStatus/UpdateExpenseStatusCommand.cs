@@ -1,3 +1,4 @@
+using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
@@ -26,7 +27,12 @@ public class UpdateExpenseStatusCommandHandler : IRequestHandler<UpdateExpenseSt
         if (expense == null)
             throw new Exception($"FISCAL ERROR: Expense record [{request.Id}] not found in center ledger.");
 
-        expense.Status = request.Status;
+        if (expense.LinkedDisbursementId != null)
+            throw new _1Rad.Domain.Exceptions.BusinessRuleViolationException("This expense comes from Staff & salary. Change it there.");
+        var next = ExpenseStates.Normalise(request.Status);
+        if (next == "Paid" && expense.Status != "Paid") expense.PaidAt = DateTime.UtcNow;
+        if (next != "Paid") expense.PaidAt = null;
+        expense.Status = next;
         await _context.SaveChangesAsync(cancellationToken);
         
         return true;

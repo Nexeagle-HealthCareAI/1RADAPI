@@ -24,7 +24,10 @@ public static class BillingSettings
         decimal TdsProfessionalRate,
         decimal TdsProfessionalThreshold,
         decimal TdsNoPanRate,
-        decimal FrontDeskDiscountLimitPercent);
+        decimal FrontDeskDiscountLimitPercent,
+        decimal? AccountantDiscountLimitPercent = null,
+        bool DiscountReasonRequired = false,
+        bool PartnerPayWhenBilled = true);
 
     public static Effective Defaults(IConfiguration? config) => Resolve(null, config);
 
@@ -42,7 +45,10 @@ public static class BillingSettings
             row?.TdsProfessionalRate ?? pro.Rate,
             row?.TdsProfessionalThreshold ?? pro.Threshold,
             row?.TdsNoPanRate ?? ReferralTds.NoPanRate(config),
-            row?.FrontDeskDiscountLimitPercent ?? DiscountPolicy.FrontDeskLimitPercent(config));
+            row?.FrontDeskDiscountLimitPercent ?? DiscountPolicy.FrontDeskLimitPercent(config),
+            row?.AccountantDiscountLimitPercent,
+            row?.DiscountReasonRequired ?? false,
+            row?.PartnerPayWhenBilled ?? true);
     }
 
     public static async Task<Effective> GetAsync(IApplicationDbContext db, Guid hospitalId, IConfiguration? config, CancellationToken ct)
@@ -74,6 +80,7 @@ public static class BillingSettings
             ["ReferralTds:Professional:Threshold"] = s.TdsProfessionalThreshold.ToString(inv),
             ["ReferralTds:NoPanRate"] = s.TdsNoPanRate.ToString(inv),
             ["Billing:FrontDeskDiscountLimitPercent"] = s.FrontDeskDiscountLimitPercent.ToString(inv),
+            ["Billing:AccountantDiscountLimitPercent"] = s.AccountantDiscountLimitPercent?.ToString(inv),
         });
     }
 

@@ -103,6 +103,17 @@ public class FinalizeReportCommandHandler : IRequestHandler<FinalizeReportComman
                 throw new UnauthorizedAccessException("You do not have permission to sign a report for this appointment.");
         }
 
+        // On a visit with several studies the sign-off must say WHICH study:
+        // signing "the visit" used to sign whichever report came first and
+        // mark the whole visit REPORTED.
+        if (appointment != null && !request.AppointmentServiceId.HasValue)
+        {
+            var liveStudies = await _context.AppointmentServices
+                .CountAsync(s => s.AppointmentId == appointment.AppointmentId && s.DeletedAt == null, cancellationToken);
+            if (liveStudies > 1)
+                throw new ArgumentException("This visit has more than one study — open the study you are signing and sign it there.");
+        }
+
         // ── Load the report to be signed (must already be saved). ──
         DiagnosticReport? report;
         if (study != null)
@@ -270,6 +281,14 @@ public class FinalizeReportCommandHandler : IRequestHandler<FinalizeReportComman
             }
             throw new OccConflictException(canonical!,
                 "This report changed since you opened it — review the latest version before signing.");
+        }
+
+        // Keep a de-identified copy for improving the AI — only when the centre
+        // opted in (Admin ▸ AI & privacy); never fails the signature.
+        if (target == ReportStatuses.Final)
+        {
+            try { await ApprovedCaseCapture.CaptureAsync(_context, report, cancellationToken); }
+            catch { /* best effort */ }
         }
 
         // First time the whole visit is reported → tell the patient (best-effort,
