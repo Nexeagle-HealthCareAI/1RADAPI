@@ -635,8 +635,13 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.ToTable("DayCloses", "dbo");
             entity.HasKey(e => e.Id);
             foreach (var p in new[] { nameof(DayClose.ExpectedCash), nameof(DayClose.CountedCash), nameof(DayClose.Variance),
-                                      nameof(DayClose.ExpectedUpi), nameof(DayClose.ExpectedCard), nameof(DayClose.ExpectedOther) })
+                                      nameof(DayClose.ExpectedUpi), nameof(DayClose.ExpectedCard), nameof(DayClose.ExpectedOther),
+                                      nameof(DayClose.OpeningFloat), nameof(DayClose.ExpectedBank), nameof(DayClose.FloatKept),
+                                      nameof(DayClose.HandedOver) })
                 entity.Property(p).HasPrecision(18, 2);
+            entity.Property(e => e.NoteCounts).HasMaxLength(400);
+            entity.Property(e => e.DifferenceReason).HasMaxLength(120);
+            entity.Property(e => e.HandedTo).HasMaxLength(100);
             entity.Property(e => e.Note).HasMaxLength(500);
             entity.Property(e => e.ClosedByName).HasMaxLength(200);
             entity.HasIndex(e => new { e.HospitalId, e.BusinessDate }).IsUnique();

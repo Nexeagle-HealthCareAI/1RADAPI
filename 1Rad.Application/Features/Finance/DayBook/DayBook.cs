@@ -26,9 +26,51 @@ public record DayBookLine(DateTime At, string Kind, string Mode, decimal Amount,
 public record DayBookModeTotal(string Mode, decimal In, decimal Out, decimal Net);
 public record DayBookCashierTotal(string Cashier, string Mode, decimal Net, int Entries);
 public record DayCloseDto(DateTime BusinessDate, decimal ExpectedCash, decimal CountedCash, decimal Variance,
-    decimal ExpectedUpi, decimal ExpectedCard, decimal ExpectedOther, string? Note, string? ClosedByName, DateTime ClosedAt, int CloseCount);
+    decimal ExpectedUpi, decimal ExpectedCard, decimal ExpectedOther, string? Note, string? ClosedByName, DateTime ClosedAt, int CloseCount,
+    // Money ▸ Cash book (migration 117)
+    decimal OpeningFloat, decimal ExpectedBank, Dictionary<string, int>? NoteCounts, string? DifferenceReason,
+    decimal FloatKept, decimal HandedOver, string? HandedTo)
+{
+    public static DayCloseDto From(DayClose d) => new(d.BusinessDate, d.ExpectedCash, d.CountedCash, d.Variance, d.ExpectedUpi,
+        d.ExpectedCard, d.ExpectedOther, d.Note, d.ClosedByName, d.ClosedAt, d.CloseCount,
+        d.OpeningFloat, d.ExpectedBank, CashCount.Parse(d.NoteCounts), d.DifferenceReason, d.FloatKept, d.HandedOver, d.HandedTo);
+}
+
+/// <summary>One day on the cash book's day strip.</summary>
+public record DayStripItem(DateTime Date, bool Closed, decimal Variance, decimal CashNet, decimal AllNet, int Entries);
+
+/// <summary>Counting the drawer note by note. Keys are the note value, or "coins" for loose coins in rupees.</summary>
+public static class CashCount
+{
+    public static readonly int[] Notes = { 2000, 500, 200, 100, 50, 20, 10 };
+
+    public static Dictionary<string, int>? Parse(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try { return System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, int>>(json); }
+        catch (System.Text.Json.JsonException) { return null; }
+    }
+
+    /// <summary>Total of a count; throws on an unknown note or a negative number.</summary>
+    public static decimal Total(Dictionary<string, int> counts)
+    {
+        decimal total = 0;
+        foreach (var (k, n) in counts)
+        {
+            if (n < 0) throw new ValidationException("A count can't be negative.");
+            if (n > 100000) throw new ValidationException("That count is too large.");
+            if (k == "coins") { total += n; continue; }
+            if (!int.TryParse(k, out var note) || !Notes.Contains(note))
+                throw new ValidationException($"₹{k} is not a note we count.");
+            total += note * (decimal)n;
+        }
+        return total;
+    }
+}
 public record DayBookDto(DateTime From, DateTime To, List<DayBookLine> Lines, List<DayBookModeTotal> ByMode,
-    List<DayBookCashierTotal> ByCashier, List<DayCloseDto> Closes);
+    List<DayBookCashierTotal> ByCashier, List<DayCloseDto> Closes,
+    // Cash left in the drawer by the last close before From (migration 117).
+    decimal OpeningFloat);
 
 public static class DayBookModes
 {
@@ -118,20 +160,61 @@ public class GetDayBookQueryHandler : IRequestHandler<GetDayBookQuery, DayBookDt
         var byMode = lines.GroupBy(l => l.Mode)
             .Select(g => new DayBookModeTotal(g.Key, g.Where(l => l.Amount > 0).Sum(l => l.Amount),
                 -g.Where(l => l.Amount < 0).Sum(l => l.Amount), g.Sum(l => l.Amount)))
-            .OrderBy(m => Array.IndexOf(new[] { "CASH", "UPI", "CARD", "OTHER" }, m.Mode)).ToList();
+            .OrderBy(m => Array.IndexOf(new[] { "CASH", "UPI", "CARD", "BANK", "OTHER" }, m.Mode)).ToList();
         var byCashier = lines.Where(l => l.Kind != "EXPENSE")
             .GroupBy(l => (l.Cashier ?? "Unknown", l.Mode))
             .Select(g => new DayBookCashierTotal(g.Key.Item1, g.Key.Item2, g.Sum(l => l.Amount), g.Count()))
             .OrderBy(c => c.Cashier).ThenBy(c => c.Mode).ToList();
 
-        var closes = await _db.DayCloses.AsNoTracking()
+        var closeRows = await _db.DayCloses.AsNoTracking()
             .Where(d => d.HospitalId == hospitalId && d.BusinessDate >= from && d.BusinessDate <= to)
             .OrderBy(d => d.BusinessDate)
-            .Select(d => new DayCloseDto(d.BusinessDate, d.ExpectedCash, d.CountedCash, d.Variance, d.ExpectedUpi, d.ExpectedCard,
-                d.ExpectedOther, d.Note, d.ClosedByName, d.ClosedAt, d.CloseCount))
             .ToListAsync(ct);
+        var opening = await OpeningFloatAsync(_db, hospitalId, from, ct);
 
-        return new DayBookDto(from, to, lines, byMode, byCashier, closes);
+        return new DayBookDto(from, to, lines, byMode, byCashier, closeRows.Select(DayCloseDto.From).ToList(), opening);
+    }
+
+    /// <summary>Cash the last close before this day left in the drawer (0 when none).</summary>
+    public static async Task<decimal> OpeningFloatAsync(IApplicationDbContext db, Guid hospitalId, DateTime day, CancellationToken ct)
+    {
+        return await db.DayCloses.AsNoTracking()
+            .Where(d => d.HospitalId == hospitalId && d.BusinessDate < day.Date)
+            .OrderByDescending(d => d.BusinessDate)
+            .Select(d => (decimal?)d.FloatKept)
+            .FirstOrDefaultAsync(ct) ?? 0m;
+    }
+}
+
+/// <summary>
+/// Money ▸ Cash book day strip: the last N days up to To, each with whether it was
+/// closed (and how far off the count was) and what moved.
+/// </summary>
+public record GetDayStripQuery(DateTime To, int Days = 7) : IRequest<List<DayStripItem>>;
+
+public class GetDayStripQueryHandler : IRequestHandler<GetDayStripQuery, List<DayStripItem>>
+{
+    private readonly IMediator _mediator;
+    public GetDayStripQueryHandler(IMediator mediator) => _mediator = mediator;
+
+    public async Task<List<DayStripItem>> Handle(GetDayStripQuery q, CancellationToken ct)
+    {
+        var days = Math.Clamp(q.Days, 1, 31);
+        var to = q.To.Date;
+        var from = to.AddDays(-(days - 1));
+        var book = await _mediator.Send(new GetDayBookQuery(from, to), ct);
+        var byDay = book.Lines.GroupBy(l => IstDateRange.ToIst(l.At).Date).ToDictionary(g => g.Key, g => g.ToList());
+        var closes = book.Closes.ToDictionary(c => c.BusinessDate.Date);
+        var list = new List<DayStripItem>();
+        for (var d = to; d >= from; d = d.AddDays(-1))
+        {
+            byDay.TryGetValue(d, out var ls);
+            ls ??= new List<DayBookLine>();
+            var closed = closes.TryGetValue(d, out var c);
+            list.Add(new DayStripItem(d, closed, closed ? c!.Variance : 0m,
+                ls.Where(l => l.Mode == "CASH").Sum(l => l.Amount), ls.Sum(l => l.Amount), ls.Count));
+        }
+        return list;
     }
 }
 
@@ -139,7 +222,12 @@ public class GetDayBookQueryHandler : IRequestHandler<GetDayBookQuery, DayBookDt
 /// Close a day: record the counted cash against what the day book expects.
 /// A day that is already closed can only be re-counted by an accountant or admin.
 /// </summary>
-public record CloseDayCommand(DateTime Date, decimal CountedCash, string? Note) : IRequest<DayCloseDto>;
+public record CloseDayCommand(DateTime Date, decimal CountedCash, string? Note,
+    // Money ▸ Cash book (migration 117). When NoteCounts is sent, the counted cash is
+    // worked out from it. DifferenceReason (or a note) is required when the count
+    // doesn't match. FloatKept stays in the drawer; the rest is handed over.
+    Dictionary<string, int>? NoteCounts = null, string? DifferenceReason = null,
+    decimal? FloatKept = null, string? HandedTo = null) : IRequest<DayCloseDto>;
 
 public class CloseDayCommandHandler : IRequestHandler<CloseDayCommand, DayCloseDto>
 {
@@ -149,7 +237,8 @@ public class CloseDayCommandHandler : IRequestHandler<CloseDayCommand, DayCloseD
 
     public async Task<DayCloseDto> Handle(CloseDayCommand cmd, CancellationToken ct)
     {
-        if (cmd.CountedCash < 0) throw new ValidationException("Counted cash can't be negative.");
+        var counted = cmd.NoteCounts is { Count: > 0 } ? CashCount.Total(cmd.NoteCounts) : cmd.CountedCash;
+        if (counted < 0) throw new ValidationException("Counted cash can't be negative.");
         var date = cmd.Date.Date;
         var today = IstDateRange.ToIst(DateTime.UtcNow).Date;
         if (date > today) throw new ValidationException("You can't close a day that hasn't happened yet.");
@@ -163,28 +252,47 @@ public class CloseDayCommandHandler : IRequestHandler<CloseDayCommand, DayCloseD
         var row = await _db.DayCloses.FirstOrDefaultAsync(d => d.HospitalId == hospitalId && d.BusinessDate == date, ct);
         if (row != null && !DiscountPolicy.HasFinanceRole(_db.UserContext))
             throw new ForbiddenException("This day is already closed. Ask an accountant or admin to re-count it.");
+
+        var opening = book.OpeningFloat;
+        var expectedInDrawer = opening + Net("CASH");
+        var variance = Math.Round(counted, 2) - expectedInDrawer;
+        var note = string.IsNullOrWhiteSpace(cmd.Note) ? null : cmd.Note.Trim();
+        var reason = string.IsNullOrWhiteSpace(cmd.DifferenceReason) ? null : cmd.DifferenceReason.Trim();
+        if (Math.Abs(variance) > 0.009m && reason == null && note == null)
+            throw new ValidationException($"The drawer is {(variance < 0 ? "short" : "over")} by ₹{Math.Abs(variance):0.##}. Say why before closing.");
+        var floatKept = Math.Round(cmd.FloatKept ?? 0m, 2);
+        if (floatKept < 0) throw new ValidationException("The cash kept for tomorrow can't be negative.");
+        if (floatKept > counted + 0.009m) throw new ValidationException("You can't keep more cash for tomorrow than you counted.");
+
         if (row == null)
         {
             row = new DayClose { HospitalId = hospitalId, BusinessDate = date, CloseCount = 0 };
             _db.DayCloses.Add(row);
         }
+        row.OpeningFloat = opening;
         row.ExpectedCash = Net("CASH");
         row.ExpectedUpi = Net("UPI");
         row.ExpectedCard = Net("CARD");
+        row.ExpectedBank = Net("BANK");
         row.ExpectedOther = Net("OTHER");
-        row.CountedCash = Math.Round(cmd.CountedCash, 2);
-        row.Variance = row.CountedCash - row.ExpectedCash;
-        var note = string.IsNullOrWhiteSpace(cmd.Note) ? null : cmd.Note.Trim();
+        row.CountedCash = Math.Round(counted, 2);
+        row.Variance = variance;
+        row.NoteCounts = cmd.NoteCounts is { Count: > 0 }
+            ? System.Text.Json.JsonSerializer.Serialize(cmd.NoteCounts.Where(kv => kv.Value > 0).ToDictionary(kv => kv.Key, kv => kv.Value))
+            : null;
+        row.DifferenceReason = Math.Abs(variance) > 0.009m && reason != null ? (reason.Length > 120 ? reason[..120] : reason) : null;
+        row.FloatKept = floatKept;
+        row.HandedOver = Math.Round(row.CountedCash - floatKept, 2);
+        row.HandedTo = string.IsNullOrWhiteSpace(cmd.HandedTo) ? null : (cmd.HandedTo.Trim().Length > 100 ? cmd.HandedTo.Trim()[..100] : cmd.HandedTo.Trim());
         row.Note = row.CloseCount > 0 && row.Note != null
-            ? Trim500($"{row.Note} | re-count {DateTime.UtcNow:yyyy-MM-dd HH:mm} UTC: {note ?? "no note"}")
+            ? Trim500($"{row.Note} | re-count {DateTime.UtcNow:yyyy-MM-dd HH:mm} UTC: {note ?? reason ?? "no note"}")
             : (note == null ? null : Trim500(note));
         row.ClosedByUserId = userId == Guid.Empty ? null : userId;
         row.ClosedByName = name;
         row.ClosedAt = DateTime.UtcNow;
         row.CloseCount += 1;
         await _db.SaveChangesAsync(ct);
-        return new DayCloseDto(row.BusinessDate, row.ExpectedCash, row.CountedCash, row.Variance, row.ExpectedUpi, row.ExpectedCard,
-            row.ExpectedOther, row.Note, row.ClosedByName, row.ClosedAt, row.CloseCount);
+        return DayCloseDto.From(row);
     }
 
     private static string Trim500(string s) => s.Length <= 500 ? s : s[..500];

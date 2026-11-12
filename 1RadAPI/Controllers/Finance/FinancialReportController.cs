@@ -76,11 +76,23 @@ public class FinancialReportController : ControllerBase
     [Authorize(Roles = RoleSets.Billing)]
     public async Task<IActionResult> CloseDay([FromBody] CloseDayRequest body)
     {
-        var result = await _mediator.Send(new _1Rad.Application.Features.Finance.DayBook.CloseDayCommand(body.Date, body.CountedCash, body.Note));
+        var result = await _mediator.Send(new _1Rad.Application.Features.Finance.DayBook.CloseDayCommand(body.Date, body.CountedCash, body.Note,
+            body.NoteCounts, body.DifferenceReason, body.FloatKept, body.HandedTo));
         return Ok(result);
     }
 
-    public record CloseDayRequest(DateTime Date, decimal CountedCash, string? Note);
+    public record CloseDayRequest(DateTime Date, decimal CountedCash, string? Note,
+        Dictionary<string, int>? NoteCounts = null, string? DifferenceReason = null, decimal? FloatKept = null, string? HandedTo = null);
+
+    // Money ▸ Cash book: the last N days, closed or not, and what moved each day.
+    [HttpGet("daybook/days")]
+    [Authorize(Roles = RoleSets.Billing)]
+    public async Task<IActionResult> DayStrip([FromQuery] DateTime? to, [FromQuery] int days = 7)
+    {
+        var today = _1Rad.Application.Common.IstDateRange.ToIst(DateTime.UtcNow).Date;
+        var result = await _mediator.Send(new _1Rad.Application.Features.Finance.DayBook.GetDayStripQuery(to ?? today, days));
+        return Ok(result);
+    }
 
     // Credit notes and refund vouchers issued on bills (raised automatically when a
     // paid bill is lowered, cancelled or refunded). By IST issue date, or for one bill.
