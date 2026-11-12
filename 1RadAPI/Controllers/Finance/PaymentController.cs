@@ -27,14 +27,6 @@ public class PaymentController : ControllerBase
         return Ok(new { success = result });
     }
 
-    [HttpPost("adjust")]
-    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Accountant}")]
-    public async Task<IActionResult> ApplyExtraDiscount([FromBody] ApplyExtraDiscountCommand command)
-    {
-        var result = await _mediator.Send(command);
-        return Ok(new { success = result });
-    }
-
     [HttpPost("invoices/{id}/discount")]
     [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Accountant}")]
     public async Task<IActionResult> ApplyDiscount(Guid id, [FromBody] ApplyDiscountRequest request)

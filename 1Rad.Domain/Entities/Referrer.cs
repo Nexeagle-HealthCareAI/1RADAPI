@@ -16,6 +16,9 @@ public class Referrer : BaseEntity, IHospitalContext
     //             Email/Specialty/Degree profile below applies.
     //   • false → another person (agent) who collects on a doctor's behalf;
     //             SupportedByDoctor names that doctor.
+    // Tax ID for TDS on payouts (review R10, migration 106). Upper-case, 10 chars.
+    public string? Pan { get; set; }
+
     public bool IsDoctor { get; set; } = true;
     public string? SupportedByDoctor { get; set; }
 

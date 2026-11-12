@@ -13,6 +13,9 @@ public record UpsertServiceChargeCommand : IRequest<Guid>
     public decimal Amount { init; get; }
     public decimal ReferralCutValue { init; get; } = 0;
     public Guid? TemplateId { init; get; }
+    // GST (review B33). Null = leave as is (new services: exempt, SAC 9993).
+    public string? SacCode { init; get; }
+    public decimal? GstRate { init; get; }
 }
 
 public class UpsertServiceChargeCommandHandler : IRequestHandler<UpsertServiceChargeCommand, Guid>
@@ -102,6 +105,19 @@ public class UpsertServiceChargeCommandHandler : IRequestHandler<UpsertServiceCh
             entity.Amount = request.Amount;
             entity.ReferralCutValue = referralCut;
             entity.TemplateId = request.TemplateId;
+            if (request.GstRate.HasValue)
+            {
+                if (!_1Rad.Domain.Constants.GstDefaults.AllowedRates.Contains(request.GstRate.Value))
+                    throw new ArgumentException("GST rate must be 0, 5, 12, 18 or 28%.", nameof(request.GstRate));
+                entity.GstRate = request.GstRate.Value;
+            }
+            if (request.SacCode != null)
+            {
+                var sac = new string(request.SacCode.Where(char.IsDigit).ToArray());
+                if (sac.Length != 0 && (sac.Length < 4 || sac.Length > 8))
+                    throw new ArgumentException("SAC/HSN code should be 4 to 8 digits.", nameof(request.SacCode));
+                entity.SacCode = sac.Length == 0 ? null : sac;
+            }
 
             await _context.SaveChangesAsync(cancellationToken);
 

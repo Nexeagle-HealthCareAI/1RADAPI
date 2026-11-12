@@ -1,5 +1,6 @@
 using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Entities;
+using _1Rad.Domain.Constants;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
 
@@ -46,15 +47,25 @@ public class UpdateCustomRoleCommandHandler : IRequestHandler<UpdateCustomRoleCo
         customRole.RoleName = normalizedName;
         customRole.Description = request.Description?.Trim();
 
+        // Only page routes the API knows how to translate may be saved (gap analysis
+        // P0-5 / P1-2): an arbitrary string such as "api" used to grant every role.
+        var unknownRoutes = (request.Permissions ?? new List<string>())
+            .Where(r => !string.IsNullOrWhiteSpace(r) && !CustomRoleRouteMap.IsKnownPage(r))
+            .ToList();
+        if (unknownRoutes.Count > 0)
+        {
+            return (false, $"Unknown page permission(s): {string.Join(", ", unknownRoutes)}.");
+        }
+
         // Update permissions relationally
         customRole.Permissions.Clear();
-        foreach (var route in request.Permissions.Distinct())
+        foreach (var route in request.Permissions.Where(r => !string.IsNullOrWhiteSpace(r)).Select(CustomRoleRouteMap.Normalise).Distinct())
         {
             if (!string.IsNullOrWhiteSpace(route))
             {
                 customRole.Permissions.Add(new CustomRolePermission
                 {
-                    RoutePath = route.Trim()
+                    RoutePath = CustomRoleRouteMap.Normalise(route)
                 });
             }
         }

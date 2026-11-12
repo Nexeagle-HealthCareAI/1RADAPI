@@ -35,7 +35,8 @@ internal static class ReferrerReassign
         string? degree = null,
         string? address = null,
         string? supportedSpecialty = null,
-        string? supportedDegree = null)
+        string? supportedDegree = null,
+        Guid? newReferrerId = null)
     {
         // Stored UPPERCASE for consistency (#15); blank guards out.
         var name = NameNormalizer.Upper(newReferrerName);
@@ -49,8 +50,11 @@ internal static class ReferrerReassign
         if (appointment == null) return;
 
         // Resolve / create the target referrer (hospital-scoped, case-insensitive).
-        var referrer = await ctx.Referrers
-            .FirstOrDefaultAsync(r => r.Name!.ToLower() == name.ToLower() && r.HospitalId == hospitalId, ct);
+        // Same resolver as booking (#13/#25): a picked partner id wins, then the name
+        // (live, unmerged partners only) - never a namesake's deleted record.
+        var referrer = await ReferrerResolver.ResolveAsync(ctx, hospitalId, newReferrerId, newReferrerName, newReferrerContact, ct);
+        var referrerIsNew = referrer == null;
+        if (referrer != null) name = referrer.Name ?? name;
         if (referrer == null)
         {
             referrer = new Referrer
@@ -63,7 +67,8 @@ internal static class ReferrerReassign
             };
             ctx.Referrers.Add(referrer);
         }
-        if (newReferrerIsDoctor.HasValue) referrer.IsDoctor = newReferrerIsDoctor.Value;
+        // Only a brand-new partner takes its type from this form (#13).
+        if (referrerIsNew && newReferrerIsDoctor.HasValue) referrer.IsDoctor = newReferrerIsDoctor.Value;
 
         var contact = (newReferrerContact ?? string.Empty).Trim();
         if (!string.IsNullOrEmpty(contact))
@@ -77,7 +82,7 @@ internal static class ReferrerReassign
         // Full profile (parity with booking) — only overwrite when a value is given.
         if (!string.IsNullOrWhiteSpace(email)) referrer.Email = email.Trim();
         if (!string.IsNullOrWhiteSpace(address)) referrer.Address = address.Trim();
-        if ((newReferrerIsDoctor ?? referrer.IsDoctor))
+        if (referrer.IsDoctor)
         {
             if (!string.IsNullOrWhiteSpace(specialty)) referrer.Specialty = specialty.Trim();
             if (!string.IsNullOrWhiteSpace(degree)) referrer.Degree = degree.Trim();
@@ -91,10 +96,10 @@ internal static class ReferrerReassign
         // "Other person" (agent) → record the doctor they collect for. Doctors and
         // Self carry no supporting doctor.
         var supDoc = NameNormalizer.Upper(supportedByDoctor);
-        if (!isSelf && newReferrerIsDoctor == false && supDoc.Length > 0)
+        if (!isSelf && !referrer.IsDoctor && supDoc.Length > 0)
         {
             appointment.SupportedByDoctor = supDoc;
-            referrer.SupportedByDoctor = supDoc;
+            if (string.IsNullOrWhiteSpace(referrer.SupportedByDoctor)) referrer.SupportedByDoctor = supDoc;
 
             // Upsert the supporting doctor's own referrer record so their profile
             // (speciality / degree) is stored, mirroring booking.
@@ -142,8 +147,10 @@ internal static class ReferrerReassign
             .Select(i => i.InvoiceId)
             .FirstOrDefaultAsync(ct);
         bool hasArrived = appointment.ArrivedAt != null || invoiceDisplayId != null;
-        
-        if (hasArrived && !isSelf)
+        var visitCancelled = string.Equals((appointment.Status ?? "").Trim(), "CANCELLED", StringComparison.OrdinalIgnoreCase);
+
+        // A cancelled visit earns no new commission for anyone (review R14).
+        if (hasArrived && !isSelf && !visitCancelled)
         {
             var hospital = await ctx.Hospitals.FirstOrDefaultAsync(h => h.HospitalId == hospitalId, ct);
             bool autoBilling = hospital?.IsAutoBillingEnabled ?? false;
@@ -151,7 +158,9 @@ internal static class ReferrerReassign
             var existingServiceIds = commissions.Where(c => c.AppointmentServiceId.HasValue).Select(c => c.AppointmentServiceId!.Value).ToHashSet();
             foreach (var svc in services.Values)
             {
-                if (!existingServiceIds.Contains(svc.Id) && (svc.ReferralCutValue > 0 || autoBilling))
+                if (!existingServiceIds.Contains(svc.Id) && !svc.IsFree
+                    && !string.Equals(svc.Status, "CANCELLED", StringComparison.OrdinalIgnoreCase)
+                    && (svc.ReferralCutValue > 0 || autoBilling))
                 {
                     var newComm = new ReferralCommission
                     {
@@ -197,10 +206,15 @@ internal static class ReferrerReassign
             // exactly the money that was disbursed. Only when the row carries nothing
             // (it was "Self"/cancelled, which earns ₹0) do we fall back to the
             // service line's base cut so the newly assigned referrer is credited.
+            // Review R14: only a row zeroed because the visit was "Self" falls back to the
+            // line's base cut. A row cancelled for a cancelled visit or forfeited on a free
+            // test keeps its ₹0 and status — reassigning must not bring the cut back.
+            var wasSelfRow = string.Equals((c.ReferrerName ?? "").Trim(), "Self", StringComparison.OrdinalIgnoreCase);
             decimal baseCut = c.CommissionAmount;
-            if (baseCut == 0m
+            if (baseCut == 0m && wasSelfRow && !visitCancelled
                 && c.AppointmentServiceId.HasValue
-                && services.TryGetValue(c.AppointmentServiceId.Value, out var svc))
+                && services.TryGetValue(c.AppointmentServiceId.Value, out var svc)
+                && !svc.IsFree)
             {
                 baseCut = svc.ReferralCutValue;
             }
@@ -287,9 +301,10 @@ internal static class ReferrerReassign
                 c.ReferrerId = referrer.ReferrerId;
                 c.ReferrerName = referrer.Name ?? name;
                 c.CommissionAmount = isSelf ? 0 : baseCut;
-                
-                // If it was cancelled because of "Self", we revive it.
-                if (c.Status == "Cancelled" && !isSelf) c.Status = "UNPAID";
+
+                // Revive only a row that was cancelled because the visit was "Self".
+                if (string.Equals(c.Status, "Cancelled", StringComparison.OrdinalIgnoreCase) && !isSelf && wasSelfRow && baseCut != 0)
+                    c.Status = "UNPAID";
                 
                 c.UpdatedAt = now;
             }

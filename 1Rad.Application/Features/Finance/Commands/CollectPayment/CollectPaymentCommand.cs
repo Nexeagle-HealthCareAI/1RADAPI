@@ -2,6 +2,7 @@ using MediatR;
 using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Entities;
+using _1Rad.Domain.Exceptions;
 using Microsoft.EntityFrameworkCore;
 
 namespace _1Rad.Application.Features.Finance.Commands.CollectPayment;
@@ -36,6 +37,9 @@ public record CollectPaymentCommand : IRequest<bool>
     public string? AdditionalChargesReason { get; init; }
 
     public List<ExtraChargeDetail>? ExtraCharges { get; init; }
+    // Review B1: the bill version the cashier is looking at (InvoiceDto.RowVersion).
+    // Optional for older clients; when sent, a changed bill is refused with 409.
+    public string? RowVersion { get; init; }
 }
 
 
@@ -46,10 +50,13 @@ public record CollectPaymentCommand : IRequest<bool>
 public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentCommand, bool>
 {
     private readonly IApplicationDbContext _context;
+    private readonly Microsoft.Extensions.Configuration.IConfiguration? _configuration;
 
-    public CollectPaymentCommandHandler(IApplicationDbContext context)
+    public CollectPaymentCommandHandler(IApplicationDbContext context,
+        Microsoft.Extensions.Configuration.IConfiguration? configuration = null)
     {
         _context = context;
+        _configuration = configuration;
     }
 
     public async Task<bool> Handle(CollectPaymentCommand request, CancellationToken cancellationToken)
@@ -63,7 +70,7 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
 
             if (request.Amount < 0)
             {
-                throw new ArgumentException("Payment amount cannot be negative.", nameof(request.Amount));
+                throw new ValidationException("The amount received can't be negative. Use Refund to return money.");
             }
 
             var invoice = await _context.Invoices
@@ -73,14 +80,24 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
                 .FirstOrDefaultAsync(i => i.Id == request.InvoiceId && i.HospitalId == _context.UserContext.HospitalId, cancellationToken);
             
             if (invoice == null)
+                throw new NotFoundException("Bill not found.");
+            if (string.Equals(invoice.Status, "CANCELLED", StringComparison.OrdinalIgnoreCase))
+                throw new BusinessRuleViolationException("This bill is cancelled and can't take payments.", "INVOICE_CLOSED");
+
+            if (!string.IsNullOrWhiteSpace(request.RowVersion) && invoice.RowVersion != null)
             {
-                throw new KeyNotFoundException($"Invoice with ID '{request.InvoiceId}' not found.");
+                byte[]? sent = null;
+                try { sent = Convert.FromBase64String(request.RowVersion); } catch (FormatException) { }
+                if (sent == null || !sent.AsSpan().SequenceEqual(invoice.RowVersion))
+                    throw new ConflictException(
+                        "This bill was changed after you opened it. Reopen it to see the current balance, then collect again.");
             }
 
-            if (invoice.Status == "CANCELLED")
-            {
-                throw new InvalidOperationException($"Invoice '{invoice.InvoiceId}' is cancelled.");
-            }
+            // Review B1: what has been collected is the sum of the payment rows, not a
+            // running total that two cashiers could each have overwritten.
+            // (A bill from before payment rows were kept has none; its stored figure stands.)
+            if (invoice.Payments.Count > 0)
+                invoice.PaidAmount = Math.Round(invoice.Payments.Sum(p => p.Amount), 2);
 
             // Self-heal against the live service list BEFORE recomputing totals below.
             // Recomputing Gross/TotalAmount from invoice.Items (further down) only helps
@@ -140,6 +157,13 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
             // Capture original AdditionalCharges BEFORE we mutate it in the
             // ExtraCharges block below — needed for the correct gross fallback.
             var originalAdditionalCharges = invoice.AdditionalCharges;
+
+            // Review B3: no negative concessions, and the front desk's limit is enforced here.
+            DiscountPolicy.RejectNegatives(request.CentreDiscount, request.ReferrerDiscount, request.Deduction,
+                request.ExtraCharges?.Select(x => x.Amount));
+            if (request.AdditionalCharges < 0)
+                throw new ValidationException("An extra charge can't be negative.");
+            var oldCentreAndDeduction = invoice.CentreDiscount + invoice.InstitutionalDeduction;
 
             // Update Deduction Vectors (Overwrite with request values if provided, else keep existing)
             invoice.CentreDiscount = request.CentreDiscount ?? invoice.CentreDiscount;
@@ -205,113 +229,52 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
             // discount is assigned, since its fallback branch needs the invoice's
             // still-old Discount/Total to reconstruct the previously-persisted gross.
             InvoiceTotals.RecomputeGross(invoice, originalAdditionalCharges);
+            // Only a concession raised in this request is checked, so collecting on a
+            // bill an admin already discounted still works.
+            var newCentreAndDeduction = invoice.CentreDiscount + invoice.InstitutionalDeduction;
+            if (newCentreAndDeduction > oldCentreAndDeduction + 0.009m)
+            {
+                var centreSettings = await BillingSettings.GetAsync(_context, invoice.HospitalId, _configuration, cancellationToken);
+                DiscountPolicy.CheckLimit(_context.UserContext, BillingSettings.Overlay(centreSettings, _configuration), invoice.GrossAmount,
+                    invoice.CentreDiscount, invoice.InstitutionalDeduction);
+            }
             InvoiceTotals.ApplyDiscountAndFinalize(invoice, totalDiscount);
 
             // Already-settled check, against the FRESH balance (see note above).
-            if (invoice.PaidAmount >= invoice.TotalAmount - 0.01m)
+            // Review B17: a bill discounted to ₹0 has nothing to collect but still has to
+            // reach PAID — it used to hit this check and stay PENDING forever. Only a bill
+            // with a real balance that is already covered is "already settled".
+            // Discounts given at collection can take a part-paid bill below what was
+            // already collected (review B7): the excess goes back to the patient's
+            // wallet as a refund row instead of hiding as a negative balance.
+            if (invoice.PaidAmount > invoice.TotalAmount + 0.01m)
             {
-                throw new InvalidOperationException($"Invoice '{invoice.InvoiceId}' is already settled.");
+                await PaymentLedger.SettleAfterTotalChangeAsync(_context, invoice,
+                    "Discount at collection took the bill below what was paid", cancellationToken);
+            }
+            else if (invoice.PaidAmount >= invoice.TotalAmount - 0.01m && invoice.TotalAmount > 0.01m && request.Amount <= 0.009m)
+            {
+                // Nothing to collect and nothing to return: just re-derive the status.
+                PaymentLedger.DeriveStatus(invoice);
             }
 
-            // Handle Referrer-side adjustment (Differential logic)
-            if (invoice.ReferrerDiscount != oldReferrerDiscount)
+            var zeroTotal = invoice.TotalAmount <= 0.01m;
+            if (!zeroTotal && request.Amount > 0.009m && invoice.PaidAmount >= invoice.TotalAmount - 0.01m)
             {
-                // Multi-service appointments carry ONE ReferralCommission row PER
-                // SERVICE (see UpdateAppointmentStatusCommand.GenerateBillingOnArrivalAsync),
-                // all sharing this invoice's AppointmentId/ReferenceNumber. The
-                // invoice-level ReferrerDiscount is a single aggregate figure, so the
-                // differential must be spread across the WHOLE group — picking just
-                // one row (the old FirstOrDefaultAsync) silently corrupted sibling
-                // services' commissions on multi-service visits.
-                var commissions = await _context.ReferralCommissions
-                    .Where(c =>
-                        (c.AppointmentId == invoice.AppointmentId || (c.ReferenceNumber == invoice.InvoiceId && c.ReferenceNumber != null)) &&
-                        c.HospitalId == _context.UserContext.HospitalId &&
-                        c.DeletedAt == null)
-                    .ToListAsync(cancellationToken);
+                throw new ConflictException($"Bill {invoice.InvoiceId} is already settled.");
+            }
+            if (zeroTotal && request.Amount > 0.009m && string.Equals(invoice.Status, "PAID", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ConflictException($"Bill {invoice.InvoiceId} is already settled.");
+            }
 
-                if (commissions.Count > 0)
-                {
-                    // A PAID commission is disbursement history — the invariant enforced
-                    // everywhere else this table is edited (UpdateReferralCommissionStatusCommand,
-                    // RecordReferralCommissionsCommand, ReferrerReassign's double-entry
-                    // reversal) is that it is never silently rewritten in place; an
-                    // adjustment after disbursement needs an audited reversal, not a
-                    // direct edit. A commission CAN be marked PAID before the invoice
-                    // itself is fully settled (see ReferrerReassign's comment on this),
-                    // so a second CollectPayment call with a changed ReferrerDiscount is
-                    // a real, reachable path here — restrict the redistribution to the
-                    // still-adjustable (non-PAID) rows so a paid row's CommissionAmount
-                    // can never be overwritten by this differential logic.
-                    var lockedCommissions = commissions.Where(c => string.Equals(c.Status, "PAID", StringComparison.OrdinalIgnoreCase)).ToList();
-                    var adjustable = commissions.Except(lockedCommissions).ToList();
-
-                    // Eligible commission pool before any referral concession this cycle
-                    // (locked/paid rows are frozen out of the pool — the full differential
-                    // falls on the remaining adjustable rows only).
-                    var currentTotal = adjustable.Sum(c => c.CommissionAmount);
-                    var baseCommission = currentTotal + oldReferrerDiscount;
-
-                    // Over-commission funded by the CENTRE: floor the pool at zero and
-                    // shift the excess into the centre discount so the centre — not the
-                    // referrer — absorbs it. The patient's total is unchanged (the excess
-                    // only moves between the two discount buckets), so just the split +
-                    // commission change.
-                    if (request.AbsorbExcessToCentre && invoice.ReferrerDiscount > baseCommission)
-                    {
-                        var excess = invoice.ReferrerDiscount - baseCommission;
-                        invoice.CentreDiscount += excess;
-                        invoice.ReferrerDiscount = baseCommission;
-                        invoice.DiscountAmount = invoice.CentreDiscount + invoice.ReferrerDiscount + invoice.InstitutionalDeduction;
-                        invoice.TotalAmount = invoice.GrossAmount - invoice.DiscountAmount;
-                        foreach (var c in adjustable)
-                            c.Remarks = (c.Remarks ?? "") + $" [Excess ₹{excess:0.##} absorbed by centre]";
-                    }
-
-                    // Spread the new pool across the group proportionally to each row's
-                    // current share, so no single service silently absorbs the whole
-                    // invoice-level concession. The last row takes the rounding remainder
-                    // so the group sum lands exactly on (baseCommission - ReferrerDiscount).
-                    var newTotal = baseCommission - invoice.ReferrerDiscount;
-                    var allocated = 0m;
-                    for (var i = 0; i < adjustable.Count; i++)
-                    {
-                        var c = adjustable[i];
-                        decimal rowNew;
-                        if (i == adjustable.Count - 1)
-                        {
-                            rowNew = newTotal - allocated;
-                        }
-                        else
-                        {
-                            var share = currentTotal != 0 ? c.CommissionAmount / currentTotal : 1m / adjustable.Count;
-                            rowNew = Math.Round(newTotal * share, 2);
-                            allocated += rowNew;
-                        }
-
-                        var oldRowAmount = c.CommissionAmount;
-                        c.CommissionAmount = rowNew;
-                        c.Remarks = (c.Remarks ?? "") + $" [Adj: ₹{oldRowAmount:0.##} -> ₹{rowNew:0.##} (referrer discount ₹{oldReferrerDiscount:0.##} -> ₹{invoice.ReferrerDiscount:0.##})]";
-
-                        // Over-commission concession → the commission is now negative; the
-                        // doctor carries that deficit, recovered from future referrals. Audit
-                        // the authoriser (the authenticated user) + reason so the credit
-                        // decision is traceable. The amount itself is intentionally NOT
-                        // clamped to zero — the negative is the whole point.
-                        if (c.CommissionAmount < 0)
-                        {
-                            var deficit = Math.Abs(c.CommissionAmount);
-                            var reason = string.IsNullOrWhiteSpace(request.DeficitReason) ? "" : $" — {request.DeficitReason.Trim()}";
-                            c.Remarks += $" [DEFICIT ₹{deficit:0.##} authorised by user {_context.UserContext.UserId}{reason}]";
-                        }
-                    }
-
-                    if (lockedCommissions.Count > 0)
-                    {
-                        foreach (var c in lockedCommissions)
-                            c.Remarks = (c.Remarks ?? "") + $" [Referrer discount changed to ₹{invoice.ReferrerDiscount:0.##} after this commission was already paid — left unchanged; submit an approval request to adjust it.]";
-                    }
-                }
+            // Referrer-side adjustment: the commission moves by the change in the
+            // referrer discount, never touching PAID rows (Common/ReferrerDiscountCommission).
+            {
+                var reason = string.IsNullOrWhiteSpace(request.DeficitReason) ? "" : $" — {request.DeficitReason.Trim()}";
+                await ReferrerDiscountCommission.ApplyAsync(
+                    _context, invoice, oldReferrerDiscount, request.AbsorbExcessToCentre,
+                    $"at collection by user {_context.UserContext.UserId}{reason}", cancellationToken);
             }
 
             // Process Optional Payment. Overpayment is NO LONGER rejected — the
@@ -330,6 +293,8 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
                     {
                         InvoiceId = request.InvoiceId,
                         Amount = applied,
+                        Kind = PaymentKinds.Payment,
+                        CreatedByUserId = _context.UserContext.UserId == Guid.Empty ? null : _context.UserContext.UserId,
                         PaymentMethod = request.PaymentMethod,
                         CreatedAt = DateTime.UtcNow,
                         HospitalId = _context.UserContext.HospitalId
@@ -357,15 +322,7 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
             }
 
             // Status Management
-            if (invoice.PaidAmount >= invoice.TotalAmount - 0.01m)
-            {
-                invoice.Status = "PAID";
-                invoice.PaidAt = DateTime.UtcNow;
-            }
-            else if (invoice.PaidAmount > 0)
-            {
-                invoice.Status = "PARTIAL";
-            }
+            PaymentLedger.DeriveStatus(invoice);
 
             // Free → paid: once the patient actually pays, the "free test" flag
             // must drop off — the invoice is no longer free. Only WHOLE-invoice
@@ -404,6 +361,14 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
                 {
                     await _context.SaveChangesAsync(cancellationToken);
                     break;
+                }
+                catch (DbUpdateConcurrencyException ex) when (ex.Entries.Any(e => e.Entity is Invoice))
+                {
+                    // Review B1: someone else changed this bill (another collection, a
+                    // discount, an approval) between our read and our save. Retrying
+                    // would overwrite their PaidAmount, so stop and let the cashier reload.
+                    throw new ConflictException(
+                        "This bill was updated by someone else a moment ago. Reopen it to see the current balance, then collect again.");
                 }
                 catch (DbUpdateConcurrencyException ex) when (attempt < maxConcurrencyAttempts)
                 {

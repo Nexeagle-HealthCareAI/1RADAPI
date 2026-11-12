@@ -2,6 +2,7 @@ using System.Data;
 using System.Data.Common;
 using System.Collections.Concurrent;
 using _1Rad.Application.Interfaces;
+using _1Rad.Application.Common;
 using _1Rad.Domain.Common;
 using _1Rad.Domain.Constants;
 using _1Rad.Domain.Entities;
@@ -71,6 +72,15 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<ApprovalRequest> ApprovalRequests => Set<ApprovalRequest>();
     public DbSet<IdempotencyRecord> IdempotencyKeys => Set<IdempotencyRecord>();
     public DbSet<RadAiQuestionLog> RadAiQuestionLogs => Set<RadAiQuestionLog>();
+    public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+    public DbSet<StudyAnnotation> StudyAnnotations => Set<StudyAnnotation>();
+    public DbSet<JobRun> JobRuns => Set<JobRun>();
+    public DbSet<IntegrationClient> IntegrationClients => Set<IntegrationClient>();
+    public DbSet<DayClose> DayCloses => Set<DayClose>();
+    public DbSet<ReferralPayout> ReferralPayouts => Set<ReferralPayout>();
+    public DbSet<ReferralPortalView> ReferralPortalViews => Set<ReferralPortalView>();
+    public DbSet<CreditNote> CreditNotes => Set<CreditNote>();
+    public DbSet<HospitalBillingSettings> HospitalBillingSettings => Set<HospitalBillingSettings>();
     public DbSet<ReferrerLinkVersion> ReferrerLinkVersions => Set<ReferrerLinkVersion>();
     public DbSet<ReferralBookingRequest> ReferralBookingRequests => Set<ReferralBookingRequest>();
 
@@ -80,6 +90,52 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
 
         // RadAI question log — capture for the "retrain" loop. Scoped to a
         // hospital by the global query filter at the end of this method.
+        // dbo.JobRuns (DB script 99) — one run per job slot across instances.
+        modelBuilder.Entity<JobRun>(entity =>
+        {
+            entity.ToTable("JobRuns", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).UseIdentityColumn();
+            entity.Property(e => e.JobName).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.RunKey).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.ClaimedBy).HasMaxLength(200);
+            entity.HasIndex(e => new { e.JobName, e.RunKey }).IsUnique();
+        });
+
+        // dbo.IntegrationClients (DB script 101) — API keys for DICOMweb / worklist / FHIR.
+        modelBuilder.Entity<IntegrationClient>(entity =>
+        {
+            entity.ToTable("IntegrationClients", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.KeyId).IsRequired().HasMaxLength(16);
+            entity.Property(e => e.SecretHash).IsRequired().HasMaxLength(64);
+            entity.Property(e => e.Scopes).IsRequired().HasMaxLength(400);
+            entity.HasIndex(e => e.KeyId).IsUnique();
+        });
+
+        // dbo.StudyAnnotations (DB script 98) — saved viewer measurements.
+        modelBuilder.Entity<StudyAnnotation>(entity =>
+        {
+            entity.ToTable("StudyAnnotations", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.StudyKey).IsRequired().HasMaxLength(80);
+            entity.Property(e => e.AnnotationsJson).IsRequired();
+            entity.HasIndex(e => new { e.HospitalId, e.StudyKey }).IsUnique();
+        });
+
+        // dbo.AuditLogs (DB script 97) — see AuditTrail.
+        modelBuilder.Entity<AuditLog>(entity =>
+        {
+            entity.ToTable("AuditLogs", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).UseIdentityColumn();
+            entity.Property(e => e.EntityType).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.EntityId).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.Action).IsRequired().HasMaxLength(20);
+            entity.HasIndex(e => new { e.HospitalId, e.CreatedAt });
+        });
+
         modelBuilder.Entity<RadAiQuestionLog>(entity =>
         {
             entity.ToTable("RadAiQuestionLogs", "dbo");
@@ -156,6 +212,8 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             
             // Metadata Fields
             entity.Property(e => e.GSTIN).HasMaxLength(15);
+            entity.Property(e => e.PublicContact).HasMaxLength(20);
+            entity.Property(e => e.PublicEmail).HasMaxLength(255);
             entity.Property(e => e.RegistrationNumber).HasMaxLength(100);
             entity.Property(e => e.PAN).HasMaxLength(10);
             entity.Property(e => e.NABHNumber).HasMaxLength(100);
@@ -277,6 +335,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.HasKey(e => e.ReferrerId);
             entity.Property(e => e.Name).IsRequired().HasMaxLength(255);
             entity.Property(e => e.Contact).HasMaxLength(20);
+            entity.Property(e => e.Pan).HasMaxLength(10);
             
             entity.HasOne(e => e.Hospital)
                 .WithMany()
@@ -382,6 +441,8 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.Modality).IsRequired().HasMaxLength(50);
             entity.Property(e => e.ServiceName).IsRequired().HasMaxLength(255);
             entity.Property(e => e.Amount).HasPrecision(18, 2);
+            entity.Property(e => e.SacCode).HasMaxLength(8);
+            entity.Property(e => e.GstRate).HasPrecision(5, 2);
 
             entity.HasOne(e => e.Hospital)
                 .WithMany()
@@ -393,6 +454,8 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
         {
             entity.ToTable("Invoices", "dbo");
             entity.HasKey(e => e.Id);
+            // Migration 102 (review B1): two collections on one bill can't both write PaidAmount.
+            entity.Property(e => e.RowVersion).IsRowVersion();
             entity.Property(e => e.InvoiceId).IsRequired().HasMaxLength(50);
             entity.Property(e => e.PatientName).IsRequired().HasMaxLength(255); 
             entity.Property(e => e.GrossAmount).HasPrecision(18, 2);
@@ -448,6 +511,8 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Description).IsRequired().HasMaxLength(500);
             entity.Property(e => e.Amount).HasPrecision(18, 2);
+            entity.Property(e => e.SacCode).HasMaxLength(8);
+            entity.Property(e => e.GstRate).HasPrecision(5, 2);
 
             entity.HasOne(e => e.Invoice)
                 .WithMany(i => i.Items)
@@ -479,10 +544,13 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
         // Payment Configuration
         modelBuilder.Entity<Payment>(entity =>
         {
-            entity.ToTable("Payments", "dbo");
+            // Migration 102's append-only trigger: tell EF so it never uses a bare OUTPUT clause on this table.
+            entity.ToTable("Payments", "dbo", tb => tb.HasTrigger("TR_Payments_AppendOnly"));
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Amount).HasPrecision(18, 2);
             entity.Property(e => e.PaymentMethod).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.Kind).IsRequired().HasMaxLength(20).HasDefaultValue(PaymentKinds.Payment);
+            entity.Property(e => e.Reason).HasMaxLength(500);
 
             entity.HasOne(e => e.Invoice)
                 .WithMany(i => i.Payments)
@@ -503,6 +571,77 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
         // / InvoiceId are kept as plain Guid columns (no FK navs) so this ledger is
         // independent of cascade paths; hospital isolation comes from the global
         // IHospitalContext query filter applied below.
+        // Review phase 3 (migrations 104, 106, 107).
+        modelBuilder.Entity<DayClose>(entity =>
+        {
+            entity.ToTable("DayCloses", "dbo");
+            entity.HasKey(e => e.Id);
+            foreach (var p in new[] { nameof(DayClose.ExpectedCash), nameof(DayClose.CountedCash), nameof(DayClose.Variance),
+                                      nameof(DayClose.ExpectedUpi), nameof(DayClose.ExpectedCard), nameof(DayClose.ExpectedOther) })
+                entity.Property(p).HasPrecision(18, 2);
+            entity.Property(e => e.Note).HasMaxLength(500);
+            entity.Property(e => e.ClosedByName).HasMaxLength(200);
+            entity.HasIndex(e => new { e.HospitalId, e.BusinessDate }).IsUnique();
+        });
+        modelBuilder.Entity<ReferralPayout>(entity =>
+        {
+            entity.ToTable("ReferralPayouts", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.PayoutNumber).IsRequired().HasMaxLength(20);
+            entity.Property(e => e.PayeeName).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.PayeePan).HasMaxLength(10);
+            entity.Property(e => e.FinancialYear).IsRequired().HasMaxLength(7);
+            entity.Property(e => e.PaidBy).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Mode).IsRequired().HasMaxLength(20);
+            entity.Property(e => e.Reference).HasMaxLength(100);
+            entity.Property(e => e.TdsCategory).IsRequired().HasMaxLength(20);
+            entity.Property(e => e.TdsNote).HasMaxLength(500);
+            foreach (var p in new[] { nameof(ReferralPayout.Gross), nameof(ReferralPayout.DeficitRecovered), nameof(ReferralPayout.TdsRate),
+                                      nameof(ReferralPayout.TdsAmount), nameof(ReferralPayout.Net) })
+                entity.Property(p).HasPrecision(18, 2);
+            entity.HasIndex(e => new { e.HospitalId, e.ReferrerId, e.FinancialYear });
+            entity.HasIndex(e => new { e.HospitalId, e.PaidAt });
+        });
+        modelBuilder.Entity<ReferralPortalView>(entity =>
+        {
+            entity.ToTable("ReferralPortalViews", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Action).IsRequired().HasMaxLength(20);
+            entity.Property(e => e.IpHash).HasMaxLength(64);
+            entity.Property(e => e.UserAgent).HasMaxLength(300);
+            entity.HasIndex(e => new { e.HospitalId, e.ReferrerId, e.ViewedAt });
+        });
+        modelBuilder.Entity<HospitalBillingSettings>(entity =>
+        {
+            entity.ToTable("HospitalBillingSettings", "dbo");
+            entity.HasKey(e => e.HospitalId);
+            entity.Property(e => e.DefaultTdsCategory).IsRequired().HasMaxLength(20);
+            entity.Property(e => e.TdsCommissionRate).HasPrecision(5, 2);
+            entity.Property(e => e.TdsProfessionalRate).HasPrecision(5, 2);
+            entity.Property(e => e.TdsNoPanRate).HasPrecision(5, 2);
+            entity.Property(e => e.FrontDeskDiscountLimitPercent).HasPrecision(5, 2);
+            entity.Property(e => e.TdsCommissionThreshold).HasPrecision(18, 2);
+            entity.Property(e => e.TdsProfessionalThreshold).HasPrecision(18, 2);
+        });
+        modelBuilder.Entity<CreditNote>(entity =>
+        {
+            entity.ToTable("CreditNotes", "dbo", tb => tb.HasTrigger("TR_CreditNotes_AppendOnly"));
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Kind).IsRequired().HasMaxLength(20);
+            entity.Property(e => e.Number).IsRequired().HasMaxLength(16);
+            entity.Property(e => e.FinancialYear).IsRequired().HasMaxLength(7);
+            entity.Property(e => e.InvoiceNumber).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.PatientName).HasMaxLength(200);
+            entity.Property(e => e.RefundModes).HasMaxLength(100);
+            entity.Property(e => e.Reason).IsRequired().HasMaxLength(500);
+            foreach (var p in new[] { nameof(CreditNote.Amount), nameof(CreditNote.TaxableValue), nameof(CreditNote.TaxAmount),
+                                      nameof(CreditNote.RefundedAmount), nameof(CreditNote.BillTotalBefore), nameof(CreditNote.BillTotalAfter) })
+                entity.Property(p).HasPrecision(18, 2);
+            entity.HasIndex(e => new { e.HospitalId, e.Number }).IsUnique();
+            entity.HasIndex(e => new { e.HospitalId, e.CreatedAt });
+            entity.HasIndex(e => e.InvoiceId);
+        });
+
         modelBuilder.Entity<CreditTransaction>(entity =>
         {
             entity.ToTable("CreditTransactions", "dbo");
@@ -808,6 +947,11 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.FontFamily).HasMaxLength(100);
             entity.Property(e => e.LetterheadBlobUrl).HasMaxLength(500);
             entity.Property(e => e.OverflowBackgroundMode).HasMaxLength(50).HasDefaultValue("REUSE");
+            entity.Property(e => e.PaperMode).HasMaxLength(20).HasDefaultValue(PaperModes.Letterhead);
+            entity.Property(e => e.HeaderImageBlobUrl).HasMaxLength(500);
+            entity.Property(e => e.FooterImageBlobUrl).HasMaxLength(500);
+            entity.Property(e => e.LogoBlobUrl).HasMaxLength(500);
+            entity.Property(e => e.AccentColor).HasMaxLength(20);
 
             entity.HasOne(e => e.Doctor)
                 .WithMany()
@@ -854,7 +998,8 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.ToTable("ReferralCommissions", "dbo");
             entity.HasKey(e => e.Id);
             entity.Property(e => e.ReferrerName).IsRequired().HasMaxLength(255); 
-            // entity.Property(e => e.PatientName).IsRequired().HasMaxLength(255); 
+            // Review #16: stored (migration 110) so manual and payout lines keep the patient.
+            entity.Property(e => e.PatientName).IsRequired().HasMaxLength(255).HasDefaultValue(string.Empty);
             entity.Property(e => e.CommissionAmount).HasPrecision(18, 2);
             entity.Property(e => e.AccumulatedTotal).HasPrecision(18, 2);
             // Status is the concurrency token: paying, cancelling, writing off and netting a deficit all
@@ -1409,6 +1554,89 @@ UPDATE dbo.StudyAssets
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// Review B33 (migration 105): every bill line carries the SAC code and GST rate
+    /// in force when it was billed — taken from the price list via its booked scan,
+    /// or exempt diagnostic services (9993, 0%) for a free-form line. Stamped once,
+    /// here, so no billing path can forget it and a later price-list change never
+    /// alters an issued bill.
+    /// </summary>
+    private async Task StampLineTaxAsync(CancellationToken ct)
+    {
+        var fresh = ChangeTracker.Entries<InvoiceItem>()
+            .Where(e => e.State == EntityState.Added && e.Entity.GstRate == null)
+            .Select(e => e.Entity).ToList();
+        if (fresh.Count == 0) return;
+        var serviceIds = fresh.Where(i => i.AppointmentServiceId.HasValue).Select(i => i.AppointmentServiceId!.Value).Distinct().ToList();
+        var taxByService = serviceIds.Count == 0
+            ? new Dictionary<Guid, (string? Sac, decimal Rate)>()
+            : (await AppointmentServices.IgnoreQueryFilters().AsNoTracking()
+                .Where(s => serviceIds.Contains(s.Id) && s.ServiceCharge != null)
+                .Select(s => new { s.Id, s.ServiceCharge!.SacCode, s.ServiceCharge.GstRate })
+                .ToListAsync(ct))
+              .ToDictionary(x => x.Id, x => (Sac: x.SacCode, Rate: x.GstRate));
+
+        // A centre whose admin has switched GST off bills every line at 0%.
+        var invoiceIds = fresh.Select(i => i.InvoiceId).Distinct().ToList();
+        var tracked = ChangeTracker.Entries<Invoice>().Select(e => e.Entity).Where(i => invoiceIds.Contains(i.Id))
+            .ToDictionary(i => i.Id, i => i.HospitalId);
+        var missing = invoiceIds.Where(id => !tracked.ContainsKey(id)).ToList();
+        if (missing.Count > 0)
+            foreach (var x in await Invoices.IgnoreQueryFilters().AsNoTracking().Where(i => missing.Contains(i.Id))
+                         .Select(i => new { i.Id, i.HospitalId }).ToListAsync(ct))
+                tracked[x.Id] = x.HospitalId;
+        var hospitalIds = tracked.Values.Distinct().ToList();
+        var gstOff = (await HospitalBillingSettings.IgnoreQueryFilters().AsNoTracking()
+                .Where(b => hospitalIds.Contains(b.HospitalId) && !b.GstEnabled)
+                .Select(b => b.HospitalId).ToListAsync(ct))
+            .ToHashSet();
+
+        foreach (var item in fresh)
+        {
+            if (tracked.TryGetValue(item.InvoiceId, out var hid) && gstOff.Contains(hid))
+            {
+                item.SacCode ??= item.AppointmentServiceId is Guid s0 && taxByService.TryGetValue(s0, out var t0) && !string.IsNullOrWhiteSpace(t0.Sac)
+                    ? t0.Sac : GstDefaults.DiagnosticSac;
+                item.GstRate = 0m;
+                continue;
+            }
+            if (item.AppointmentServiceId is Guid sid && taxByService.TryGetValue(sid, out var t))
+            {
+                item.SacCode = string.IsNullOrWhiteSpace(t.Sac) ? GstDefaults.DiagnosticSac : t.Sac;
+                item.GstRate = t.Rate;
+            }
+            else
+            {
+                item.SacCode ??= GstDefaults.DiagnosticSac;
+                item.GstRate = 0m;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Credit notes and refund vouchers (review B6/B10): hands what changed on bills in
+    /// this save to <see cref="CreditNoteIssuer"/>, which adds the documents to the same
+    /// transaction — so every billing path is covered.
+    /// </summary>
+    private Task IssueCreditNotesAsync(DateTime nowUtc, CancellationToken ct)
+    {
+        var changes = ChangeTracker.Entries<Invoice>()
+            .Where(e => e.State == EntityState.Modified)
+            .Select(e => new CreditNoteIssuer.InvoiceChange(
+                e.Entity,
+                e.Property(i => i.TotalAmount).OriginalValue,
+                e.Property(i => i.PaidAmount).OriginalValue,
+                e.Property(i => i.Status).OriginalValue,
+                e.Property(i => i.DeletedAt).OriginalValue))
+            .ToList();
+        var refunds = ChangeTracker.Entries<Payment>()
+            .Where(e => e.State == EntityState.Added)
+            .Select(e => e.Entity)
+            .ToList();
+        var touched = ChangeTracker.Entries<Invoice>().Select(e => e.Entity).ToList();
+        return CreditNoteIssuer.IssueAsync(this, changes, refunds, touched, nowUtc, ct);
+    }
+
     public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
     {
         // Sync foundations: keep Appointment.UpdatedAt fresh on every write
@@ -1418,6 +1646,8 @@ UPDATE dbo.StudyAssets
         // Done before base.SaveChangesAsync so the new value persists in
         // the same transaction.
         var nowUtc = DateTime.UtcNow;
+        await StampLineTaxAsync(cancellationToken);
+        await IssueCreditNotesAsync(nowUtc, cancellationToken);
         foreach (var entry in ChangeTracker.Entries<Appointment>())
         {
             if (entry.State == EntityState.Added || entry.State == EntityState.Modified)
@@ -1481,6 +1711,10 @@ UPDATE dbo.StudyAssets
                 entry.Entity.UpdatedAt = nowUtc;
             }
         }
+
+        // Who changed what (gap analysis P3-8): same transaction as the change.
+        var auditRows = AuditTrail.Collect(ChangeTracker, UserContext, nowUtc);
+        if (auditRows.Count > 0) AuditLogs.AddRange(auditRows);
 
         var result = await base.SaveChangesAsync(cancellationToken);
 

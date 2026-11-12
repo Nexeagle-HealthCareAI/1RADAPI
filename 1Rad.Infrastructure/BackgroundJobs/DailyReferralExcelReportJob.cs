@@ -1,3 +1,4 @@
+using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using ClosedXML.Excel;
 using Microsoft.EntityFrameworkCore;
@@ -25,17 +26,10 @@ public class DailyReferralExcelReportJob : BackgroundService
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            var now = DateTime.Now;
-            // Target time: 9:05 PM (21:05) - staggered slightly after the financial report
-            var nextRunTime = new DateTime(now.Year, now.Month, now.Day, 21, 5, 0);
-
-            if (now > nextRunTime)
-            {
-                nextRunTime = nextRunTime.AddDays(1);
-            }
-
-            var delay = nextRunTime - now;
-            _logger.LogInformation("Next Referral Audit scheduled for {NextRunTime} (in {DelayHours:F2} hours)", nextRunTime, delay.TotalHours);
+            // 21:05 India time (the container clock is UTC; see JobSchedule).
+            var delay = JobSchedule.DelayUntilIst(21, 5, DateTime.UtcNow);
+            var nextRunTime = DateTime.UtcNow + delay;
+            _logger.LogInformation("Next Referral Audit scheduled for {NextRunTime} UTC (in {DelayHours:F2} hours)", nextRunTime, delay.TotalHours);
 
             try
             {
@@ -64,10 +58,18 @@ public class DailyReferralExcelReportJob : BackgroundService
         var context = scope.ServiceProvider.GetRequiredService<IApplicationDbContext>();
         var emailService = scope.ServiceProvider.GetRequiredService<IEmailService>();
 
-        var today = DateTime.Today;
-        // Calculate start of the current week (Monday)
+        // IST calendar day and week (Monday start). Appointment.DateTime is India clock
+        // time, so the windows are plain IST dates (the variable names are historical).
+        var today = JobSchedule.IstToday(DateTime.UtcNow);
         var startOfWeek = today.AddDays(-(int)today.DayOfWeek + (int)DayOfWeek.Monday);
         if (today < startOfWeek) startOfWeek = startOfWeek.AddDays(-7);
+        var dayStartUtc = IstDateRange.ClockStart(today);
+        var dayEndUtc = dayStartUtc.AddDays(1);
+        var weekStartUtc = IstDateRange.ClockStart(startOfWeek);
+
+        // Several API instances each run this job; only one sends the emails.
+        if (!await JobSchedule.TryClaimAsync(context, "DailyReferralExcelReport", today.ToString("yyyy-MM-dd"), _logger, stoppingToken))
+            return;
 
         var hospitals = await context.Hospitals
             .IgnoreQueryFilters()
@@ -100,30 +102,40 @@ public class DailyReferralExcelReportJob : BackgroundService
                 headerRange.Style.Fill.BackgroundColor = XLColor.FromHtml("#0f52ba");
                 headerRange.Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
 
-                int row = 2;
-                foreach (var referrer in referrers)
-                {
-                    // Count unique patients sent today
-                    var todayCount = await context.Appointments
-                        .IgnoreQueryFilters()
-                        .Include(a => a.Patient)
-                        .Where(a => a.HospitalId == hospital.HospitalId && 
-                                    a.Patient.ReferrerId == referrer.ReferrerId && 
-                                    a.DateTime.Date == today)
-                        .Select(a => a.PatientId)
-                        .Distinct()
-                        .CountAsync(stoppingToken);
+                // Review #20: count visits the same way the app does - the visit's own partner
+                // first (ReferralAttribution), only patients who actually came (no cancelled or
+                // no-show visits), and merged duplicates rolled into their primary partner.
+                // One query for the week instead of two per partner.
+                var attribution = new ReferralAttribution(referrers.Select(r =>
+                    new ReferralAttribution.Entry(r.ReferrerId, r.MergedIntoId, r.Name, r.Contact, r.Address, r.DeletedAt)));
+                var weekVisits = await context.Appointments
+                    .IgnoreQueryFilters()
+                    .Where(a => a.HospitalId == hospital.HospitalId && a.DeletedAt == null &&
+                                a.DateTime >= weekStartUtc && a.DateTime < dayEndUtc)
+                    .Select(a => new { a.PatientId, a.DateTime, a.Status, a.ArrivedAt, a.ReferredBy, a.ReferrerId, PatientReferrerId = a.Patient.ReferrerId })
+                    .ToListAsync(stoppingToken);
+                var counted = weekVisits
+                    .Where(v => !AppointmentAttendance.IsCancelled(v.Status) && AppointmentAttendance.IsAttended(v.Status, v.ArrivedAt))
+                    .Select(v => new { v.PatientId, Today = v.DateTime >= dayStartUtc, Source = attribution.Attribute(v.ReferredBy, v.PatientReferrerId, v.ReferrerId) })
+                    .Where(v => v.Source.Kind == SourceKind.Partner)
+                    .GroupBy(v => v.Source.RootId)
+                    .ToDictionary(g => g.Key, g => (
+                        Today: g.Where(x => x.Today).Select(x => x.PatientId).Distinct().Count(),
+                        Week: g.Select(x => x.PatientId).Distinct().Count()));
 
-                    // Count unique patients sent this week
-                    var weekCount = await context.Appointments
-                        .IgnoreQueryFilters()
-                        .Include(a => a.Patient)
-                        .Where(a => a.HospitalId == hospital.HospitalId && 
-                                    a.Patient.ReferrerId == referrer.ReferrerId && 
-                                    a.DateTime.Date >= startOfWeek)
-                        .Select(a => a.PatientId)
-                        .Distinct()
-                        .CountAsync(stoppingToken);
+                // Live primary partners only (a deleted or merged-away record is not listed).
+                var listed = referrers
+                    .Where(r => r.DeletedAt == null && r.MergedIntoId == null && !NameNormalizer.SameName(r.Name, "Self"))
+                    .Select(r => (Referrer: r, Counts: counted.TryGetValue(r.ReferrerId, out var c) ? c : (Today: 0, Week: 0)))
+                    .OrderByDescending(x => x.Counts.Today).ThenByDescending(x => x.Counts.Week).ThenBy(x => x.Referrer.Name)
+                    .ToList();
+                if (listed.Count == 0) continue;
+
+                int row = 2;
+                foreach (var (referrer, counts) in listed)
+                {
+                    var todayCount = counts.Today;
+                    var weekCount = counts.Week;
 
                     worksheet.Cell(row, 1).Value = referrer.Name;
                     worksheet.Cell(row, 2).Value = todayCount;

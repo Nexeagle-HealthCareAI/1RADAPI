@@ -224,16 +224,23 @@ public class ReferralIncentiveAccuracyTests : BaseHandlerTest
     }
 
     [Fact]
-    public async Task UpdateStatus_AllowsPaymentOncePatientHasPaidAnything()
+    public async Task UpdateStatus_WaitsUntilThePatientHasPaidInFull()
     {
+        // Review R5 (Oct 2026): a part-paid bill no longer makes the cut payable —
+        // otherwise the referrer is paid on money the centre may never collect.
         var a = AddReferrer("DR A");
         var (visit, _) = AddVisit("DR A", a.ReferrerId);
-        AddInvoice(visit, 1000m, 300m, "PARTIAL");
+        var inv = AddInvoice(visit, 1000m, 300m, "PARTIAL");
         var c = AddCommission(a, visit, 200m);
         await Context.SaveChangesAsync();
 
-        await new UpdateReferralCommissionStatusCommandHandler(Context)
-            .Handle(new UpdateReferralCommissionStatusCommand(c.Id, "PAID"), CancellationToken.None);
+        var handler = new UpdateReferralCommissionStatusCommandHandler(Context);
+        await Assert.ThrowsAsync<BusinessRuleViolationException>(() =>
+            handler.Handle(new UpdateReferralCommissionStatusCommand(c.Id, "PAID"), CancellationToken.None));
+
+        inv.PaidAmount = 1000m; inv.Status = "PAID";
+        await Context.SaveChangesAsync();
+        await handler.Handle(new UpdateReferralCommissionStatusCommand(c.Id, "PAID"), CancellationToken.None);
 
         var saved = Context.ReferralCommissions.Single(x => x.Id == c.Id);
         Assert.Equal("PAID", saved.Status);
@@ -722,7 +729,7 @@ public class ReferralIncentiveAccuracyTests : BaseHandlerTest
     // ── writing a deficit off ───────────────────────────────────────────────────
 
     [Fact]
-    public async Task WriteOff_SettlesTheOpenDeficitRowsAndBooksTheCompensatingPaidRow()
+    public async Task WriteOff_SettlesTheOpenDeficitRows_WithoutBookingAPaidRow()
     {
         var a = AddReferrer("DR A");
         var d1 = AddCommission(a, null, -100m);
@@ -740,10 +747,9 @@ public class ReferralIncentiveAccuracyTests : BaseHandlerTest
         Assert.Equal("Cancelled", Context.ReferralCommissions.Single(x => x.Id == d2.Id).Status);
         Assert.Equal("PAID", Context.ReferralCommissions.Single(x => x.Id == recoveredAlready.Id).Status);
         Assert.Equal("UNPAID", Context.ReferralCommissions.Single(x => x.Id == upcoming.Id).Status);
-        var booked = Assert.Single(Context.ReferralCommissions.Where(x => x.Modality == "WRITE-OFF"));
-        Assert.Equal(150m, booked.CommissionAmount);
-        Assert.Equal("PAID", booked.Status);
-        Assert.NotNull(booked.PaymentDate);
+        // Review #21: no compensating PAID row - it counted the cash twice and showed on the portal.
+        Assert.Empty(Context.ReferralCommissions.Where(x => x.Modality == "WRITE-OFF"));
+        Assert.Equal(-30m, Context.ReferralCommissions.Where(x => x.Status == "PAID").Sum(x => x.CommissionAmount));
     }
 
     [Fact]

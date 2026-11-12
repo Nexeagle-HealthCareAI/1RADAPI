@@ -103,12 +103,24 @@ public class GetTrackingDataQueryHandler : IRequestHandler<GetTrackingDataQuery,
         GetTrackingDataQuery request,
         CancellationToken cancellationToken)
     {
-        // No hospital-context filter — anonymous endpoint, access control is
-        // the signed token verified at the controller layer.
+        // Anonymous endpoint: the caller has no centre, so the global
+        // per-centre filter would hide every visit. Access control is the
+        // signed token (verified in the controller, bound to this one
+        // appointment id), so we bypass the filter and pin every query below
+        // to the visit's OWN centre explicitly.
+        var hospitalId = await _context.Appointments
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .Where(a => a.AppointmentId == request.AppointmentId)
+            .Select(a => (Guid?)a.HospitalId)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (hospitalId == null) return null;
+
         var appt = await _context.Appointments
+            .IgnoreQueryFilters()
             .AsNoTracking()
             .Include(a => a.Patient)
-            .Where(a => a.AppointmentId == request.AppointmentId)
+            .Where(a => a.AppointmentId == request.AppointmentId && a.HospitalId == hospitalId.Value)
             .Select(a => new TrackAppointmentDto(
                 a.AppointmentId,
                 a.DisplayId ?? string.Empty,
@@ -142,8 +154,10 @@ public class GetTrackingDataQueryHandler : IRequestHandler<GetTrackingDataQuery,
         // out so a patient never sees a "cancelled" row on the public
         // page.
         var services = await _context.AppointmentServices
+            .IgnoreQueryFilters()
             .AsNoTracking()
             .Where(s => s.AppointmentId == request.AppointmentId
+                     && s.HospitalId == hospitalId.Value
                      && s.DeletedAt == null
                      && s.Status != "CANCELLED")
             .OrderBy(s => s.UpdatedAt)
@@ -161,9 +175,17 @@ public class GetTrackingDataQueryHandler : IRequestHandler<GetTrackingDataQuery,
 
         // Only attach the report body when it's actually finalized. We don't
         // want patients reading half-typed drafts.
+        // A signed report only (Final / Addended), never a draft; on a visit
+        // with several studies, the first one signed. (Per-study reports on
+        // this page come with the multi-service work.)
         var report = await _context.DiagnosticReports
+            .IgnoreQueryFilters()
             .AsNoTracking()
-            .Where(r => r.AppointmentId == request.AppointmentId)
+            .Where(r => r.AppointmentId == request.AppointmentId
+                     && r.HospitalId == hospitalId.Value
+                     && r.DeletedAt == null
+                     && r.IsFinalized)
+            .OrderBy(r => r.FinalizedAt ?? r.SignedAt ?? r.CreatedAt)
             .Select(r => new TrackReportDto(
                 r.ReportingMode ?? "Narrative",
                 r.Findings ?? string.Empty,
@@ -182,11 +204,15 @@ public class GetTrackingDataQueryHandler : IRequestHandler<GetTrackingDataQuery,
         // it conditionally also keeps the response small for cases that don't
         // need it.
         TrackBrandingDto? branding = null;
-        if (report != null && report.DoctorId.HasValue)
+        if (report != null)
         {
+            // The report paper is one setting per centre (migration 79).
             branding = await _context.PrescriptionProtocols
+                .IgnoreQueryFilters()
                 .AsNoTracking()
-                .Where(p => p.DoctorId == report.DoctorId.Value)
+                .Where(p => p.HospitalId == hospitalId.Value)
+                .OrderByDescending(p => p.LetterheadBlobUrl != null)
+                .ThenBy(p => p.CreatedAt)
                 .Select(p => new TrackBrandingDto(
                     p.LetterheadBlobUrl,
                     p.FontFamily,

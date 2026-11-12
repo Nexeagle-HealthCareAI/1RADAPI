@@ -40,7 +40,9 @@ public record AppointmentSummaryDto(
     // Per-service lines for the visit — same shape as the single-record
     // AppointmentDto.Services, so worklist rows can render per-service
     // status/notes without a second fetch per row.
-    IReadOnlyList<AppointmentServiceDto>? Services = null
+    IReadOnlyList<AppointmentServiceDto>? Services = null,
+    // Concurrency token (base64) — send it back as RowVersion on PUT (review A7).
+    string? RowVersion = null
 );
 
 public record AppointmentDto(
@@ -109,8 +111,14 @@ public record AppointmentDto(
     string? Address = null,
     string? SourceOfInfo = null,
     string? ReferrerDegree = null,
-    string? ReferrerSpecialty = null
-);
+    string? ReferrerSpecialty = null,
+    // Concurrency token (base64) — send it back as RowVersion on PUT (review A7).
+    string? RowVersion = null
+)
+{
+    [System.Text.Json.Serialization.JsonIgnore]
+    public byte[]? RowVersionBytes { get; init; }
+}
 
 /// <summary>
 /// One service line on an appointment. Mirrors the AppointmentService

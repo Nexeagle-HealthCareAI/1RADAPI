@@ -24,6 +24,7 @@ public class ActiveSessionCache : IActiveSessionCache
 {
     private readonly IMemoryCache _cache;
     private const string Prefix = "rad:session:";
+    private static readonly TimeSpan MaxPositiveAge = TimeSpan.FromMinutes(2);
 
     public ActiveSessionCache(IMemoryCache cache)
     {
@@ -32,11 +33,16 @@ public class ActiveSessionCache : IActiveSessionCache
 
     public void MarkActive(Guid sessionId, DateTime expiresAt)
     {
-        // AbsoluteExpiration matches the refresh token expiry so a stale
-        // entry can never outlive the row it points at.
+        // Positive entries live at most MaxPositiveAge (gap analysis P3-9). The cache
+        // is per process: a sign-out handled by one API instance only clears THAT
+        // instance's entry, so another instance kept honouring the revoked session
+        // until the refresh token expired (days). Capping the age forces a DB
+        // re-check every couple of minutes on every instance.
+        var cap = DateTime.UtcNow + MaxPositiveAge;
+        var until = DateTime.SpecifyKind(expiresAt, DateTimeKind.Utc);
         _cache.Set(Key(sessionId), true, new MemoryCacheEntryOptions
         {
-            AbsoluteExpiration = new DateTimeOffset(DateTime.SpecifyKind(expiresAt, DateTimeKind.Utc)),
+            AbsoluteExpiration = new DateTimeOffset(until < cap ? until : cap),
         });
     }
 

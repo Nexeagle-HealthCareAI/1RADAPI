@@ -53,12 +53,11 @@ public class CreateReferrersBulkCommandHandler : IRequestHandler<CreateReferrers
             .Where(r => r.HospitalId == hospitalId && r.DeletedAt == null)
             .ToListAsync(ct);
 
-        var byKey = new Dictionary<string, Referrer>();
-        foreach (var r in existing)
-        {
-            var k = NameNormalizer.Normalize(r.Name);
-            if (k.Length > 0 && !byKey.ContainsKey(k)) byKey[k] = r;
-        }
+        // Review #25: same name on a different mobile is a namesake, not a duplicate.
+        var byKey = existing.Where(r => NameNormalizer.Normalize(r.Name).Length > 0)
+            .GroupBy(r => NameNormalizer.Normalize(r.Name))
+            .ToDictionary(g => g.Key, g => g.ToList());
+        var takenNames = new HashSet<string>(existing.Where(r => r.Name != null).Select(r => r.Name!));
 
         foreach (var item in items)
         {
@@ -66,21 +65,27 @@ public class CreateReferrersBulkCommandHandler : IRequestHandler<CreateReferrers
             if (key.Length == 0) { skipped++; continue; } // no usable name
 
             var contact = SanitizeContact(item!.Contact);
+            var mobile = ReferrerResolver.MobileDigits(contact);
+            var upperName = NameNormalizer.Upper(item.Name);
 
-            if (byKey.TryGetValue(key, out var match))
+            var candidates = byKey.TryGetValue(key, out var list) ? list : new List<Referrer>();
+            var match = candidates.FirstOrDefault(r => mobile.Length == 0 || ReferrerResolver.MobileDigits(r.Contact).Length == 0
+                                                       || ReferrerResolver.MobileDigits(r.Contact) == mobile);
+            if (match != null)
             {
-                // Merge — backfill blanks, refresh any supplied profile fields.
+                // Merge — backfill blanks only; type and filled fields stay as they are.
                 match.Name = NameNormalizer.Upper(match.Name);
                 if (string.IsNullOrWhiteSpace(match.Contact) && !string.IsNullOrWhiteSpace(contact)) match.Contact = contact;
                 if (string.IsNullOrWhiteSpace(match.Address) && !string.IsNullOrWhiteSpace(item.Address)) match.Address = NameNormalizer.Upper(item.Address);
-                if (!string.IsNullOrWhiteSpace(item.Email)) match.Email = item.Email.Trim();
-                if (!string.IsNullOrWhiteSpace(item.Specialty)) match.Specialty = NameNormalizer.Upper(item.Specialty);
-                if (!string.IsNullOrWhiteSpace(item.Degree)) match.Degree = NameNormalizer.Upper(item.Degree);
-                match.IsDoctor = item.IsDoctor;
-                if (!string.IsNullOrWhiteSpace(item.SupportedByDoctor)) match.SupportedByDoctor = NameNormalizer.Upper(item.SupportedByDoctor);
+                if (string.IsNullOrWhiteSpace(match.Email) && !string.IsNullOrWhiteSpace(item.Email)) match.Email = item.Email.Trim();
+                if (string.IsNullOrWhiteSpace(match.Specialty) && !string.IsNullOrWhiteSpace(item.Specialty)) match.Specialty = NameNormalizer.Upper(item.Specialty);
+                if (string.IsNullOrWhiteSpace(match.Degree) && !string.IsNullOrWhiteSpace(item.Degree)) match.Degree = NameNormalizer.Upper(item.Degree);
+                if (string.IsNullOrWhiteSpace(match.SupportedByDoctor) && !string.IsNullOrWhiteSpace(item.SupportedByDoctor)) match.SupportedByDoctor = NameNormalizer.Upper(item.SupportedByDoctor);
                 merged++;
                 continue;
             }
+            // Exact same stored name on another number: can't hold two (unique name), skip it.
+            if (takenNames.Contains(upperName)) { skipped++; continue; }
 
             var referrer = new Referrer
             {
@@ -95,7 +100,9 @@ public class CreateReferrersBulkCommandHandler : IRequestHandler<CreateReferrers
                 SupportedByDoctor = NameNormalizer.UpperOrNull(item.SupportedByDoctor),
             };
             _context.Referrers.Add(referrer);
-            byKey[key] = referrer;
+            if (!byKey.TryGetValue(key, out var bucket)) byKey[key] = bucket = new List<Referrer>();
+            bucket.Add(referrer);
+            takenNames.Add(upperName);
             created++;
         }
 

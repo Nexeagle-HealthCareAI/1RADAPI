@@ -36,7 +36,7 @@ public class ExportFinancialsQueryHandler : IRequestHandler<ExportFinancialsQuer
 
             var invoices = await _context.Invoices
                 .AsNoTracking()
-                .Where(i => i.HospitalId == _context.UserContext.HospitalId)
+                .Where(i => i.HospitalId == _context.UserContext.HospitalId && i.DeletedAt == null)
                 .Include(i => i.Patient)
                 // See IstDateRange — StartDate/EndDate arrive as a bare
                 // "YYYY-MM-DD", meaning an IST calendar date, not midnight UTC.

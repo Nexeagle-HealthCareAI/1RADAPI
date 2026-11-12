@@ -21,7 +21,7 @@ public record GetReferralIntelligenceQuery(
     string? SourceKey = null,
     int Skip = 0,
     int? Take = null
-) : IRequest<List<ReferrerIntelligenceDto>>;
+) : IRequest<List<ReferrerIntelligenceDto>>, ICachedAnalyticsQuery;
 
 /// <summary>
 /// Per-source referral rollup behind the Referrals page and the admin board.
@@ -89,8 +89,8 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
         if (!string.IsNullOrWhiteSpace(request.SourceKey)) filterKey = request.SourceKey.Trim();
 
         // Bare "YYYY-MM-DD" range -> IST day boundaries (see IstDateRange).
-        DateTime? fromUtc = request.StartDate.HasValue ? IstDateRange.ToUtcStart(request.StartDate.Value) : null;
-        DateTime? toUtc = request.EndDate.HasValue ? IstDateRange.ToUtcEndInclusive(request.EndDate.Value) : null;
+        DateTime? fromUtc = request.StartDate.HasValue ? IstDateRange.ClockStart(request.StartDate.Value) : null;
+        DateTime? toUtc = request.EndDate.HasValue ? IstDateRange.ClockEndInclusive(request.EndDate.Value) : null;
 
         // ── Every non-cancelled visit in range (attendance is decided in memory) ─
         var appointmentsQuery = _context.Appointments
@@ -230,7 +230,9 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
         // rows out, clawback deficits in).
         var moneyQuery = _context.ReferralCommissions.AsNoTracking()
             .Where(c => c.HospitalId == hospitalId && c.DeletedAt == null
-                        && c.Status != CommissionStatus.Cancelled && c.Status != "CANCELLED");
+                        && c.Status != CommissionStatus.Cancelled && c.Status != "CANCELLED"
+                        // Review #21: legacy "+D PAID" write-off rows were never paid to anyone.
+                        && !(c.Modality == "WRITE-OFF" && c.PayeeName == "CENTRE ABSORBED"));
         if (fromUtc.HasValue) moneyQuery = moneyQuery.Where(c => c.ServiceDate >= fromUtc.Value);
         if (toUtc.HasValue) moneyQuery = moneyQuery.Where(c => c.ServiceDate <= toUtc.Value);
         if (aliasIds != null) moneyQuery = moneyQuery.Where(c => aliasIds.Contains(c.ReferrerId));
@@ -334,7 +336,7 @@ public class GetReferralIntelligenceQueryHandler : IRequestHandler<GetReferralIn
                     : "Paid";
 
                 invoicesByAppt.TryGetValue(m.AppointmentId, out var inv);
-                var ist = IstDateRange.ToIst(m.DateTime);
+                var ist = m.DateTime; // already India clock time
                 var isFirst = firstVisitByPatient.TryGetValue(m.PatientId, out var firstId) && firstId == m.AppointmentId;
 
                 return new ReferredPatientDto(

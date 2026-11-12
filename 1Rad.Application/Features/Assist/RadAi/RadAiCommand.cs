@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Entities;
 using MediatR;
+using Microsoft.Extensions.Logging;
 
 namespace _1Rad.Application.Features.Assist.RadAi;
 
@@ -50,14 +51,16 @@ public class RadAiCommandHandler : IRequestHandler<RadAiCommand, RadAiResult>
     private readonly IRadAiKnowledge _knowledge;
     private readonly IApplicationDbContext _db;
     private readonly IRadAiResponseCache _cache;
+    private readonly ILogger<RadAiCommandHandler>? _logger;
 
     // Response-cache lifetime. Long enough to absorb bursts of the same question,
     // short enough that a knowledge-pack change takes effect quickly (the cache
     // key also hashes the system prompt, so a content change invalidates anyway).
     private static readonly TimeSpan CacheTtl = TimeSpan.FromHours(6);
 
-    public RadAiCommandHandler(IReportAiService gemini, IAnthropicService claude, IRadAiKnowledge knowledge, IApplicationDbContext db, IRadAiResponseCache cache)
+    public RadAiCommandHandler(IReportAiService gemini, IAnthropicService claude, IRadAiKnowledge knowledge, IApplicationDbContext db, IRadAiResponseCache cache, ILogger<RadAiCommandHandler>? logger = null)
     {
+        _logger = logger;
         _gemini = gemini;
         _claude = claude;
         _knowledge = knowledge;
@@ -197,9 +200,11 @@ public class RadAiCommandHandler : IRequestHandler<RadAiCommand, RadAiResult>
             });
             await _db.SaveChangesAsync(ct);
         }
-        catch
+        catch (Exception ex)
         {
-            // Logging is best-effort; never surface a failure to the user.
+            // Logging is best-effort; never surface a failure to the user. But do
+            // record it: this catch hid the missing token columns (gap analysis P0-4).
+            _logger?.LogWarning(ex, "RadAI question log could not be saved.");
         }
     }
 

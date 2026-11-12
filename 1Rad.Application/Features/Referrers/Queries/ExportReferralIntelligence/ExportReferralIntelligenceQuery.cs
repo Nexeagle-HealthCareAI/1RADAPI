@@ -43,12 +43,12 @@ public class ExportReferralIntelligenceQueryHandler : IRequestHandler<ExportRefe
         {
             if (request.StartDate.HasValue)
             {
-                var fromUtc = IstDateRange.ToUtcStart(request.StartDate.Value);
+                var fromUtc = IstDateRange.ClockStart(request.StartDate.Value);
                 query = query.Where(a => a.DateTime >= fromUtc);
             }
             if (request.EndDate.HasValue)
             {
-                var toUtc = IstDateRange.ToUtcEndInclusive(request.EndDate.Value);
+                var toUtc = IstDateRange.ClockEndInclusive(request.EndDate.Value);
                 query = query.Where(a => a.DateTime <= toUtc);
             }
         }
@@ -73,7 +73,7 @@ public class ExportReferralIntelligenceQueryHandler : IRequestHandler<ExportRefe
                 ParentService = a.Service,
                 a.Status,
                 a.ArrivedAt,
-                DateUtc = a.DateTime,
+                DateIst = a.DateTime, // India clock time
                 a.Mobile,
             })
             .ToListAsync(cancellationToken);
@@ -85,7 +85,7 @@ public class ExportReferralIntelligenceQueryHandler : IRequestHandler<ExportRefe
         // screen it is downloaded from.
         var nowUtc = DateTime.UtcNow;
         var attended = apptHeaders
-            .Where(a => AppointmentAttendance.Classify(a.Status, a.ArrivedAt, a.DateUtc, nowUtc) == AppointmentAttendance.Attended)
+            .Where(a => AppointmentAttendance.Classify(a.Status, a.ArrivedAt, a.DateIst, nowUtc) == AppointmentAttendance.Attended)
             .ToList();
 
         // The SAME source-resolution rule as Source Analytics / the Volume Matrix - the visit's own
@@ -128,7 +128,7 @@ public class ExportReferralIntelligenceQueryHandler : IRequestHandler<ExportRefe
                     Modality = line.Modality,
                     Service = line.Service,
                     a.Status,
-                    Date = IstDateRange.ToIst(a.DateUtc).ToString("yyyy-MM-dd HH:mm"),
+                    Date = a.DateIst.ToString("yyyy-MM-dd HH:mm"),
                     a.Mobile,
                 });
         }).ToList();

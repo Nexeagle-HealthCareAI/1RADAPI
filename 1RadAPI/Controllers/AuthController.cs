@@ -13,7 +13,7 @@ using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.RateLimiting;
+using _1RadAPI.Authorization;
 
 namespace _1RadAPI.Controllers;
 
@@ -39,7 +39,9 @@ public class AuthController : ControllerBase
     /// <response code="400">Invalid mobile number format.</response>
     /// <response code="429">Too many requests. Please try again later.</response>
     /// <response code="500">Internal server error during dispatch.</response>
-    [EnableRateLimiting("OtpRateLimit")]
+    // Per mobile, plus a platform-wide ceiling that protects the WhatsApp bill.
+    [DistributedRateLimit("otp-send", 5, 600, BodyProperty = "Mobile")]
+    [DistributedRateLimit("otp-send-all", 300, 600)]
     [HttpPost("otp/send")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -64,7 +66,8 @@ public class AuthController : ControllerBase
     /// <response code="200">OTP verified. Returns an Initiation Token.</response>
     /// <response code="401">Invalid or expired OTP.</response>
     /// <response code="429">Too many verification attempts.</response>
-    [EnableRateLimiting("OtpRateLimit")]
+    [DistributedRateLimit("otp-verify", 10, 600, BodyProperty = "Mobile")]
+    [DistributedRateLimit("otp-verify-all", 1000, 600)]
     [HttpPost("otp/verify")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
@@ -122,6 +125,8 @@ public class AuthController : ControllerBase
     /// <summary>
     /// Tactical Login: Authenticates user via Email or Mobile.
     /// </summary>
+    // Password guessing: per account identifier (gap analysis — login was unthrottled).
+    [DistributedRateLimit("login", 20, 600, BodyProperty = "Identifier")]
     [HttpPost("login")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
@@ -192,6 +197,8 @@ public class AuthController : ControllerBase
     /// <summary>
     /// Recovery 1: Initiates password reset flow by sending an OTP.
     /// </summary>
+    [DistributedRateLimit("forgot-password", 5, 600, BodyProperty = "Identifier")]
+    [DistributedRateLimit("forgot-password-all", 300, 600)]
     [HttpPost("forgot-password")]
     public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordCommand command)
     {
@@ -202,6 +209,7 @@ public class AuthController : ControllerBase
     /// <summary>
     /// Recovery 2: Verifies reset OTP and issues a persistent Reset Token.
     /// </summary>
+    [DistributedRateLimit("verify-reset-code", 10, 600, BodyProperty = "Identifier")]
     [HttpPost("verify-reset-code")]
     public async Task<IActionResult> VerifyResetCode([FromBody] VerifyResetCodeCommand command)
     {

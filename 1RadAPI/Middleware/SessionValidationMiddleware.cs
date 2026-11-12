@@ -69,6 +69,13 @@ public class SessionValidationMiddleware
             return;
         }
 
+        // Integration keys (DICOMweb / worklist / FHIR) have no staff session.
+        if (user.FindFirst("type")?.Value == _1Rad.Domain.Constants.IntegrationScopes.PrincipalType)
+        {
+            await _next(context);
+            return;
+        }
+
         var sidString = user.FindFirst(JwtRegisteredClaimNames.Sid)?.Value
                         ?? user.FindFirst(ClaimTypes.Sid)?.Value;
         if (!Guid.TryParse(sidString, out var sessionId))

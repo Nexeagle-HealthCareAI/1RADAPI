@@ -39,60 +39,55 @@ public class DeleteInvoiceCommandHandler : IRequestHandler<DeleteInvoiceCommand,
             }
         }
 
-        var invoiceGuidStr = invoice.Id.ToString();
+        // B2: money already collected on this bill must be refunded through the payment
+        // screen first; deleting the bill used to drop the payment rows silently.
+        var collected = (invoice.Payments?.Sum(p => p.Amount) ?? 0m);
+        if (collected > 0.005m || invoice.PaidAmount > 0.005m)
+        {
+            return (false, "This bill has payments recorded against it. Refund or remove the payments first, then delete the bill.");
+        }
+
         var invoiceStr = invoice.InvoiceId;
+        var invoiceGuidStr = invoice.Id.ToString();
         var appointmentId = invoice.AppointmentId;
         var hospitalId = _context.UserContext.HospitalId;
 
-        ReferralCommission? commission = null;
-        if (request.CommissionId.HasValue)
+        // B2: every commission tied to this bill or visit, not just the first match.
+        var commissions = await _context.ReferralCommissions
+            .Where(c => c.HospitalId == hospitalId && c.DeletedAt == null &&
+                        ((request.CommissionId != null && c.Id == request.CommissionId) ||
+                         c.ReferenceNumber == invoiceStr ||
+                         c.ReferenceNumber == invoiceGuidStr ||
+                         (appointmentId != null && c.AppointmentId == appointmentId)))
+            .ToListAsync(cancellationToken);
+
+        if (commissions.Any(c => string.Equals(c.Status, "PAID", StringComparison.OrdinalIgnoreCase)))
         {
-            commission = await _context.ReferralCommissions
-                .FirstOrDefaultAsync(c => c.Id == request.CommissionId.Value && c.HospitalId == hospitalId, cancellationToken);
+            return (false, "A referral commission on this visit has already been paid out. Reverse that payout before deleting the bill.");
         }
 
-        if (commission == null)
-        {
-            // Enhanced multi-strategy lookup for related referral commissions
-            commission = await _context.ReferralCommissions
-                .FirstOrDefaultAsync(c => 
-                    ((c.ReferenceNumber == invoiceStr) || 
-                     (c.ReferenceNumber == invoiceGuidStr) ||
-                     (appointmentId != null && c.AppointmentId == appointmentId)) &&
-                    c.HospitalId == hospitalId, cancellationToken);
-        }
-        
         var deleteNow = DateTime.UtcNow;
-
-        Guid? referrerIdToRecalculate = null;
-        if (commission != null)
+        var referrersToRecalculate = new HashSet<Guid>();
+        foreach (var commission in commissions)
         {
-            referrerIdToRecalculate = commission.ReferrerId;
-            // SOFT-delete so the Referral Hub's offline cache tombstones it.
+            referrersToRecalculate.Add(commission.ReferrerId);
             commission.DeletedAt = deleteNow;
             commission.UpdatedAt = deleteNow;
-            commission.CommissionAmount = 0;
+            commission.Remarks = string.IsNullOrEmpty(commission.Remarks)
+                ? $"[Bill {invoiceStr} deleted]"
+                : $"{commission.Remarks} [Bill {invoiceStr} deleted]";
         }
 
-        // Payments are a real financial event — clear them so the invoice's
-        // collected total resets, but do it before tombstoning the header.
-        if (invoice.Payments != null && invoice.Payments.Any())
-        {
-            _context.Payments.RemoveRange(invoice.Payments);
-            invoice.PaidAmount = 0;
-        }
-
-        // SOFT-delete the invoice header (NOT a hard delete) — a hard delete
-        // never reaches the offline cache as a tombstone, so the billing page
-        // would keep showing it. DeletedAt + UpdatedAt makes the sync remove it.
+        invoice.Status = "CANCELLED";
         invoice.DeletedAt = deleteNow;
         invoice.UpdatedAt = deleteNow;
         await _context.SaveChangesAsync(cancellationToken);
 
         // Cascade recalculation of Accumulated Totals for the referrer to prevent ledger drift after deletion
-        if (referrerIdToRecalculate.HasValue)
+        if (referrersToRecalculate.Count > 0)
         {
-            await ReferralLedger.RecomputeAccumulatedTotal(_context, referrerIdToRecalculate.Value, hospitalId, cancellationToken);
+            foreach (var referrerId in referrersToRecalculate)
+                await ReferralLedger.RecomputeAccumulatedTotal(_context, referrerId, hospitalId, cancellationToken);
             await _context.SaveChangesAsync(cancellationToken);
         }
 

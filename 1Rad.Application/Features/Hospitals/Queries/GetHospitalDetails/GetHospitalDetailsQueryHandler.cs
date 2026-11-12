@@ -133,7 +133,9 @@ public class GetHospitalDetailsQueryHandler : IRequestHandler<GetHospitalDetails
             adminDto,
             usersDto,
             doctorsDto,
-            statsDto
+            statsDto,
+            hospital.PublicContact,
+            hospital.PublicEmail
         );
     }
 

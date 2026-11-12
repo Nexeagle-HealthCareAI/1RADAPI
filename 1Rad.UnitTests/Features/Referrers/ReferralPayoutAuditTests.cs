@@ -101,8 +101,8 @@ public class ReferralPayoutAuditTests : BaseHandlerTest
             new WriteOffReferralDeficitCommand(dr.ReferrerId), CancellationToken.None);
 
         Assert.Equal(ExpectedActor, Context.ReferralCommissions.Single(c => c.Id == deficit.Id).UpdatedBy);
-        var writeOffRow = Context.ReferralCommissions.Single(c => c.Modality == "WRITE-OFF");
-        Assert.Equal(ExpectedActor, writeOffRow.CreatedBy);
+        // Review #21: the write-off books no extra PAID row any more; the settled deficit row carries the actor.
+        Assert.Empty(Context.ReferralCommissions.Where(c => c.Modality == "WRITE-OFF"));
     }
 
     [Theory]

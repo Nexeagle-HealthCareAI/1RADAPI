@@ -55,6 +55,7 @@ public class GetOverdueAppointmentsQueryHandler
                      && a.ArrivedAt != null
                      && a.DeliveredAt == null
                      && a.Status != "CANCELLED"
+                     && a.Status != "DELIVERED"   // delivered visits without a DeliveredAt stamp (review A5)
                      && a.ArrivedAt <= cutoffUtc)
             .Include(a => a.Patient)
             .OrderBy(a => a.ArrivedAt) // longest-waiting first

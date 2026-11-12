@@ -75,6 +75,27 @@ public class UpdateAppointmentServiceStatusCommandHandler
         _context = context;
     }
 
+    private static readonly string[] Order = { "NOT_STARTED", "IN_PROGRESS", "IN_MID", "SCANNED", "REPORTED", "DELIVERED" };
+
+    /// <summary>Why a line can't move from one status to another, or null when it can.</summary>
+    public static string? TransitionError(string from, string to)
+    {
+        if (from == to) return null;
+        if (from == "CANCELLED") return "This scan was cancelled and can't be restarted. Add it to the visit again with Edit.";
+        if (to == "CANCELLED")
+            return from is "REPORTED" or "DELIVERED"
+                ? "This scan has already been reported, so it can't be cancelled."
+                : null;
+        var fi = Array.IndexOf(Order, from);
+        var ti = Array.IndexOf(Order, to);
+        if (fi < 0 || ti < 0) return null; // unknown legacy value — let the whitelist decide
+        if (ti >= fi) return null;          // forward (skipping steps is allowed, e.g. X-ray straight to delivered)
+        if (from is "REPORTED" or "DELIVERED") return "This scan has already been reported, so its status can't go back.";
+        return fi - ti == 1 || (from == "IN_MID" && to == "NOT_STARTED")
+            ? null
+            : "A scan's status can only be corrected one step back.";
+    }
+
     public async Task<UpdateAppointmentServiceStatusResult> Handle(
         UpdateAppointmentServiceStatusCommand request,
         CancellationToken cancellationToken)
@@ -115,6 +136,45 @@ public class UpdateAppointmentServiceStatusCommandHandler
                 Success = false,
                 Message = "Appointment not found.",
             };
+        }
+
+        // Closed visits (review A10): a cancelled visit's lines can't move, or the
+        // rollup below would turn it back into a live, delivered visit.
+        var parentStatus = (appointment.Status ?? string.Empty).Trim().ToUpperInvariant();
+        if (parentStatus == "CANCELLED")
+        {
+            return new UpdateAppointmentServiceStatusResult
+            {
+                Success = true,
+                NotAllowed = true,
+                Message = "This visit is cancelled, so its scans can't be updated.",
+            };
+        }
+
+        // Transition rules (review A21): no going back once reported or delivered,
+        // a cancelled line stays cancelled, and corrections go back one step at most.
+        var fromStatus = (service.Status ?? "NOT_STARTED").Trim().ToUpperInvariant();
+        var transitionError = TransitionError(fromStatus, newStatus);
+        if (transitionError != null)
+        {
+            return new UpdateAppointmentServiceStatusResult { Success = true, NotAllowed = true, Message = transitionError };
+        }
+
+        // A billed line is cancelled through Edit (review A6): that path takes it off
+        // the invoice, adjusts the referral commission and handles any refund.
+        if (newStatus == "CANCELLED" && fromStatus != "CANCELLED")
+        {
+            var billed = await _context.Invoices.AnyAsync(
+                i => i.AppointmentId == appointment.AppointmentId && i.DeletedAt == null, cancellationToken);
+            if (billed)
+            {
+                return new UpdateAppointmentServiceStatusResult
+                {
+                    Success = true,
+                    NotAllowed = true,
+                    Message = "This scan is already on the bill. Remove it from the visit with Edit so the bill and the referral commission are adjusted.",
+                };
+            }
         }
 
         // Arrival gate — a service line can't be advanced (scanning, reporting,

@@ -19,6 +19,10 @@ public class Hospital : BaseEntity
     public decimal? Longitude { get; set; }
     public string Status { get; set; } = "Active";
     public bool IsAutoBillingEnabled { get; set; } = false;
+    // What the referral portal shows doctors and agents (review R9) — the centre's
+    // own number/email, never an admin's personal ones. Migration 103.
+    public string? PublicContact { get; set; }
+    public string? PublicEmail { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     // Navigation properties

@@ -993,6 +993,16 @@ public class DicomExtractionService : IDicomExtractionService
             System.Text.Encoding.UTF8.GetString(mm.ToArray())) ?? new StagedManifest();
 
         var urls = manifest.Instances ?? new List<string>();
+        // DICOMweb STOW batches name their staging folder instead of a file list
+        // (parallel requests add files without rewriting the manifest).
+        if (!string.IsNullOrWhiteSpace(manifest.Prefix))
+        {
+            await foreach (var b in _blob.ListBlobsAsync(Container, manifest.Prefix, ct))
+            {
+                if (b.Name.EndsWith(".dcm", StringComparison.OrdinalIgnoreCase))
+                    urls.Add(_blob.GetBlobReadUrl(b.Name, Container));
+            }
+        }
         // Download + parse in parallel (bounded) — the sequential loop paid a
         // full round-trip per instance, which alone took minutes on large
         // studies. Order is restored downstream by the series/instance sort.
@@ -1037,6 +1047,8 @@ public class DicomExtractionService : IDicomExtractionService
     private sealed class StagedManifest
     {
         public List<string>? Instances { get; set; }
+        /// <summary>Container-relative staging folder; every .dcm under it is an instance.</summary>
+        public string? Prefix { get; set; }
     }
 
     // Render a downsized grayscale JPEG (thumbnail / progressive preview) DIRECTLY
@@ -1464,6 +1476,10 @@ public class DicomExtractionService : IDicomExtractionService
             Add<int>("pixelRepresentation",  DicomTag.PixelRepresentation);
             Add<int>("planarConfiguration",  DicomTag.PlanarConfiguration);
             AddStr("photometricInterpretation", DicomTag.PhotometricInterpretation);
+            // Identity / counts used by DICOMweb QIDO (instance and series searches).
+            AddStr("sopClassUid", DicomTag.SOPClassUID);
+            Add<int>("seriesNumber", DicomTag.SeriesNumber);
+            Add<int>("numberOfFrames", DicomTag.NumberOfFrames);
             // Plane geometry (measurements / MPR)
             Add<double>("sliceLocation",    DicomTag.SliceLocation);
             Add<double>("sliceThickness",   DicomTag.SliceThickness);

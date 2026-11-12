@@ -6,6 +6,8 @@ using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
+using _1Rad.Domain.Entities;
+using System.Linq;
 
 namespace _1Rad.Application.Features.Referrers.Commands.MergeReferrers;
 
@@ -71,6 +73,40 @@ public class MergeReferrersCommandHandler : IRequestHandler<MergeReferrersComman
         // Virtual Merge
         source.MergedIntoId = rootId;
         source.UpdatedAt = DateTime.UtcNow;
+
+        // Review #22: the duplicate's portal links stop working. Its link would otherwise
+        // open the primary partner's patients and money - wrong if the merge was a mistake
+        // (an agent folded into a doctor). The primary's own links are untouched; send the
+        // primary's link if this person should keep portal access. Duplicates that were
+        // already merged into this one are revoked with it.
+        var aliasIds = await _context.Referrers
+            .Where(r => r.HospitalId == hospitalId && r.MergedIntoId == source.ReferrerId)
+            .Select(r => r.ReferrerId)
+            .ToListAsync(ct);
+        aliasIds.Add(source.ReferrerId);
+        var versions = await _context.ReferrerLinkVersions
+            .Where(v => v.HospitalId == hospitalId && aliasIds.Contains(v.ReferrerId))
+            .ToDictionaryAsync(v => v.ReferrerId, ct);
+        var now = DateTime.UtcNow;
+        var userId = _context.UserContext.UserId;
+        foreach (var id in aliasIds)
+        {
+            if (versions.TryGetValue(id, out var row))
+            {
+                row.Version += 1;
+                row.RevokedAt = now;
+                row.RevokedByUserId = userId;
+                row.AutoRenew = false;
+                row.LastSentExpiresAt = null;
+            }
+            else
+            {
+                _context.ReferrerLinkVersions.Add(new ReferrerLinkVersion
+                {
+                    ReferrerId = id, HospitalId = hospitalId, Version = 1, RevokedAt = now, RevokedByUserId = userId, AutoRenew = false,
+                });
+            }
+        }
 
         await _context.SaveChangesAsync(ct);
 

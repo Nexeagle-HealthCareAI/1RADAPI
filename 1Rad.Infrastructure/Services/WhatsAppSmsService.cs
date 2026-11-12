@@ -15,6 +15,8 @@ public class WhatsAppSmsService : ISmsService
     private readonly bool _isEnabled;
     private readonly string _referralTemplate;
     private readonly string _referralTemplateLang;
+    private readonly string _reportReadyTemplate;
+    private readonly string _reportReadyTemplateLang;
 
     public WhatsAppSmsService(HttpClient httpClient, IConfiguration configuration, ILogger<WhatsAppSmsService> logger)
     {
@@ -30,6 +32,8 @@ public class WhatsAppSmsService : ISmsService
         // template they got approved in Meta without a code change.
         _referralTemplate = config["ReferralTemplateName"] ?? "referral_portal";
         _referralTemplateLang = config["ReferralTemplateLanguage"] ?? "en";
+        _reportReadyTemplate = configuration["Notifications:ReportReady:TemplateName"] ?? "report_ready";
+        _reportReadyTemplateLang = configuration["Notifications:ReportReady:TemplateLanguage"] ?? "en";
     }
 
     public async Task SendOtpAsync(string mobileNumber, string otp)
@@ -106,6 +110,43 @@ public class WhatsAppSmsService : ISmsService
         };
 
         await PostAsync(payload, mobileNumber, "referral link");
+    }
+
+    public async Task SendReportReadyAsync(string mobileNumber, string patientName, string centreName, string link)
+    {
+        if (!_isEnabled)
+        {
+            _logger.LogWarning("WhatsApp integration is disabled; report-ready message not sent.");
+            return;
+        }
+
+        var payload = new
+        {
+            messaging_product = "whatsapp",
+            to = mobileNumber,
+            type = "template",
+            template = new
+            {
+                name = _reportReadyTemplate,
+                language = new { code = _reportReadyTemplateLang },
+                components = new object[]
+                {
+                    new
+                    {
+                        type = "body",
+                        // Order must match the approved template's {{1}}{{2}}{{3}}.
+                        parameters = new object[]
+                        {
+                            new { type = "text", text = patientName },
+                            new { type = "text", text = centreName },
+                            new { type = "text", text = link }
+                        }
+                    }
+                }
+            }
+        };
+
+        await PostAsync(payload, mobileNumber, "report-ready");
     }
 
     // Shared sender for all template messages. Throws a descriptive exception on a

@@ -1,3 +1,4 @@
+using _1Rad.Domain.Constants;
 using _1Rad.Application.Features.Reporting.Commands.GenerateVoiceReport;
 using _1Rad.Application.Features.Reporting.Commands.AiAssist;
 using _1Rad.Application.Features.Reporting.Commands.FormatReport;
@@ -198,6 +199,7 @@ namespace _1RadAPI.Controllers
         /// <summary>
         /// Create or update a report template
         /// </summary>
+        [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Doctor},{RoleConstants.Technician}")]  // P1-5: matches who sees /configuration
         [HttpPost("templates/upsert")]
         public async Task<IActionResult> UpsertTemplate([FromBody] UpsertTemplateCommand command)
         {
@@ -223,6 +225,7 @@ namespace _1RadAPI.Controllers
         /// <summary>
         /// Delete a report template
         /// </summary>
+        [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Doctor},{RoleConstants.Technician}")]  // P1-5: matches who sees /configuration
         [HttpDelete("templates/{id}")]
         public async Task<IActionResult> DeleteTemplate(Guid id)
         {
@@ -265,6 +268,7 @@ namespace _1RadAPI.Controllers
         /// <summary>
         /// Create or update a reporting keyword
         /// </summary>
+        [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Doctor},{RoleConstants.Technician}")]  // P1-5: matches who sees /configuration
         [HttpPost("keywords/upsert")]
         public async Task<IActionResult> UpsertKeyword([FromBody] UpsertKeywordCommand command)
         {
@@ -290,6 +294,7 @@ namespace _1RadAPI.Controllers
         /// <summary>
         /// Delete a reporting keyword
         /// </summary>
+        [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Doctor},{RoleConstants.Technician}")]  // P1-5: matches who sees /configuration
         [HttpDelete("keywords/{id}")]
         public async Task<IActionResult> DeleteKeyword(Guid id)
         {
@@ -368,6 +373,10 @@ namespace _1RadAPI.Controllers
         /// Save or update a diagnostic report
         /// </summary>
         [HttpPost("save")]
+        // Writing a report: doctors, plus technicians typing for the radiologist
+        // (custom roles get in through the reporting page permission). Front desk,
+        // accounts and admin can read reports but not write them.
+        [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.Doctor},{RoleConstants.Technician}")]
         public async Task<IActionResult> SaveReport([FromBody] SaveReportCommand command)
         {
             try
@@ -421,6 +430,9 @@ namespace _1RadAPI.Controllers
         /// tamper-evident audit event. TargetStatus = "Preliminary" | "Final".
         /// </summary>
         [HttpPost("report/finalize")]
+        // Doctors only. The handler re-checks the token's system role, so a custom
+        // role that reaches this endpoint through a page permission still can't sign.
+        [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.Doctor}")]
         public async Task<IActionResult> FinalizeReport([FromBody] FinalizeReportCommand command)
         {
             try
@@ -461,6 +473,7 @@ namespace _1RadAPI.Controllers
         /// password-reauthenticated record and the report advances to "Addended".
         /// </summary>
         [HttpPost("report/addendum")]
+        [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.Doctor}")]
         public async Task<IActionResult> AddAddendum([FromBody] AddAddendumCommand command)
         {
             try

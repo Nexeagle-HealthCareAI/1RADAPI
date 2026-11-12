@@ -19,12 +19,16 @@ public record ReviewApprovalCommand : IRequest<bool>
     public Guid Id { get; init; }
     public bool Approve { get; init; }
     public string? Note { get; init; }
+    // How money goes back when the approved change refunds the patient
+    // (CASH / UPI / CARD, or ADVANCE to hold it in the wallet). Default: ADVANCE.
+    public string? RefundMode { get; init; }
 }
 
 public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalCommand, bool>
 {
     private readonly IApplicationDbContext _context;
     private readonly IMediator _mediator;
+    private string _refundMode = PaymentLedger.WalletMode;
 
     public ReviewApprovalCommandHandler(IApplicationDbContext context, IMediator mediator)
     {
@@ -40,12 +44,28 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
             .FirstOrDefaultAsync(a => a.Id == request.Id && a.HospitalId == hospitalId && a.DeletedAt == null, ct);
 
         if (req == null)
-            throw new KeyNotFoundException("Approval request not found.");
+            throw new _1Rad.Domain.Exceptions.NotFoundException("Approval request not found.");
         if (req.Status != "PENDING")
-            throw new InvalidOperationException($"This request was already {req.Status.ToLowerInvariant()}.");
+            throw new _1Rad.Domain.Exceptions.BusinessRuleViolationException(
+                $"This request was already {req.Status.ToLowerInvariant()}.", "APPROVAL_ALREADY_REVIEWED");
+
+        // Money-affecting requests need a second person (review R18). A centre with a
+        // single admin can still approve its own requests, so nothing gets stuck.
+        if (request.Approve && req.RequestedBy == _context.UserContext.UserId)
+        {
+            var me = _context.UserContext.UserId;
+            var anotherAdmin = await _context.UserHospitalMappings.AnyAsync(m =>
+                m.HospitalId == hospitalId && m.UserId != me
+                && m.Roles.Any(r => r.RoleName == _1Rad.Domain.Constants.RoleConstants.AdminOperator
+                                 || r.RoleName == _1Rad.Domain.Constants.RoleConstants.AdminDoctor), ct);
+            if (anotherAdmin)
+                throw new _1Rad.Domain.Exceptions.BusinessRuleViolationException(
+                    "You raised this request, so another admin needs to approve it.", "APPROVAL_SELF_REVIEW");
+        }
 
         if (request.Approve)
         {
+            _refundMode = PaymentLedger.NormaliseMode(request.RefundMode ?? ReadRefundMode(req.Payload));
             // Apply the requested change atomically with the status update.
             await ApplyApprovedChangeAsync(req, ct);
             req.Status = "APPROVED";
@@ -62,6 +82,20 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
 
         await _context.SaveChangesAsync(ct);
         return true;
+    }
+
+    private static string? ReadRefundMode(string? payload)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(payload) ? "{}" : payload);
+            foreach (var key in new[] { "refundMode", "RefundMode" })
+                if (doc.RootElement.ValueKind == JsonValueKind.Object
+                    && doc.RootElement.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String)
+                    return v.GetString();
+        }
+        catch (JsonException) { }
+        return null;
     }
 
     /// <summary>
@@ -94,7 +128,31 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
             case "EDIT_SERVICES":
                 await ApplyEditServicesAsync(req, ct);
                 break;
+            case "REFERRER_CONTACT":
+                await ApplyReferrerContactAsync(req, ct);
+                break;
         }
+    }
+
+    /// <summary>
+    /// A referrer changed their mobile/email from the portal (review R8). Applied
+    /// only once someone at the centre has approved it. Payload: { referrerId, contact, email }.
+    /// </summary>
+    private async Task ApplyReferrerContactAsync(ApprovalRequest req, CancellationToken ct)
+    {
+        using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(req.Payload) ? "{}" : req.Payload);
+        var root = doc.RootElement;
+        if (!root.TryGetProperty("referrerId", out var idEl) || !Guid.TryParse(idEl.GetString(), out var referrerId))
+            return;
+        var referrer = await _context.Referrers
+            .FirstOrDefaultAsync(r => r.ReferrerId == referrerId && r.HospitalId == req.HospitalId && r.DeletedAt == null, ct);
+        if (referrer == null)
+            throw new _1Rad.Domain.Exceptions.NotFoundException("That referrer no longer exists.");
+        if (root.TryGetProperty("contact", out var c) && c.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(c.GetString()))
+            referrer.Contact = c.GetString()!.Trim();
+        if (root.TryGetProperty("email", out var e) && e.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(e.GetString()))
+            referrer.Email = e.GetString()!.Trim();
+        referrer.UpdatedAt = DateTime.UtcNow;
     }
 
     /// <summary>
@@ -130,6 +188,7 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
         {
             AppointmentId = req.AppointmentId.Value,
             ApprovedServiceRemoval = true,
+            RowVersion = null, // the approver applies it to the visit as it stands now
             RefundMode = string.IsNullOrWhiteSpace(cmd.RefundMode) ? "WALLET" : cmd.RefundMode,
         };
 
@@ -218,94 +277,21 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
                 new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
         }
 
-        // Resolve ALL commission rows for this visit up-front (needed for both the
-        // absorb math and the differential below). A multi-service appointment
-        // carries ONE ReferralCommission row PER SERVICE, all sharing this
-        // invoice's AppointmentId/ReferenceNumber — the invoice-level
-        // ReferrerDiscount is a single aggregate figure, so the differential must
-        // be spread across the WHOLE group. Picking just one row (as this handler
-        // previously did via FirstOrDefaultAsync) silently corrupted sibling
-        // services' commissions on multi-service visits — the identical bug
-        // CollectPaymentCommand already fixed; ported here to match.
-        var commissions = invoice.ReferrerDiscount != oldReferrerDiscount
-            ? await _context.ReferralCommissions.Where(c =>
-                (c.AppointmentId == invoice.AppointmentId || (c.ReferenceNumber == invoice.InvoiceId && c.ReferenceNumber != null)) &&
-                c.HospitalId == req.HospitalId && c.DeletedAt == null)
-                .ToListAsync(ct)
-            : new List<ReferralCommission>();
-
-        // Eligible commission pool before any referral concession this cycle.
-        var currentTotal = commissions.Sum(c => c.CommissionAmount);
-        var baseCommission = currentTotal + oldReferrerDiscount;
-
-        // Centre absorbs the over-commission excess → floor the commission pool at
-        // its eligible base and shift the surplus into the centre discount. The
-        // patient's total is unchanged (the excess only moves between the two
-        // discount buckets).
-        if (absorbToCentre && invoice.ReferrerDiscount > baseCommission)
-        {
-            var excess = invoice.ReferrerDiscount - baseCommission;
-            invoice.CentreDiscount += excess;
-            invoice.ReferrerDiscount = baseCommission;
-        }
-
         // Canonical recompute (Common/InvoiceTotals.cs).
         var totalDiscount = invoice.CentreDiscount + invoice.ReferrerDiscount + invoice.InstitutionalDeduction;
         InvoiceTotals.RecomputeGross(invoice, originalAdditionalCharges);
         InvoiceTotals.ApplyDiscountAndFinalize(invoice, totalDiscount);
 
-        // Spread the new pool across the group proportionally to each row's
-        // current share, so no single service silently absorbs the whole
-        // invoice-level concession. The last row takes the rounding remainder so
-        // the group sum lands exactly on (baseCommission - ReferrerDiscount).
-        if (commissions.Count > 0)
-        {
-            var newTotal = baseCommission - invoice.ReferrerDiscount;
-            var allocated = 0m;
-            for (var i = 0; i < commissions.Count; i++)
-            {
-                var c = commissions[i];
-                decimal rowNew;
-                if (i == commissions.Count - 1)
-                {
-                    rowNew = newTotal - allocated;
-                }
-                else
-                {
-                    var share = currentTotal != 0 ? c.CommissionAmount / currentTotal : 1m / commissions.Count;
-                    rowNew = Math.Round(newTotal * share, 2);
-                    allocated += rowNew;
-                }
+        // Referrer commission follows the referrer-discount change — unpaid rows only;
+        // when everything is already paid, a separate adjustment row (review R4).
+        await ReferrerDiscountCommission.ApplyAsync(
+            _context, invoice, oldReferrerDiscount, absorbToCentre,
+            $"edit approved (request {req.Id}{(string.IsNullOrWhiteSpace(req.Reason) ? "" : " — " + req.Reason)})", ct);
 
-                var oldRowAmount = c.CommissionAmount;
-                c.CommissionAmount = rowNew;
-                c.Remarks = (c.Remarks ?? "") + $" [Edit-approved: ₹{oldRowAmount:0.##} -> ₹{rowNew:0.##} (referrer discount ₹{oldReferrerDiscount:0.##} -> ₹{invoice.ReferrerDiscount:0.##})]";
-
-                // Over-commission concession kept as a deficit → carried as a negative
-                // (recovered from the doctor's future referrals). Audit the approval.
-                // (If the centre absorbed the excess above, this lands at/above 0.)
-                if (c.CommissionAmount < 0)
-                {
-                    var deficit = Math.Abs(c.CommissionAmount);
-                    c.Remarks += $" [DEFICIT ₹{deficit:0.##} via approval {req.Id} — {req.Reason}]";
-                }
-            }
-        }
-
-        // Re-derive status against the new total.
-        if (invoice.PaidAmount > 0 && invoice.PaidAmount >= invoice.TotalAmount - 0.01m)
-        {
-            invoice.Status = "PAID";
-            invoice.PaidAt ??= DateTime.UtcNow;
-        }
-        else if (invoice.PaidAmount > 0)
-        {
-            invoice.Status = "PARTIAL";
-        }
-        else
-        {
-            invoice.Status = "PENDING";
-        }
+        // Re-derive status against the new total; anything collected beyond it goes
+        // back to the patient (review B7) instead of sitting as a hidden overpayment.
+        await PaymentLedger.SettleAfterTotalChangeAsync(_context, invoice,
+            $"Bill lowered (approval {req.Id.ToString()[..8]})", ct, _refundMode);
 
         // Free → payment: reopening a free bill and charging for it (the edit
         // leaves a payable total) must clear the "free test" flag, so the bill
@@ -356,15 +342,19 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
         // back, so any collected payment must be reversed (income nets to zero).
         // Payments have no tombstone column, so the rows are removed outright
         // (mirrors Mark-Free). The refunded total is audited onto the commission.
-        var invoiceRowIds = invoices.Select(i => i.Id).ToList();
+        // Review B6: the money goes back as its own refund row (dated today, with the
+        // mode and the approver) instead of deleting the original payments, so closed
+        // days don't change and wallet-funded money returns to the wallet.
         decimal refunded = 0;
-        if (invoiceRowIds.Count > 0)
+        foreach (var invoice in invoices)
         {
-            var payments = await _context.Payments
-                .Where(p => invoiceRowIds.Contains(p.InvoiceId) && p.HospitalId == hospitalId)
-                .ToListAsync(ct);
-            refunded = payments.Sum(p => p.Amount);
-            if (payments.Count > 0) _context.Payments.RemoveRange(payments);
+            var collected = await PaymentLedger.CollectedAsync(_context, invoice, ct);
+            if (collected > 0.009m)
+            {
+                await PaymentLedger.RefundAsync(_context, invoice, collected, _refundMode,
+                    $"Visit cancelled (approval {req.Id.ToString()[..8]})", ct);
+                refunded += collected;
+            }
         }
 
         // Keep the bill VISIBLE as a cancelled record (do NOT tombstone it) so the
@@ -424,10 +414,15 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
                 });
             }
 
-            c.CommissionAmount = 0;
-            c.Status = "Cancelled";
+            // A PAID row stays exactly as paid (review R11): zeroing it understated the
+            // cash actually paid out; the clawback above carries the reversal.
+            if (!wasPaid)
+            {
+                c.CommissionAmount = 0;
+                c.Status = "Cancelled";
+            }
             c.Remarks = (c.Remarks ?? "") +
-                $" [Appointment cancelled — patient returned; commission set to ₹0." +
+                $" [Appointment cancelled — patient returned;{(wasPaid ? "" : " commission set to ₹0.")}" +
                 (refunded > 0 ? $" Refund ₹{refunded:0.##} to patient." : "") +
                 (wasPaid ? $" ₹{paidAmount:0.##} already paid → booked as a clawback deficit against {c.ReferrerName}." : "") +
                 $" Reason: {req.Reason}]";
@@ -508,16 +503,12 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
             // consistent whether the user frees all-at-once or one-by-one.
             foreach (var it in invoice.Items) it.IsFree = true;
 
-            // Reverse any collected money so there is no income (Payment has no
-            // tombstone column, so the rows are removed outright).
-            var payments = await _context.Payments
-                .Where(p => p.InvoiceId == invoice.Id && p.HospitalId == req.HospitalId)
-                .ToListAsync(ct);
-            if (payments.Count > 0) _context.Payments.RemoveRange(payments);
-
-            invoice.PaidAmount = 0;
-            invoice.PaidAt = null;
-            invoice.Status = "PAID"; // total is 0 → nothing owed, nothing collected
+            // Return any collected money as refund rows (review B6) — the bill is
+            // now ₹0, so everything collected is an overpayment.
+            invoice.Status = "PAID"; // total is 0 → nothing owed
+            await PaymentLedger.SettleAfterTotalChangeAsync(_context, invoice,
+                $"Marked free (approval {req.Id.ToString()[..8]})", ct, _refundMode);
+            PaymentLedger.DeriveStatus(invoice);
             invoice.UpdatedAt = DateTime.UtcNow;
         }
 
@@ -548,20 +539,35 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
             {
                 var isSelfCut = string.Equals(c.ReferrerName, "Self", StringComparison.OrdinalIgnoreCase);
                 var origCommission = c.CommissionAmount;
+                var target = origCommission;
                 if (isSelfCut || bearer == "BOTH")
                 {
                     // Self / shared → no commission and no deficit.
-                    c.CommissionAmount = 0;
+                    target = 0;
                 }
                 else if (bearer == "REFERRER")
                 {
                     // finalCommission = orig − (orig ÷ Σorig) × freeGross.
                     // Single referrer → orig − freeGross = −(freeGross − orig) deficit.
-                    c.CommissionAmount = sumOrigCommission > 0
+                    target = sumOrigCommission > 0
                         ? Math.Round(origCommission - (origCommission / sumOrigCommission) * freeGross, 2)
                         : 0;
                 }
                 // CENTRE → referrer keeps the full cut (centre absorbs the whole fee).
+
+                // A PAID row is disbursement history (review R4): leave it as paid and
+                // book the difference as its own UNPAID adjustment, netted at the next payout.
+                if (ReferrerDiscountCommission.IsPaid(c))
+                {
+                    var delta = target - origCommission;
+                    if (Math.Abs(delta) >= 0.005m)
+                        _context.ReferralCommissions.Add(PaidRowAdjustment(c, delta,
+                            $"[Free test ({bearer.ToLowerInvariant()}-borne) after payout — ₹{origCommission:0.##} was already paid; adjustment ₹{delta:0.##} via approval {req.Id}]"));
+                    c.Remarks = (c.Remarks ?? "") + $" [Free test via approval {req.Id} — already paid, adjusted by a separate row]";
+                    c.UpdatedAt = DateTime.UtcNow;
+                    continue;
+                }
+                c.CommissionAmount = target;
 
                 if (c.CommissionAmount == 0) c.Status = "Cancelled";
                 // A negative balance is an active deficit — keep it live so it nets
@@ -601,6 +607,11 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
 
         var apptId = req.AppointmentId ?? invoice.AppointmentId;
 
+        // Concession already given for lines freed earlier, so the clinic's own
+        // discount can be kept when this line is freed (review B8).
+        var prevFreeTotal = invoice.Items.Where(it => it.IsFree).Sum(it => it.Amount * it.Quantity);
+        var clinicDiscount = Math.Max(0m, invoice.CentreDiscount - prevFreeTotal);
+
         // 1) Mark the service line free — the AppointmentService (source of truth)
         //    and its 1:1 InvoiceItem (the billing line).
         var svc = await _context.AppointmentServices
@@ -632,7 +643,7 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
         InvoiceTotals.RecomputeGross(invoice, invoice.AdditionalCharges);
         var freeTotal = invoice.Items.Where(it => it.IsFree).Sum(it => it.Amount * it.Quantity);
 
-        invoice.CentreDiscount = freeTotal;
+        invoice.CentreDiscount = clinicDiscount + freeTotal;
         var discount = invoice.CentreDiscount + invoice.ReferrerDiscount;
         InvoiceTotals.ApplyDiscountAndFinalize(invoice, discount);
 
@@ -640,11 +651,10 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
         // existing "free test" reports still recognise it).
         invoice.IsFree = invoice.Items.Count > 0 && invoice.Items.All(it => it.IsFree);
 
-        // Re-derive status against the new payable. We do NOT reverse payments —
-        // money already taken for the OTHER (paid) lines stays collected.
-        if (invoice.PaidAmount >= invoice.TotalAmount) invoice.Status = "PAID";
-        else if (invoice.PaidAmount > 0) invoice.Status = "PARTIAL";
-        else invoice.Status = "PENDING";
+        // Re-derive status against the new payable. Money taken for the other lines
+        // stays; only what now exceeds the bill goes back (review B7).
+        await PaymentLedger.SettleAfterTotalChangeAsync(_context, invoice,
+            $"Scan marked free (approval {req.Id.ToString()[..8]})", ct, _refundMode);
         invoice.UpdatedAt = DateTime.UtcNow;
 
         // 3) Settle the referral cut for THIS line only, per the bearer rule
@@ -653,7 +663,19 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
         var comm = apptId == null ? null : await _context.ReferralCommissions
             .FirstOrDefaultAsync(c => c.AppointmentServiceId == serviceId
                 && c.HospitalId == req.HospitalId && c.DeletedAt == null, ct);
-        if (comm != null && !string.Equals(comm.ReferrerName, "Self", StringComparison.OrdinalIgnoreCase))
+        if (comm != null && ReferrerDiscountCommission.IsPaid(comm)
+            && !string.Equals(comm.ReferrerName, "Self", StringComparison.OrdinalIgnoreCase))
+        {
+            // Already paid out (review R4): keep the paid row, book the change separately.
+            var target = bearer == "BOTH" ? 0m : bearer == "REFERRER" ? Math.Round(comm.CommissionAmount - lineGross, 2) : comm.CommissionAmount;
+            var delta = target - comm.CommissionAmount;
+            if (Math.Abs(delta) >= 0.005m)
+                _context.ReferralCommissions.Add(PaidRowAdjustment(comm, delta,
+                    $"[Free service ({bearer.ToLowerInvariant()}-borne) after payout — adjustment ₹{delta:0.##} via approval {req.Id}]"));
+            comm.Remarks = (comm.Remarks ?? "") + $" [Free service via approval {req.Id} — already paid, adjusted by a separate row]";
+            comm.UpdatedAt = DateTime.UtcNow;
+        }
+        else if (comm != null && !string.Equals(comm.ReferrerName, "Self", StringComparison.OrdinalIgnoreCase))
         {
             var orig = comm.CommissionAmount;
             if (bearer == "BOTH")
@@ -676,6 +698,24 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
         }
     }
 
+    /// <summary>An UNPAID row carrying a change to a commission that was already paid out.</summary>
+    private static ReferralCommission PaidRowAdjustment(ReferralCommission paidRow, decimal delta, string remark) => new()
+    {
+        HospitalId = paidRow.HospitalId,
+        ReferrerId = paidRow.ReferrerId,
+        ReferrerName = paidRow.ReferrerName,
+        Modality = paidRow.Modality,
+        AppointmentId = paidRow.AppointmentId,
+        AppointmentServiceId = null, // one live commission per service (migration 89) — the paid row keeps it
+        ReferenceNumber = paidRow.ReferenceNumber,
+        CommissionAmount = delta,
+        Status = "UNPAID",
+        TransactionDate = DateTime.UtcNow,
+        ServiceDate = paidRow.ServiceDate,
+        Remarks = remark,
+        UpdatedAt = DateTime.UtcNow,
+    };
+
     /// <summary>
     /// Reverts a PAID referral commission back to UNPAID after admin sign-off.
     /// Payload: { commissionId }.
@@ -694,9 +734,15 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
         var commission = await _context.ReferralCommissions
             .FirstOrDefaultAsync(c => c.Id == commissionId && c.HospitalId == req.HospitalId && c.DeletedAt == null, ct);
         if (commission == null) return;
+        // Only a paid commission can be "un-paid" (review R17); clear who was paid.
+        if (!ReferrerDiscountCommission.IsPaid(commission)) return;
 
         commission.Status = "UNPAID";
         commission.PaymentDate = null;
+        commission.PaidBy = null;
+        commission.PayeeName = null;
+        commission.PayeeContact = null;
+        commission.UpdatedBy = _context.UserContext.UserId.ToString();
         commission.Remarks = (commission.Remarks ?? "") + $" [Reverted to UNPAID via approval {req.Id} — {req.Reason}]";
         commission.UpdatedAt = DateTime.UtcNow;
     }
@@ -732,7 +778,20 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
         // a negative payout must be represented by the dedicated clawback/
         // deficit workflows rather than rewriting this commission row.
         if (amount is < 0)
-            throw new InvalidOperationException("A payout revision cannot set a negative commission amount.");
+            throw new _1Rad.Domain.Exceptions.BusinessRuleViolationException("A payout revision cannot set a negative commission amount.");
+        // PAID only through the payout screen (review R6), which records the payee and nets deficits.
+        if (string.Equals(status, "PAID", StringComparison.OrdinalIgnoreCase) && !ReferrerDiscountCommission.IsPaid(commission))
+            throw new _1Rad.Domain.Exceptions.BusinessRuleViolationException(
+                "Mark commissions as paid from the payout screen, not by editing them.", "COMMISSION_PAY_VIA_PAYOUT");
+        if (ReferrerDiscountCommission.IsPaid(commission))
+        {
+            // A paid row stays as paid; an amount correction becomes its own adjustment row.
+            if (amount.HasValue && Math.Abs(amount.Value - commission.CommissionAmount) >= 0.005m)
+                _context.ReferralCommissions.Add(PaidRowAdjustment(commission, amount.Value - commission.CommissionAmount,
+                    $"[Correction to a paid commission (₹{commission.CommissionAmount:0.##} → ₹{amount.Value:0.##}) via approval {req.Id} — {req.Reason}]"));
+            amount = null;
+            status = null;
+        }
         if (amount.HasValue) commission.CommissionAmount = amount.Value;
         if (!string.IsNullOrWhiteSpace(modality)) commission.Modality = modality;
         if (remarks != null) commission.Remarks = remarks;
@@ -761,7 +820,7 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
 
         string name; string? contact; bool? isDoctor; string? supportedByDoctor;
         string? email; string? specialty; string? degree; string? address;
-        string? supportedSpecialty; string? supportedDegree;
+        string? supportedSpecialty; string? supportedDegree; Guid? newReferrerId = null;
         try
         {
             using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(req.Payload) ? "{}" : req.Payload);
@@ -776,6 +835,7 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
             address = GetString(root, "newReferrerAddress");
             supportedSpecialty = GetString(root, "newReferrerSupportedSpecialty");
             supportedDegree = GetString(root, "newReferrerSupportedDegree");
+            newReferrerId = Guid.TryParse(GetString(root, "newReferrerId"), out var nid) ? nid : null;
         }
         catch { return; }
 
@@ -786,7 +846,8 @@ public class ReviewApprovalCommandHandler : IRequestHandler<ReviewApprovalComman
             _context, req.AppointmentId.Value, req.HospitalId, name, contact, isDoctor, ct,
             preserveHistory: true, supportedByDoctor: supportedByDoctor,
             email: email, specialty: specialty, degree: degree, address: address,
-            supportedSpecialty: supportedSpecialty, supportedDegree: supportedDegree);
+            supportedSpecialty: supportedSpecialty, supportedDegree: supportedDegree,
+            newReferrerId: newReferrerId);
     }
 
     private static string? GetString(JsonElement el, string name)

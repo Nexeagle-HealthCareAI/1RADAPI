@@ -4,7 +4,7 @@ using _1Rad.Application.Interfaces;
 
 namespace _1Rad.Application.Features.Finance.Queries.GetFinanceStats;
 
-public record GetFinanceStatsQuery : IRequest<FinanceStatsDto>;
+public record GetFinanceStatsQuery : IRequest<FinanceStatsDto>, ICachedAnalyticsQuery;
 
 public class FinanceStatsDto
 {
@@ -40,7 +40,7 @@ public class GetFinanceStatsQueryHandler : IRequestHandler<GetFinanceStatsQuery,
 
             var invoiceData = await _context.Invoices
                 .AsNoTracking()
-                .Where(i => i.HospitalId == hospitalId)
+                .Where(i => i.HospitalId == hospitalId && i.DeletedAt == null)
                 .Select(i => new { i.Status, i.GrossAmount, i.TotalAmount, i.PaidAmount })
                 .ToListAsync(cancellationToken);
 

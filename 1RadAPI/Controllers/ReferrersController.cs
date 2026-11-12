@@ -269,8 +269,51 @@ public class ReferrersController : ControllerBase
         return Ok(result);
     }
 
+    // Review R9/R23: when and how this partner's portal link was used (newest first).
+    [HttpGet("{id:guid}/portal-views")]
+    [Authorize(Roles = AdminRoles)]
+    public async Task<IActionResult> PortalViews(Guid id, [FromServices] _1Rad.Application.Interfaces.IApplicationDbContext db)
+    {
+        var rows = await Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions.ToListAsync(
+            db.ReferralPortalViews
+                .Where(v => v.ReferrerId == id)
+                .OrderByDescending(v => v.ViewedAt)
+                .Take(100)
+                .Select(v => new { v.ViewedAt, v.Action, v.LinkVersion, v.IpHash, v.UserAgent }));
+        return Ok(new
+        {
+            views = rows.Select(v => new
+            {
+                v.ViewedAt, v.Action, v.LinkVersion,
+                device = v.IpHash == null ? null : v.IpHash[..8], // same short code = same network
+                v.UserAgent,
+            }),
+            distinctDevices = rows.Where(v => v.IpHash != null).Select(v => v.IpHash).Distinct().Count(),
+        });
+    }
+
+    // Review R10: a partner's payouts for a financial year with gross, TDS and net.
+    [HttpGet("{id:guid}/tds-statement")]
+    [Authorize(Roles = FinanceRoles)]
+    public async Task<IActionResult> TdsStatement(Guid id, [FromQuery] string? fy)
+    {
+        var result = await _mediator.Send(new _1Rad.Application.Features.Referrers.Queries.GetTdsStatement.GetTdsStatementQuery(id, fy));
+        return Ok(result);
+    }
+
+    // Who is owed what, one row per partner (merge roots), worked out on the server and
+    // paged (review #27) - replaces grouping the whole commission history in the browser.
+    [HttpGet("outstanding")]
+    [Authorize(Roles = FinanceRoles)]
+    public async Task<IActionResult> Outstanding(
+        [FromQuery] string? search, [FromQuery] string? show, [FromQuery] int page = 1, [FromQuery] int pageSize = 50)
+    {
+        var result = await _mediator.Send(new _1Rad.Application.Features.Referrers.Queries.GetReferrersOutstanding.GetReferrersOutstandingQuery(search, show, page, pageSize));
+        return Ok(result);
+    }
+
     // The centre absorbs a partner's outstanding clawback deficit (settles the open
-    // negative rows and books the compensating write-off). The amount is computed
+    // negative rows; review #21: no compensating paid row). The amount is computed
     // server-side from live rows; a repeat call is refused because nothing is open.
     [HttpPost("{id:guid}/write-off-deficit")]
     [Authorize(Roles = FinanceRoles)]
@@ -287,9 +330,10 @@ public class ReferrersController : ControllerBase
         [FromQuery] DateTime? endDate,
         [FromQuery] Guid? referrerId,
         [FromQuery] DateTime? updatedAfter,
-        [FromQuery] bool includeDeleted = false)
+        [FromQuery] bool includeDeleted = false,
+        [FromQuery] bool openOnly = false)
     {
-        var result = await _mediator.Send(new GetReferralCommissionsQuery(startDate, endDate, referrerId, updatedAfter, includeDeleted));
+        var result = await _mediator.Send(new GetReferralCommissionsQuery(startDate, endDate, referrerId, updatedAfter, includeDeleted, openOnly));
         return Ok(result);
     }
 

@@ -1,3 +1,4 @@
+using _1Rad.Domain.Constants;
 using _1Rad.Application.Features.Personnel.Commands.RegisterStaff;
 using _1Rad.Application.Features.Personnel.Commands.RemoveStaff;
 using _1Rad.Application.Features.Personnel.Commands.UpdatePreference;
@@ -32,9 +33,18 @@ public class PersonnelController : ControllerBase
         if (hospitalId == Guid.Empty) return BadRequest("Hospital context missing.");
 
         var result = await _mediator.Send(new GetHospitalPersonnelQuery(hospitalId));
+
+        // Gap analysis P1-3: this list is read by every role (worklists, report
+        // signatures, billing), but only admins may see the stored login password
+        // (Admin board show/copy). Everyone else gets it blanked.
+        var isAdmin = User.IsInRole(RoleConstants.AdminDoctor) || User.IsInRole(RoleConstants.AdminOperator);
+        if (!isAdmin)
+            result = result.Select(p => p with { Password = string.Empty }).ToList();
+
         return Ok(result);
     }
 
+    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator}")]  // P1-3: only admins manage staff logins
     [HttpPost]
     public async Task<IActionResult> RegisterStaff([FromBody] RegisterStaffCommand command)
     {
@@ -47,6 +57,7 @@ public class PersonnelController : ControllerBase
             : BadRequest(new { message = error });
     }
 
+    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator}")]  // P1-3: only admins manage staff logins
     [HttpPut("{id}")]
     public async Task<IActionResult> UpdateStaff(Guid id, [FromBody] UpdateStaffCommand command)
     {
@@ -77,8 +88,13 @@ public class PersonnelController : ControllerBase
             UserId:         id,
             Specialization: body.Specialization,
             Degree:         body.Degree,
-            LicenseNo:      body.LicenseNo
+            LicenseNo:      body.LicenseNo,
+            RequestingUserId: _userContext.UserId,
+            HospitalId:       _userContext.HospitalId,
+            RequesterIsAdmin: User.IsInRole(RoleConstants.AdminDoctor) || User.IsInRole(RoleConstants.AdminOperator)
         ));
+        if (!result.Success && result.ErrorCode == "FORBIDDEN")
+            return StatusCode(StatusCodes.Status403Forbidden, new { success = false, error = result.Error, errorCode = result.ErrorCode });
         return result.Success
             ? Ok(new { success = true, message = "Clinical credentials updated." })
             : BadRequest(new { success = false, error = result.Error, errorCode = result.ErrorCode });
@@ -90,6 +106,7 @@ public class PersonnelController : ControllerBase
         string? LicenseNo
     );
 
+    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator}")]  // P1-3: only admins manage staff logins
     [HttpDelete("{id}")]
     public async Task<IActionResult> RemoveStaff(Guid id)
     {

@@ -17,7 +17,8 @@ public record CreateReferrerCommand(
     string? Specialty = null,
     string? Degree = null,
     bool IsDoctor = true,
-    string? SupportedByDoctor = null
+    string? SupportedByDoctor = null,
+    string? Pan = null
 ) : IRequest<Guid>;
 
 public class CreateReferrerCommandHandler : IRequestHandler<CreateReferrerCommand, Guid>
@@ -62,21 +63,31 @@ public class CreateReferrerCommandHandler : IRequestHandler<CreateReferrerComman
             var existing = await _context.Referrers
                 .Where(r => r.HospitalId == hospitalId && r.DeletedAt == null)
                 .ToListAsync(cancellationToken);
-            var match = existing.FirstOrDefault(r => NameNormalizer.Normalize(r.Name) == normalized);
+            // Review #25: a same-name partner on a DIFFERENT mobile is a namesake, not a
+            // duplicate. Reuse only when the mobiles agree (or one side has none).
+            var upperName = NameNormalizer.Upper(request.Name);
+            var newMobile = ReferrerResolver.MobileDigits(storedContact);
+            var sameName = existing.Where(r => NameNormalizer.Normalize(r.Name) == normalized).ToList();
+            var match = sameName.FirstOrDefault(r => newMobile.Length == 0 || ReferrerResolver.MobileDigits(r.Contact).Length == 0
+                                                     || ReferrerResolver.MobileDigits(r.Contact) == newMobile);
+            if (match == null && sameName.Any(r => r.Name == upperName))
+                throw new ValidationException($"A partner named {upperName} already exists with a different mobile number. Add initials or the clinic name to tell them apart.");
             if (match != null)
             {
-                // Backfill a missing contact/address from the new submission.
+                // Backfill only what is missing; a filled profile or the partner's type is
+                // changed on the partner's own edit screen, never by an "add" that matched.
                 match.Name = NameNormalizer.Upper(match.Name); // canonicalise casing (#15)
                 if (string.IsNullOrWhiteSpace(match.Contact) && !string.IsNullOrWhiteSpace(storedContact))
                     match.Contact = storedContact;
                 if (string.IsNullOrWhiteSpace(match.Address) && !string.IsNullOrWhiteSpace(request.Address))
                     match.Address = NameNormalizer.Upper(request.Address);
-                // Fill in any doctor-profile fields this submission supplied.
-                if (!string.IsNullOrWhiteSpace(request.Email))     match.Email     = request.Email.Trim();
-                if (!string.IsNullOrWhiteSpace(request.Specialty)) match.Specialty = NameNormalizer.Upper(request.Specialty);
-                if (!string.IsNullOrWhiteSpace(request.Degree))    match.Degree    = NameNormalizer.Upper(request.Degree);
-                match.IsDoctor = request.IsDoctor;
-                match.SupportedByDoctor = string.IsNullOrWhiteSpace(request.SupportedByDoctor) ? match.SupportedByDoctor : NameNormalizer.Upper(request.SupportedByDoctor);
+                if (string.IsNullOrWhiteSpace(match.Email) && !string.IsNullOrWhiteSpace(request.Email))         match.Email     = request.Email.Trim();
+                if (string.IsNullOrWhiteSpace(match.Specialty) && !string.IsNullOrWhiteSpace(request.Specialty)) match.Specialty = NameNormalizer.Upper(request.Specialty);
+                if (string.IsNullOrWhiteSpace(match.Degree) && !string.IsNullOrWhiteSpace(request.Degree))       match.Degree    = NameNormalizer.Upper(request.Degree);
+                if (string.IsNullOrWhiteSpace(match.SupportedByDoctor) && !string.IsNullOrWhiteSpace(request.SupportedByDoctor))
+                    match.SupportedByDoctor = NameNormalizer.Upper(request.SupportedByDoctor);
+                if (string.IsNullOrWhiteSpace(match.Pan) && ReferralTds.IsValidPan(request.Pan?.Trim().ToUpperInvariant()))
+                    match.Pan = request.Pan!.Trim().ToUpperInvariant();
                 await _context.SaveChangesAsync(cancellationToken);
                 return match.ReferrerId;
             }
@@ -93,6 +104,7 @@ public class CreateReferrerCommandHandler : IRequestHandler<CreateReferrerComman
             Degree    = NameNormalizer.UpperOrNull(request.Degree),
             IsDoctor  = request.IsDoctor,
             SupportedByDoctor = NameNormalizer.UpperOrNull(request.SupportedByDoctor),
+            Pan = ReferralTds.IsValidPan(request.Pan?.Trim().ToUpperInvariant()) ? request.Pan!.Trim().ToUpperInvariant() : null,
         };
 
         _context.Referrers.Add(referrer);

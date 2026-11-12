@@ -1,4 +1,5 @@
 using MediatR;
+using _1Rad.Application.Common;
 using _1Rad.Application.Common.Exceptions;
 using _1Rad.Application.Interfaces;
 using _1Rad.Domain.Entities;
@@ -99,6 +100,16 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
 
         var ownerHospitalId = appointment?.HospitalId ?? study!.HospitalId;
 
+        // The service line must belong to this visit — otherwise a crafted
+        // request could hang a report off another visit's service.
+        if (appointment != null && request.AppointmentServiceId is Guid svcId)
+        {
+            var belongs = await _context.AppointmentServices
+                .AnyAsync(s => s.Id == svcId && s.AppointmentId == appointment.AppointmentId, cancellationToken);
+            if (!belongs)
+                throw new ArgumentException("That service is not part of this visit.", nameof(request.AppointmentServiceId));
+        }
+
         // Upsert keyed by (AppointmentId, AppointmentServiceId). The
         // service-scoped lookup is the multi-service path; the fallback
         // (no AppointmentServiceId in the request OR no per-service
@@ -165,10 +176,17 @@ public class SaveReportCommandHandler : IRequestHandler<SaveReportCommand, Diagn
         }
         else
         {
-            // Update existing report
+            // Update existing report. The author may edit; a doctor may take
+            // over a draft written by a non-doctor (technician typing for the
+            // radiologist) and becomes its author; doctors don't silently take
+            // each other's drafts.
             if (report.DoctorId != doctorId)
             {
-                throw new UnauthorizedAccessException("You do not have permission to modify this report.");
+                var mayTakeOver = await ReportSignOff.MayTakeOverAsync(
+                    _context, report.DoctorId, doctorId, _context.UserContext.RoleIds, hospitalId, cancellationToken);
+                if (!mayTakeOver)
+                    throw new UnauthorizedAccessException("This report is being written by another doctor.");
+                if (!ReportStatuses.IsLocked(report.Status)) report.DoctorId = doctorId;
             }
 
             // 21 CFR Part 11 immutability: a signed-FINAL (or addended) report's

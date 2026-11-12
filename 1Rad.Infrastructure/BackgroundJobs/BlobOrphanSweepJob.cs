@@ -81,6 +81,11 @@ public class BlobOrphanSweepJob : BackgroundService
             var blob = scope.ServiceProvider.GetRequiredService<IBlobService>();
             var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
 
+            // One instance per sweep interval (gap analysis P3-9).
+            var intervalHours = Math.Clamp(_config.GetValue("Dicom:OrphanSweep:IntervalHours", 24), 1, 168);
+            if (!await JobSchedule.TryClaimAsync(db, "BlobOrphanSweep", JobSchedule.IntervalKey(DateTime.UtcNow, intervalHours), _logger, ct))
+                return;
+
             await SweepStagingAsync(blob, ct);
 
             if (_config.GetValue("Dicom:OrphanSweep:ReconcileEnabled", false))

@@ -1,3 +1,4 @@
+using _1Rad.Domain.Constants;
 using _1Rad.Application.Features.Roles.Commands.CreateCustomRole;
 using _1Rad.Application.Features.Roles.Commands.DeleteCustomRole;
 using _1Rad.Application.Features.Roles.Commands.UpdateCustomRole;
@@ -33,6 +34,7 @@ public class CustomRolesController : ControllerBase
         return Ok(result);
     }
 
+    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator}")]  // P1-2: any role could grant itself permissions
     [HttpPost]
     public async Task<IActionResult> CreateCustomRole([FromBody] CreateCustomRoleRequest request)
     {
@@ -46,6 +48,7 @@ public class CustomRolesController : ControllerBase
         return Ok(new { roleId, message = "Custom role created successfully." });
     }
 
+    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator}")]  // P1-2: any role could grant itself permissions
     [HttpPut("{id}")]
     public async Task<IActionResult> UpdateCustomRole(Guid id, [FromBody] UpdateCustomRoleRequest request)
     {
@@ -59,6 +62,7 @@ public class CustomRolesController : ControllerBase
         return Ok(new { message = "Custom role updated successfully." });
     }
 
+    [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator}")]  // P1-2: any role could grant itself permissions
     [HttpDelete("{id}")]
     public async Task<IActionResult> DeleteCustomRole(Guid id)
     {

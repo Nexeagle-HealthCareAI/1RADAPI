@@ -52,6 +52,10 @@ public class DicomExtractionBackfillJob : BackgroundService
             await using var scope = _scopeFactory.CreateAsyncScope();
             var db = scope.ServiceProvider.GetRequiredService<IApplicationDbContext>();
 
+            // Instances booting together would sweep the same legacy batch; one per hour does it.
+            if (!await JobSchedule.TryClaimAsync(db, "DicomExtractionBackfill", JobSchedule.IntervalKey(DateTime.UtcNow, 1), _logger, stoppingToken))
+                return;
+
             var totalEnqueued = 0;
             while (!stoppingToken.IsCancellationRequested)
             {

@@ -1,3 +1,4 @@
+using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -24,17 +25,10 @@ public class DailyFinancialReportJob : BackgroundService
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            var now = DateTime.Now;
-            // Target time: 9 PM (21:00)
-            var nextRunTime = new DateTime(now.Year, now.Month, now.Day, 21, 0, 0);
-
-            if (now > nextRunTime)
-            {
-                nextRunTime = nextRunTime.AddDays(1);
-            }
-
-            var delay = nextRunTime - now;
-            _logger.LogInformation("Next Daily Report scheduled for {NextRunTime} (in {DelayHours:F2} hours)", nextRunTime, delay.TotalHours);
+            // 21:00 India time (the container clock is UTC; see JobSchedule).
+            var delay = JobSchedule.DelayUntilIst(21, 0, DateTime.UtcNow);
+            var nextRunTime = DateTime.UtcNow + delay;
+            _logger.LogInformation("Next Daily Report scheduled for {NextRunTime} UTC (in {DelayHours:F2} hours)", nextRunTime, delay.TotalHours);
 
             try
             {
@@ -63,8 +57,14 @@ public class DailyFinancialReportJob : BackgroundService
         var context = scope.ServiceProvider.GetRequiredService<IApplicationDbContext>();
         var emailService = scope.ServiceProvider.GetRequiredService<IEmailService>();
 
-        // We use local date for the report summary
-        var today = DateTime.Today;
+        // The IST calendar day being reported, as a UTC window (columns hold UTC).
+        var today = JobSchedule.IstToday(DateTime.UtcNow);
+        var dayStartUtc = IstDateRange.ToUtcStart(today);
+        var dayEndUtc = dayStartUtc.AddDays(1);
+
+        // Several API instances each run this job; only one sends the emails.
+        if (!await JobSchedule.TryClaimAsync(context, "DailyFinancialReport", today.ToString("yyyy-MM-dd"), _logger, stoppingToken))
+            return;
         
         // Fetch all hospitals (Ignore Global Filters as we are running globally for all facilities)
         var hospitals = await context.Hospitals
@@ -79,25 +79,25 @@ public class DailyFinancialReportJob : BackgroundService
                 // 1. Calculate Revenue (Actual cash collected today via payments)
                 var revenue = await context.Payments
                     .IgnoreQueryFilters()
-                    .Where(p => p.HospitalId == hospital.HospitalId && p.CreatedAt.Date == today)
+                    .Where(p => p.HospitalId == hospital.HospitalId && p.CreatedAt >= dayStartUtc && p.CreatedAt < dayEndUtc)
                     .SumAsync(p => p.Amount, stoppingToken);
 
                 // 2. Calculate Outstanding (Amount invoiced today but still pending)
                 var pending = await context.Invoices
                     .IgnoreQueryFilters()
-                    .Where(i => i.HospitalId == hospital.HospitalId && i.CreatedAt.Date == today && i.Status == "PENDING")
+                    .Where(i => i.HospitalId == hospital.HospitalId && i.CreatedAt >= dayStartUtc && i.CreatedAt < dayEndUtc && i.Status == "PENDING")
                     .SumAsync(i => i.TotalAmount - i.PaidAmount, stoppingToken);
 
                 // 3. Calculate Expenses (Total outflow logged today)
                 var expenses = await context.Expenses
                     .IgnoreQueryFilters()
-                    .Where(e => e.HospitalId == hospital.HospitalId && e.TransactionDate.Date == today)
+                    .Where(e => e.HospitalId == hospital.HospitalId && e.TransactionDate >= dayStartUtc && e.TransactionDate < dayEndUtc)
                     .SumAsync(e => e.Amount, stoppingToken);
 
                 // 4. Calculate Referral Commissions Logged Today
                 var referrals = await context.ReferralCommissions
                     .IgnoreQueryFilters()
-                    .Where(rc => rc.HospitalId == hospital.HospitalId && rc.TransactionDate.Date == today)
+                    .Where(rc => rc.HospitalId == hospital.HospitalId && rc.TransactionDate >= dayStartUtc && rc.TransactionDate < dayEndUtc)
                     .SumAsync(rc => rc.CommissionAmount, stoppingToken);
 
                 var netProfit = revenue - expenses;

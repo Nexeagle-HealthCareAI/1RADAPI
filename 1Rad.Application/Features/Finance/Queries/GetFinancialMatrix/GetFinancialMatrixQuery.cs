@@ -6,7 +6,7 @@ using _1Rad.Application.Features.Finance.Queries.GetFinancialMatrix.Calculators;
 
 namespace _1Rad.Application.Features.Finance.Queries.GetFinancialMatrix;
 
-public record GetFinancialMatrixQuery : IRequest<FinancialMatrixDto>
+public record GetFinancialMatrixQuery : IRequest<FinancialMatrixDto>, ICachedAnalyticsQuery
 {
     public DateTime? StartDate { get; init; }
     public DateTime? EndDate { get; init; }
@@ -279,7 +279,7 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
 
             var hospitalId = _context.UserContext.HospitalId;
 
-            var invoiceQuery = _context.Invoices.AsNoTracking().Where(i => i.HospitalId == hospitalId);
+            var invoiceQuery = _context.Invoices.AsNoTracking().Where(i => i.HospitalId == hospitalId && i.DeletedAt == null);
             var expenseQuery = _context.Expenses.AsNoTracking().Where(e => e.HospitalId == hospitalId);
             // DeletedAt/Status filter matches the convention used everywhere else this
             // table is read (commissionByServiceId/commissionByAppointmentId below,
@@ -312,16 +312,20 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
             // hours — see IstDateRange's doc comment for the full picture.
             if (request.StartDate.HasValue)
             {
-                var start = IstDateRange.ToUtcStart(request.StartDate.Value);
+                // ServiceDate is India clock time (copied from the visit); expense
+                // TransactionDate is a UTC instant.
+                var start = IstDateRange.ClockStart(request.StartDate.Value);
                 invoiceQuery = invoiceQuery.Where(i => i.ServiceDate >= start);
-                expenseQuery = expenseQuery.Where(e => e.TransactionDate >= start);
+                var startUtc = IstDateRange.ToUtcStart(request.StartDate.Value);
+                expenseQuery = expenseQuery.Where(e => e.TransactionDate >= startUtc);
                 commissionQuery = commissionQuery.Where(c => c.ServiceDate >= start);
             }
             if (request.EndDate.HasValue)
             {
-                var end = IstDateRange.ToUtcEndInclusive(request.EndDate.Value);
+                var end = IstDateRange.ClockEndInclusive(request.EndDate.Value);
                 invoiceQuery = invoiceQuery.Where(i => i.ServiceDate <= end);
-                expenseQuery = expenseQuery.Where(e => e.TransactionDate <= end);
+                var endUtc = IstDateRange.ToUtcEndInclusive(request.EndDate.Value);
+                expenseQuery = expenseQuery.Where(e => e.TransactionDate <= endUtc);
                 commissionQuery = commissionQuery.Where(c => c.ServiceDate <= end);
             }
 
@@ -375,6 +379,8 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
                 .Select(c => new { c.ReferrerId, c.ReferrerName, c.CommissionAmount, c.TransactionDate, c.Status })
                 .ToListAsync(cancellationToken);
 
+            // Payments are counted even when their bill was later voided: the money really moved,
+            // and a void now writes its own refund rows (migration 102), so they net out on the refund day.
             var paymentQuery = _context.Payments.AsNoTracking().Where(p => p.HospitalId == hospitalId);
             if (request.StartDate.HasValue)
             {

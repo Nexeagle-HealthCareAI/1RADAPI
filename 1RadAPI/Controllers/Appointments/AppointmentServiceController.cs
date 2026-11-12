@@ -1,5 +1,6 @@
 using _1Rad.Application.Features.Appointments.Commands.UpdateAppointmentServiceStatus;
 using _1Rad.Application.Features.Appointments.Commands.UpdateAppointmentServiceNotes;
+using _1Rad.Domain.Constants;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -32,6 +33,7 @@ public class AppointmentServiceController : ControllerBase
     public sealed record UpdateServiceStatusBody(string Status);
 
     [HttpPatch("{id}/services/{serviceId}/status")]
+    [Authorize(Roles = RoleSets.Workflow)]
     public async Task<IActionResult> UpdateServiceStatus(
         Guid id, Guid serviceId, [FromBody] UpdateServiceStatusBody body)
     {
@@ -52,6 +54,7 @@ public class AppointmentServiceController : ControllerBase
     public sealed record UpdateServiceNotesBody(string? Notes);
 
     [HttpPatch("{id}/services/{serviceId}/notes")]
+    [Authorize(Roles = RoleSets.Workflow)]
     public async Task<IActionResult> UpdateServiceNotes(
         Guid id, Guid serviceId, [FromBody] UpdateServiceNotesBody body)
     {

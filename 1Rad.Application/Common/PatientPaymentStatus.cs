@@ -38,9 +38,12 @@ public static class PatientPaymentStatus
         return Pending;
     }
 
-    /// <summary>A referrer can be paid once the patient has paid ANYTHING (full or part).</summary>
-    public static bool IsPayable(string? resolvedStatus) =>
-        resolvedStatus == Paid || resolvedStatus == Partial;
+    /// <summary>
+    /// A referrer is paid once the patient has paid the bill in full (review R5).
+    /// Paying the full cut on any part-payment let a ₹100 advance on a ₹5,000 scan
+    /// release a ₹1,000 commission that then had to be clawed back on cancellation.
+    /// </summary>
+    public static bool IsPayable(string? resolvedStatus) => resolvedStatus == Paid;
 
     /// <summary>
     /// Resolves the patient-payment state for a set of commissions in ONE query.

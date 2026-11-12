@@ -39,6 +39,28 @@ namespace _1Rad.Infrastructure.Services
             var hid = study.HospitalId;
             var linked = false;
 
+            // 0. Study Instance UID handed out by the modality worklist ("2.25.<service id>")
+            //    → that exact scheduled service, its appointment and patient.
+            if (study.AppointmentId == null)
+            {
+                var serviceId = DicomUids.TryToGuid(study.StudyInstanceUID);
+                if (serviceId != null)
+                {
+                    var svc = await _context.AppointmentServices.IgnoreQueryFilters()
+                        .Where(s => s.HospitalId == hid && s.Id == serviceId.Value && s.DeletedAt == null)
+                        .Select(s => new { s.Id, s.AppointmentId, s.Appointment.PatientId })
+                        .FirstOrDefaultAsync(cancellationToken);
+                    if (svc != null)
+                    {
+                        study.AppointmentId = svc.AppointmentId;
+                        study.AppointmentServiceId ??= svc.Id;
+                        if (study.PatientId == null && svc.PatientId != Guid.Empty)
+                            study.PatientId = svc.PatientId;
+                        linked = true;
+                    }
+                }
+            }
+
             // 1. Accession → appointment (and its patient).
             if (study.AppointmentId == null && !string.IsNullOrWhiteSpace(study.AccessionNumber))
             {

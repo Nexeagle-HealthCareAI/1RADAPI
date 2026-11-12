@@ -4,7 +4,6 @@ using Microsoft.AspNetCore.Mvc;
 using _1Rad.Application.Features.Finance.Queries.ExportFinancials;
 using _1Rad.Application.Features.Finance.Queries.GetFinanceStats;
 using _1Rad.Application.Features.Finance.Queries.GetFinancialMatrix;
-using _1Rad.Application.Features.Finance.Commands.SyncLocalStorageInvoices;
 using _1Rad.Domain.Constants;
 
 namespace _1RadAPI.Controllers.Finance;
@@ -27,6 +26,7 @@ public class FinancialReportController : ControllerBase
     }
 
     [HttpGet("stats")]
+    [Authorize(Roles = RoleSets.FinanceReports)]
     public async Task<IActionResult> GetStats()
     {
         var result = await _mediator.Send(new GetFinanceStatsQuery());
@@ -34,6 +34,7 @@ public class FinancialReportController : ControllerBase
     }
 
     [HttpGet("matrix")]
+    [Authorize(Roles = RoleSets.FinanceReports)]
     public async Task<IActionResult> GetMatrix(
         [FromQuery] DateTime? startDate,
         [FromQuery] DateTime? endDate)
@@ -47,6 +48,7 @@ public class FinancialReportController : ControllerBase
     }
 
     [HttpGet("export")]
+    [Authorize(Roles = RoleSets.FinanceReports)]
     public async Task<IActionResult> Export(
         [FromQuery] DateTime? startDate,
         [FromQuery] DateTime? endDate)
@@ -60,14 +62,45 @@ public class FinancialReportController : ControllerBase
         return File(result, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", fileName);
     }
 
-    /// <summary>
-    /// Legacy localStorage sync — kept isolated so it can be deprecated
-    /// independently without touching any other financial controller.
-    /// </summary>
-    [HttpPost("sync")]
-    public async Task<IActionResult> SyncLegacy([FromBody] SyncLocalStorageInvoicesCommand command)
+    // Review B12: the cash view — money that actually moved, by IST day, mode and cashier.
+    [HttpGet("daybook")]
+    [Authorize(Roles = RoleSets.Billing)]
+    public async Task<IActionResult> DayBook([FromQuery] DateTime? from, [FromQuery] DateTime? to)
     {
-        var result = await _mediator.Send(command);
-        return Ok(new { syncedCount = result });
+        var today = _1Rad.Application.Common.IstDateRange.ToIst(DateTime.UtcNow).Date;
+        var result = await _mediator.Send(new _1Rad.Application.Features.Finance.DayBook.GetDayBookQuery(from ?? today, to ?? from ?? today));
+        return Ok(result);
+    }
+
+    [HttpPost("daybook/close")]
+    [Authorize(Roles = RoleSets.Billing)]
+    public async Task<IActionResult> CloseDay([FromBody] CloseDayRequest body)
+    {
+        var result = await _mediator.Send(new _1Rad.Application.Features.Finance.DayBook.CloseDayCommand(body.Date, body.CountedCash, body.Note));
+        return Ok(result);
+    }
+
+    public record CloseDayRequest(DateTime Date, decimal CountedCash, string? Note);
+
+    // Credit notes and refund vouchers issued on bills (raised automatically when a
+    // paid bill is lowered, cancelled or refunded). By IST issue date, or for one bill.
+    [HttpGet("credit-notes")]
+    [Authorize(Roles = RoleSets.Billing)]
+    public async Task<IActionResult> CreditNotes([FromQuery] DateTime? from, [FromQuery] DateTime? to, [FromQuery] Guid? invoiceId)
+    {
+        var result = await _mediator.Send(new _1Rad.Application.Features.Finance.CreditNotes.GetCreditNotesQuery(from, to, invoiceId));
+        return Ok(result);
+    }
+
+    // The month's GSTR-1 working sheet (B2C, exempt, SAC summary, documents issued).
+    [HttpGet("gstr1")]
+    [Authorize(Roles = RoleSets.FinanceReports)]
+    public async Task<IActionResult> Gstr1([FromQuery] string month)
+    {
+        if (string.IsNullOrWhiteSpace(month) || !DateTime.TryParseExact(month, "yyyy-MM",
+                System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var m))
+            return BadRequest(new { error = "month must be YYYY-MM." });
+        var file = await _mediator.Send(new _1Rad.Application.Features.Finance.Gstr1.ExportGstr1Query(m.Year, m.Month));
+        return File(file.Content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", file.FileName);
     }
 }
