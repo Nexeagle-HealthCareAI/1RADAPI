@@ -72,6 +72,11 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<ApprovalRequest> ApprovalRequests => Set<ApprovalRequest>();
     public DbSet<IdempotencyRecord> IdempotencyKeys => Set<IdempotencyRecord>();
     public DbSet<RadAiQuestionLog> RadAiQuestionLogs => Set<RadAiQuestionLog>();
+    public DbSet<CentreAiPolicy> CentreAiPolicies => Set<CentreAiPolicy>();
+    public DbSet<ReportAiUsageLog> ReportAiUsageLogs => Set<ReportAiUsageLog>();
+    public DbSet<ReportKeyImage> ReportKeyImages => Set<ReportKeyImage>();
+    public DbSet<ReportAiDraft> ReportAiDrafts => Set<ReportAiDraft>();
+    public DbSet<ApprovedReportCase> ApprovedReportCases => Set<ApprovedReportCase>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<StudyAnnotation> StudyAnnotations => Set<StudyAnnotation>();
     public DbSet<JobRun> JobRuns => Set<JobRun>();
@@ -147,6 +152,56 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.Model).HasMaxLength(20);
             entity.HasIndex(e => new { e.HospitalId, e.CreatedAt });
             entity.HasIndex(e => new { e.HospitalId, e.Covered });
+        });
+
+        // Report-AI rules per centre and one usage row per AI request (schema 114).
+        modelBuilder.Entity<CentreAiPolicy>(entity =>
+        {
+            entity.ToTable("CentreAiPolicies", "dbo");
+            entity.HasKey(e => e.HospitalId);
+            entity.Property(e => e.HospitalId).ValueGeneratedNever();
+        });
+        modelBuilder.Entity<ReportAiUsageLog>(entity =>
+        {
+            entity.ToTable("ReportAiUsageLogs", "dbo");
+            entity.HasKey(e => e.ReportAiUsageLogId);
+            entity.Property(e => e.Feature).IsRequired().HasMaxLength(40);
+            entity.Property(e => e.Model).HasMaxLength(60);
+            entity.Property(e => e.Outcome).IsRequired().HasMaxLength(12);
+            entity.HasIndex(e => new { e.HospitalId, e.CreatedAt });
+        });
+
+        // Report ↔ image links and AI drafting groundwork (schema 115).
+        modelBuilder.Entity<ReportKeyImage>(entity =>
+        {
+            entity.ToTable("ReportKeyImages", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.SeriesInstanceUid).HasMaxLength(64);
+            entity.Property(e => e.SopInstanceUid).IsRequired().HasMaxLength(64);
+            entity.Property(e => e.Note).HasMaxLength(200);
+            entity.HasIndex(e => new { e.AppointmentId, e.AppointmentServiceId });
+            entity.HasIndex(e => e.ImagingStudyId);
+        });
+        modelBuilder.Entity<ReportAiDraft>(entity =>
+        {
+            entity.ToTable("ReportAiDrafts", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Source).IsRequired().HasMaxLength(12);
+            entity.Property(e => e.Model).HasMaxLength(60);
+            entity.HasIndex(e => new { e.AppointmentId, e.AppointmentServiceId });
+            entity.HasIndex(e => e.ImagingStudyId);
+        });
+        modelBuilder.Entity<ApprovedReportCase>(entity =>
+        {
+            entity.ToTable("ApprovedReportCases", "dbo");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Modality).HasMaxLength(20);
+            entity.Property(e => e.StudyName).HasMaxLength(200);
+            entity.Property(e => e.StudyInstanceUid).HasMaxLength(64);
+            entity.Property(e => e.AiDraftSource).HasMaxLength(12);
+            entity.Property(e => e.SignedContentHash).IsRequired().HasMaxLength(128);
+            entity.HasIndex(e => e.DiagnosticReportId).IsUnique();
+            entity.HasIndex(e => new { e.HospitalId, e.Modality });
         });
 
         // Portal-link versions (revocation). One row per partner, created on first revoke.

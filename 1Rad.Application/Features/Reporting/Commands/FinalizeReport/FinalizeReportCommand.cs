@@ -283,6 +283,14 @@ public class FinalizeReportCommandHandler : IRequestHandler<FinalizeReportComman
                 "This report changed since you opened it — review the latest version before signing.");
         }
 
+        // Keep a de-identified copy for improving the AI — only when the centre
+        // opted in (Admin ▸ AI & privacy); never fails the signature.
+        if (target == ReportStatuses.Final)
+        {
+            try { await ApprovedCaseCapture.CaptureAsync(_context, report, cancellationToken); }
+            catch { /* best effort */ }
+        }
+
         // First time the whole visit is reported → tell the patient (best-effort,
         // off unless Notifications:ReportReady:Enabled; see ReportReadyNotifier).
         if (_reportReady != null && appointment != null &&

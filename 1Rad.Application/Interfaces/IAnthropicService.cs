@@ -29,5 +29,19 @@ public interface IAnthropicService
     /// optimise spend. The system prompt is sent with prompt caching enabled, so
     /// a recurring system prefix is billed at a fraction of the input rate.
     /// </summary>
+    /// <summary>The model id requests go to (for usage logs).</summary>
+    string ModelName => "claude";
+
+    /// <summary>Like <see cref="GenerateAsync"/> but also returns real token usage.</summary>
+    async Task<AiJsonResult> GenerateWithUsageAsync(string systemPrompt, string userPrompt, CancellationToken cancellationToken = default)
+        => new AiJsonResult(await GenerateAsync(systemPrompt, userPrompt, cancellationToken), new AiUsage(0, 0, 0, 0));
+
+    /// <summary>
+    /// Text + pictures (JPEG) in one request; returns the model's JSON text and
+    /// token usage. Used to draft a report from the doctor's key images.
+    /// </summary>
+    Task<AiJsonResult> GenerateJsonWithImagesAsync(string systemPrompt, string userPrompt, IReadOnlyList<byte[]> jpegImages, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("This AI provider does not take images.");
+
     Task<AiJsonResult> GenerateJsonWithUsageAsync(string systemPrompt, string userPrompt, object? responseSchema, CancellationToken cancellationToken = default);
 }

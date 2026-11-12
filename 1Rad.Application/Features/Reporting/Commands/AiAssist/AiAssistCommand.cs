@@ -39,11 +39,13 @@ public class AiAssistCommandHandler : IRequestHandler<AiAssistCommand, AiAssistR
     // hitting free-tier rate limits.
     private readonly IAnthropicService _ai;
     private readonly IApplicationDbContext _context;
+    private readonly IReportAiGate? _gate;
 
-    public AiAssistCommandHandler(IAnthropicService ai, IApplicationDbContext context)
+    public AiAssistCommandHandler(IAnthropicService ai, IApplicationDbContext context, IReportAiGate? gate = null)
     {
         _ai = ai;
         _context = context;
+        _gate = gate;
     }
 
     public async Task<AiAssistResult> Handle(AiAssistCommand request, CancellationToken cancellationToken)
@@ -56,38 +58,29 @@ public class AiAssistCommandHandler : IRequestHandler<AiAssistCommand, AiAssistR
         if (system == null)
             return new AiAssistResult(false, null, $"Unknown AI action '{request.Action}'.");
 
+        var feature = "assist:" + action;
+        var refusal = _gate is null ? null : await _gate.CheckAsync(feature, cancellationToken);
+        if (refusal != null)
+        {
+            await _gate!.RecordAsync(feature, null, null, 0, "refused", cancellationToken);
+            return new AiAssistResult(false, null, refusal);
+        }
+
         // De-identify before the text leaves our server (rule: no PHI to the
-        // provider). Mask the patient's name / PTID / phone, then re-insert them
-        // into the model's response so the radiologist still sees real names.
-        var phi = new List<string?>();
-        if (request.ImagingStudyId is Guid sid && sid != Guid.Empty)
-        {
-            var info = await _context.ImagingStudies
-                .Where(s => s.Id == sid)
-                .Select(s => new { s.PatientName, s.DicomPatientId })
-                .FirstOrDefaultAsync(cancellationToken);
-            if (info != null) { phi.Add(info.PatientName); phi.Add(info.DicomPatientId); }
-        }
-        else if (request.AppointmentId is Guid aid && aid != Guid.Empty)
-        {
-            var info = await _context.Appointments
-                .Where(a => a.AppointmentId == aid)
-                .Select(a => new
-                {
-                    Name = a.PatientName,
-                    Ptid = a.Patient.PatientIdentifier,
-                    Phone = a.Mobile,
-                })
-                .FirstOrDefaultAsync(cancellationToken);
-            if (info != null) { phi.Add(info.Name); phi.Add(info.Ptid); phi.Add(info.Phone); }
-        }
-        var (safeText, phiMap) = PhiRedactor.Redact(request.Text.Trim(), phi);
+        // provider) — the input AND the free-text context, with the same map.
+        // The originals are put back into the model's response.
+        var phi = await PatientPhi.CollectAsync(_context, request.AppointmentId, request.ImagingStudyId, cancellationToken);
+        var combined = (request.Context ?? string.Empty) + "\u0000" + request.Text.Trim();
+        var (safeCombined, phiMap) = PhiRedactor.Redact(combined, phi);
+        var cut = safeCombined.IndexOf('\u0000');
+        var safeContext = cut >= 0 ? safeCombined[..cut] : string.Empty;
+        var safeText = cut >= 0 ? safeCombined[(cut + 1)..] : safeCombined;
 
         var user = new StringBuilder();
-        if (!string.IsNullOrWhiteSpace(request.Context))
+        if (!string.IsNullOrWhiteSpace(safeContext))
         {
             user.AppendLine("=== STUDY CONTEXT ===");
-            user.AppendLine(request.Context!.Trim());
+            user.AppendLine(safeContext.Trim());
             user.AppendLine();
         }
         user.AppendLine("=== INPUT ===");
@@ -98,17 +91,20 @@ public class AiAssistCommandHandler : IRequestHandler<AiAssistCommand, AiAssistR
         string aiText;
         try
         {
-            aiText = await _ai.GenerateAsync(system, user.ToString(), cancellationToken);
+            var res = await _ai.GenerateWithUsageAsync(system, user.ToString(), cancellationToken);
+            aiText = res.Text;
+            if (_gate != null) await _gate.RecordAsync(feature, _ai.ModelName, res.Usage, phiMap.Count, "ok", cancellationToken);
         }
         catch (Exception ex)
         {
+            if (_gate != null) await _gate.RecordAsync(feature, _ai.ModelName, null, phiMap.Count, "error", cancellationToken);
             // Fallback: never block report delivery on a third-party API — the
             // caller keeps the raw text and can format manually. Turn a transient
             // provider rate-limit / overload into a clear, actionable message.
             var busy = ex.Message.Contains("429") || ex.Message.Contains("529") || ex.Message.Contains("503");
             var message = busy
                 ? "The AI assistant is busy right now. Please wait a few seconds and try again."
-                : ex.Message;
+                : "The AI assistant could not answer just now. Your text is unchanged — please try again.";
             return new AiAssistResult(false, null, message);
         }
 

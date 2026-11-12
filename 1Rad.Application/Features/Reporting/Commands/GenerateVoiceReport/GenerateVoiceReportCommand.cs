@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.RegularExpressions;
 using MediatR;
+using _1Rad.Application.Common;
 using _1Rad.Application.Interfaces;
 using Microsoft.EntityFrameworkCore;
 
@@ -31,11 +32,14 @@ public class GenerateVoiceReportCommandHandler
 {
     private readonly IApplicationDbContext _context;
     private readonly IAnthropicService _ai;
+    private readonly IReportAiGate? _gate;
+    private const string Feature = "voice";
 
-    public GenerateVoiceReportCommandHandler(IApplicationDbContext context, IAnthropicService ai)
+    public GenerateVoiceReportCommandHandler(IApplicationDbContext context, IAnthropicService ai, IReportAiGate? gate = null)
     {
         _context = context;
         _ai = ai;
+        _gate = gate;
     }
 
     public async Task<GenerateVoiceReportResult> Handle(GenerateVoiceReportCommand request, CancellationToken cancellationToken)
@@ -43,8 +47,18 @@ public class GenerateVoiceReportCommandHandler
         if (string.IsNullOrWhiteSpace(request.Transcript))
             return new GenerateVoiceReportResult(false, null, "Dictation transcript is empty.");
 
-        // ── Patient context — from the study (PACS-only) or the appointment ─
+        var refusal = _gate is null ? null : await _gate.CheckAsync(Feature, cancellationToken);
+        if (refusal != null)
+        {
+            await _gate!.RecordAsync(Feature, null, null, 0, "refused", cancellationToken);
+            return new GenerateVoiceReportResult(false, null, refusal);
+        }
+
+        // ── Study context — from the study (PACS-only) or the appointment ─
+        // Only what the model needs to write the report (study, modality, age,
+        // sex). Never the patient's name: it used to be sent in clear.
         string patientCtx;
+        Guid? phiAppointmentId = null;
         if (request.ImagingStudyId is Guid studyId && studyId != Guid.Empty)
         {
             // PACS-only: no visit; context comes from the study's demographics.
@@ -52,8 +66,8 @@ public class GenerateVoiceReportCommandHandler
                 .AsNoTracking()
                 .FirstOrDefaultAsync(s => s.Id == studyId, cancellationToken);
             patientCtx = study != null
-                ? $"Patient: {study.PatientName}; Study/Service: {study.StudyDescription} ({study.Modality})."
-                : "Patient context unavailable.";
+                ? $"Study/Service: {study.StudyDescription} ({study.Modality})."
+                : "Study context unavailable.";
         }
         else
         {
@@ -89,9 +103,10 @@ public class GenerateVoiceReportCommandHandler
                 }
             }
 
+            phiAppointmentId = appt?.AppointmentId;
             patientCtx = appt?.Patient != null
-                ? $"Patient: {appt.Patient.FullName}; Age: {appt.Patient.Age}; Gender: {appt.Patient.Gender}; Study/Service: {studyLabel} ({modalityLabel})."
-                : "Patient context unavailable.";
+                ? $"Age: {appt.Patient.Age}; Sex: {appt.Patient.Gender}; Study/Service: {studyLabel} ({modalityLabel})."
+                : "Study context unavailable.";
         }
 
         // ── Template HTML (the EXACT structure to preserve) ──────────────
@@ -138,15 +153,20 @@ public class GenerateVoiceReportCommandHandler
             "   untouched — the editor substitutes them at render time.\n" +
             "7. Return ONLY the completed HTML. No prose before or after.";
 
+        // Mask anything identifying in the dictation itself ("…for Pooja
+        // Kumari, mobile 98…") and put it back into the returned report.
+        var phi = await PatientPhi.CollectAsync(_context, phiAppointmentId, request.ImagingStudyId, cancellationToken);
+        var (safeTranscript, phiMap) = PhiRedactor.Redact(request.Transcript.Trim(), phi);
+
         var user = new StringBuilder();
-        user.AppendLine("=== PATIENT CONTEXT ===");
+        user.AppendLine("=== STUDY CONTEXT ===");
         user.AppendLine(patientCtx);
         user.AppendLine();
         user.AppendLine("=== REPORT TEMPLATE (HTML — preserve this exact structure) ===");
         user.AppendLine(templateHtml);
         user.AppendLine();
         user.AppendLine("=== RADIOLOGIST DICTATION ===");
-        user.AppendLine(request.Transcript.Trim());
+        user.AppendLine(safeTranscript);
         user.AppendLine();
         user.AppendLine("Return the completed HTML, preserving every tag and style from the template.");
 
@@ -154,16 +174,39 @@ public class GenerateVoiceReportCommandHandler
         string aiText;
         try
         {
-            aiText = await _ai.GenerateAsync(system, user.ToString(), cancellationToken);
+            var res = await _ai.GenerateWithUsageAsync(system, user.ToString(), cancellationToken);
+            aiText = res.Text;
+            if (_gate != null) await _gate.RecordAsync(Feature, _ai.ModelName, res.Usage, phiMap.Count, "ok", cancellationToken);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            return new GenerateVoiceReportResult(false, null, ex.Message);
+            if (_gate != null) await _gate.RecordAsync(Feature, _ai.ModelName, null, phiMap.Count, "error", cancellationToken);
+            return new GenerateVoiceReportResult(false, null, "The AI could not draft the report just now. Your dictation is kept — please try again.");
         }
 
-        var html = ExtractHtml(aiText);
+        var html = PhiRedactor.Restore(ExtractHtml(aiText), phiMap);
         if (string.IsNullOrWhiteSpace(html))
             return new GenerateVoiceReportResult(false, null, "The AI response did not contain a valid HTML report.");
+
+        // Keep the draft so the signed report can later be compared with it.
+        try
+        {
+            var uc = _context.UserContext;
+            var isStudy = request.ImagingStudyId is Guid vs && vs != Guid.Empty;
+            _context.ReportAiDrafts.Add(new Domain.Entities.ReportAiDraft
+            {
+                HospitalId = uc.HospitalId,
+                AppointmentId = isStudy ? null : phiAppointmentId,
+                AppointmentServiceId = isStudy ? null : request.AppointmentServiceId,
+                ImagingStudyId = isStudy ? request.ImagingStudyId : null,
+                Source = "voice",
+                Model = _ai.ModelName,
+                Findings = html,
+                CreatedByUserId = uc.UserId == Guid.Empty ? null : uc.UserId,
+            });
+            await _context.SaveChangesAsync(cancellationToken);
+        }
+        catch { /* best effort */ }
 
         return new GenerateVoiceReportResult(true, html, null);
     }

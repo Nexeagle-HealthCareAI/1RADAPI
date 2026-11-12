@@ -30,6 +30,7 @@ public static class DependencyInjection
         
         services.AddHttpClient<ISmsService, WhatsAppSmsService>();
         services.AddHttpClient<IAnthropicService, AnthropicService>();
+        services.AddScoped<IKeyImageRenderer, KeyImageRenderer>();
         // Gemini powers the report editor's AI co-pilot. 20s timeout so a slow
         // provider can never hang report delivery (the handler falls back to the
         // raw text and the radiologist formats manually).

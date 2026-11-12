@@ -15,6 +15,9 @@ using _1Rad.Application.Features.Reporting.Queries.GetReportsDelta;
 using _1Rad.Application.Features.Reporting.Queries.BuildTermFrequency;
 using _1Rad.Application.Common.Exceptions;
 using _1Rad.Application.Features.Reporting.Queries.GetTemplates;
+using _1Rad.Application.Features.Reporting.AiPolicy;
+using _1Rad.Application.Features.Reporting.ImageLinks;
+using _1Rad.Application.Common;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -50,7 +53,70 @@ namespace _1RadAPI.Controllers
             _config = config;
         }
 
-        public record GrammarCheckRequest(string Text, string? Language);
+        public record GrammarCheckRequest(string Text, string? Language, Guid? AppointmentId = null, Guid? ImagingStudyId = null);
+
+        // ── Report-AI rules for this centre (Admin ▸ AI & privacy) ──────────
+        /// <summary>The centre's AI rules and this month's use. Any reporting user
+        /// may read them (the editor needs "cloud dictation allowed?").</summary>
+        [HttpGet("ai-policy")]
+        public async Task<IActionResult> GetAiPolicy(CancellationToken ct)
+            => Ok(new { success = true, data = await _mediator.Send(new GetAiPolicyQuery(), ct) });
+
+        [HttpPut("ai-policy")]
+        [Authorize(Roles = RoleConstants.AdminDoctor + "," + RoleConstants.AdminOperator)]
+        public async Task<IActionResult> SetAiPolicy([FromBody] SetAiPolicyCommand body, CancellationToken ct)
+        {
+            try { return Ok(new { success = true, data = await _mediator.Send(body, ct) }); }
+            catch (ArgumentException ex) { return BadRequest(new { success = false, error = ex.Message }); }
+        }
+
+        // ── Key images and AI drafting from images ─────────────────────────
+        public record KeyImageBody(Guid? AppointmentId, Guid? AppointmentServiceId, Guid? ImagingStudyId,
+            Guid? StudyAssetId, string? SeriesInstanceUid, string? SopInstanceUid, int? FrameIndex, int? SliceIndex, string? Note);
+        public record ReportOwnerBody(Guid? AppointmentId, Guid? AppointmentServiceId, Guid? ImagingStudyId);
+
+        [HttpGet("key-images")]
+        public async Task<IActionResult> GetKeyImages([FromQuery] Guid? appointmentId, [FromQuery] Guid? serviceId, [FromQuery] Guid? studyId, CancellationToken ct)
+            => Ok(new { success = true, data = await _mediator.Send(new GetKeyImagesQuery(new ReportOwner(appointmentId, serviceId, studyId)), ct) });
+
+        [HttpPost("key-images")]
+        [Authorize(Roles = RoleConstants.AdminDoctor + "," + RoleConstants.Doctor + "," + RoleConstants.Technician)]
+        public async Task<IActionResult> AddKeyImage([FromBody] KeyImageBody b, CancellationToken ct)
+        {
+            try
+            {
+                var dto = await _mediator.Send(new AddKeyImageCommand(new ReportOwner(b.AppointmentId, b.AppointmentServiceId, b.ImagingStudyId),
+                    b.StudyAssetId, b.SeriesInstanceUid, b.SopInstanceUid ?? string.Empty, b.FrameIndex, b.SliceIndex, b.Note), ct);
+                return Ok(new { success = true, data = dto });
+            }
+            catch (ArgumentException ex) { return BadRequest(new { success = false, error = ex.Message }); }
+            catch (KeyNotFoundException ex) { return NotFound(new { success = false, error = ex.Message }); }
+        }
+
+        [HttpDelete("key-images/{id:guid}")]
+        [Authorize(Roles = RoleConstants.AdminDoctor + "," + RoleConstants.Doctor + "," + RoleConstants.Technician)]
+        public async Task<IActionResult> RemoveKeyImage(Guid id, CancellationToken ct)
+            => await _mediator.Send(new RemoveKeyImageCommand(id), ct)
+                ? Ok(new { success = true })
+                : NotFound(new { success = false, error = "Key image not found." });
+
+        /// <summary>Draft findings + impression from the key images. Draft only — the doctor reviews, edits and signs.</summary>
+        [HttpPost("vision-draft")]
+        [Authorize(Roles = RoleConstants.AdminDoctor + "," + RoleConstants.Doctor)]
+        public async Task<IActionResult> VisionDraft([FromBody] ReportOwnerBody b, CancellationToken ct)
+        {
+            var res = await _mediator.Send(new VisionDraftCommand(new ReportOwner(b.AppointmentId, b.AppointmentServiceId, b.ImagingStudyId)), ct);
+            return Ok(new { success = res.Success, data = res, error = res.Error });
+        }
+
+        [HttpPost("ai-drafts/{id:guid}/applied")]
+        public async Task<IActionResult> MarkDraftApplied(Guid id, CancellationToken ct)
+            => Ok(new { success = await _mediator.Send(new MarkAiDraftAppliedCommand(id), ct) });
+
+        [HttpGet("ai-usage")]
+        [Authorize(Roles = RoleConstants.AdminDoctor + "," + RoleConstants.AdminOperator)]
+        public async Task<IActionResult> GetAiUsage([FromQuery] int days = 30, CancellationToken ct = default)
+            => Ok(new { success = true, data = await _mediator.Send(new GetReportAiUsageQuery(days), ct) });
 
         /// <summary>
         /// Grammar/style check. Report text (potentially PHI) stays on-network —
@@ -64,7 +130,8 @@ namespace _1RadAPI.Controllers
         /// editor's existing parser is unchanged.
         /// </summary>
         [HttpPost("grammar-check")]
-        public async Task<IActionResult> GrammarCheck([FromBody] GrammarCheckRequest body, CancellationToken cancellationToken)
+        public async Task<IActionResult> GrammarCheck([FromBody] GrammarCheckRequest body,
+            [FromServices] IReportAiGate gate, [FromServices] IApplicationDbContext db, CancellationToken cancellationToken)
         {
             var text = body?.Text ?? string.Empty;
             if (string.IsNullOrWhiteSpace(text))
@@ -81,20 +148,39 @@ namespace _1RadAPI.Controllers
                     var json = await _languageTool.CheckAsync(text, language, cancellationToken);
                     return Content(json, "application/json");
                 }
-                // LLM fallback is opt-out: set LanguageTool:GrammarLlmFallback=false to
-                // guarantee grammar never uses the LLM (e.g. when relying solely on the
-                // embedded LanguageTool engine).
-                var allowLlm = _config.GetValue<bool?>("LanguageTool:GrammarLlmFallback") ?? true;
+                // LLM fallback is OPT-IN (LanguageTool:GrammarLlmFallback=true): the
+                // whole report would otherwise leave the server just for a grammar
+                // check. When on, it goes through the centre's AI rules and the same
+                // identifier masking as every other AI feature.
+                var allowLlm = _config.GetValue<bool?>("LanguageTool:GrammarLlmFallback") ?? false;
                 if (allowLlm && _anthropic.IsConfigured)
                 {
-                    var json = await BuildLlmGrammarMatchesAsync(text, cancellationToken);
-                    return Content(json, "application/json");
+                    var refusal = await gate.CheckAsync("grammar", cancellationToken);
+                    if (refusal != null)
+                    {
+                        await gate.RecordAsync("grammar", null, null, 0, "refused", cancellationToken);
+                        return Content("{\"matches\":[]}", "application/json");
+                    }
+                    var phi = await PatientPhi.CollectAsync(db, body?.AppointmentId, body?.ImagingStudyId, cancellationToken);
+                    var (safe, map) = PhiRedactor.Redact(text, phi);
+                    try
+                    {
+                        var json = await BuildLlmGrammarMatchesAsync(text, safe, map, cancellationToken);
+                        await gate.RecordAsync("grammar", _anthropic.ModelName, null, map.Count, "ok", cancellationToken);
+                        return Content(json, "application/json");
+                    }
+                    catch
+                    {
+                        await gate.RecordAsync("grammar", _anthropic.ModelName, null, map.Count, "error", cancellationToken);
+                        throw;
+                    }
                 }
                 return StatusCode(503, new { success = false, code = "GRAMMAR_DISABLED", error = "Grammar service is not configured on this server." });
             }
             catch (Exception ex)
             {
-                return StatusCode(502, new { success = false, code = "GRAMMAR_UPSTREAM", error = ex.Message });
+                _ = ex;
+                return StatusCode(502, new { success = false, code = "GRAMMAR_UPSTREAM", error = "The grammar check is not available right now." });
             }
         }
 
@@ -103,7 +189,7 @@ namespace _1RadAPI.Controllers
         // offset in the report text and emit LanguageTool-shaped matches. Offsets are
         // computed against the SAME plain text the editor sent, so the editor's
         // offset map lines up.
-        private async Task<string> BuildLlmGrammarMatchesAsync(string text, CancellationToken cancellationToken)
+        private async Task<string> BuildLlmGrammarMatchesAsync(string text, string safeText, Dictionary<string, string> phiMap, CancellationToken cancellationToken)
         {
             const string sys =
                 "You are a meticulous proofreader for radiology reports. Identify ONLY genuine spelling " +
@@ -112,7 +198,7 @@ namespace _1RadAPI.Controllers
                 "elliptical style typical of radiology reports (sentence fragments like 'No acute " +
                 "abnormality.' are correct). Be conservative — when in doubt, do not flag.";
             var user =
-                "Report text:\n\"\"\"\n" + text + "\n\"\"\"\n\n" +
+                "Report text:\n\"\"\"\n" + safeText + "\n\"\"\"\n\n" +
                 "Return a SINGLE JSON object: {\"issues\":[{\"text\":\"<exact minimal substring copied " +
                 "verbatim from the report that contains the error>\",\"suggestion\":\"<the corrected " +
                 "substring>\",\"message\":\"<short reason>\",\"type\":\"spelling\"|\"grammar\"}]}. " +
@@ -133,9 +219,9 @@ namespace _1RadAPI.Controllers
                 int searchFrom = 0;
                 foreach (var issue in issues.EnumerateArray())
                 {
-                    var bad = issue.TryGetProperty("text", out var tEl) ? tEl.GetString() : null;
+                    var bad = issue.TryGetProperty("text", out var tEl) ? PhiRedactor.Restore(tEl.GetString(), phiMap) : null;
                     if (string.IsNullOrEmpty(bad)) continue;
-                    var suggestion = issue.TryGetProperty("suggestion", out var sEl) ? (sEl.GetString() ?? "") : "";
+                    var suggestion = issue.TryGetProperty("suggestion", out var sEl) ? PhiRedactor.Restore(sEl.GetString() ?? "", phiMap) : "";
                     var message = issue.TryGetProperty("message", out var mEl) ? (mEl.GetString() ?? "") : "";
                     var type = issue.TryGetProperty("type", out var tyEl) ? (tyEl.GetString() ?? "grammar") : "grammar";
 
