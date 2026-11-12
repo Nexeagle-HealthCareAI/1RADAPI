@@ -9,6 +9,6 @@ public record ApplyLeaveCommand(
     string LeaveType,
     string FromDate,  // "YYYY-MM-DD"
     string ToDate,    // "YYYY-MM-DD"
-    int Days,
+    int Days,         // ignored: the server counts working days (Nov 2026)
     string? Reason
 ) : IRequest<(Guid LeaveRequestId, string? Error)>;

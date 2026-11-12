@@ -64,6 +64,9 @@ public interface IApplicationDbContext
     DbSet<CreditNote> CreditNotes { get; }
     DbSet<HospitalBillingSettings> HospitalBillingSettings { get; }
     DbSet<HospitalSettingsLink> HospitalSettingsLinks { get; }
+    DbSet<HospitalWorkCalendar> HospitalWorkCalendars { get; }
+    DbSet<HospitalHoliday> HospitalHolidays { get; }
+    DbSet<StaffLeaveLedgerEntry> StaffLeaveLedger { get; }
     DbSet<ReferrerLinkVersion> ReferrerLinkVersions { get; }
     DbSet<ReferralBookingRequest> ReferralBookingRequests { get; }
     IUserContext UserContext { get; }

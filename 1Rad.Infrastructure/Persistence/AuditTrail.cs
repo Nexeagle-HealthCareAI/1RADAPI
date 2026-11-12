@@ -27,6 +27,7 @@ internal static class AuditTrail
         typeof(CustomRole), typeof(CustomRolePermission),
         typeof(StaffMember), typeof(SalaryRevision), typeof(SalaryDisbursement),
         typeof(StaffLeaveRequest), typeof(HospitalLeavePolicy),
+        typeof(HospitalWorkCalendar), typeof(HospitalHoliday), typeof(StaffLeaveLedgerEntry),
         typeof(HospitalSubscription), typeof(SubscriptionPaymentRequest),
         typeof(ImagingStudy), typeof(PrescriptionProtocol),
     };

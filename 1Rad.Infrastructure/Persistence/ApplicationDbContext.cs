@@ -87,6 +87,9 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<CreditNote> CreditNotes => Set<CreditNote>();
     public DbSet<HospitalBillingSettings> HospitalBillingSettings => Set<HospitalBillingSettings>();
     public DbSet<HospitalSettingsLink> HospitalSettingsLinks => Set<HospitalSettingsLink>();
+    public DbSet<HospitalWorkCalendar> HospitalWorkCalendars => Set<HospitalWorkCalendar>();
+    public DbSet<HospitalHoliday> HospitalHolidays => Set<HospitalHoliday>();
+    public DbSet<StaffLeaveLedgerEntry> StaffLeaveLedger => Set<StaffLeaveLedgerEntry>();
     public DbSet<ReferrerLinkVersion> ReferrerLinkVersions => Set<ReferrerLinkVersion>();
     public DbSet<ReferralBookingRequest> ReferralBookingRequests => Set<ReferralBookingRequest>();
 
@@ -1196,6 +1199,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.EmployeeCode).HasMaxLength(20);
             entity.Property(e => e.PhotoUrl).HasMaxLength(2000);
             entity.Property(e => e.PhotoPath).HasMaxLength(500);
+            entity.Property(e => e.WeeklyOff).HasMaxLength(30);
             entity.HasIndex(e => new { e.HospitalId, e.EmployeeCode }).IsUnique().HasFilter("[EmployeeCode] IS NOT NULL");
             entity.Property(e => e.FullName).IsRequired().HasMaxLength(200);
             entity.Property(e => e.Email).HasMaxLength(200);
@@ -1298,6 +1302,33 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
 
             entity.HasIndex(e => new { e.StaffId, e.Month }).IsUnique();
             entity.HasIndex(e => e.HospitalId);
+        });
+
+        // Working days, holidays and the leave ledger (migration 121).
+        modelBuilder.Entity<HospitalWorkCalendar>(entity =>
+        {
+            entity.ToTable("HospitalWorkCalendars", "dbo");
+            entity.HasKey(e => e.HospitalId);
+            entity.Property(e => e.WeeklyOff).IsRequired().HasMaxLength(30);
+            entity.Property(e => e.SaturdaysOff).HasMaxLength(10);
+        });
+        modelBuilder.Entity<HospitalHoliday>(entity =>
+        {
+            entity.ToTable("HospitalHolidays", "dbo");
+            entity.HasKey(e => e.HolidayId);
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(100);
+            entity.HasIndex(e => new { e.HospitalId, e.HolidayDate }).IsUnique();
+        });
+        modelBuilder.Entity<StaffLeaveLedgerEntry>(entity =>
+        {
+            entity.ToTable("StaffLeaveLedger", "dbo");
+            entity.HasKey(e => e.EntryId);
+            entity.Property(e => e.LeaveType).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.Kind).IsRequired().HasMaxLength(20);
+            entity.Property(e => e.Days).HasPrecision(6, 2);
+            entity.Property(e => e.Note).HasMaxLength(300);
+            entity.HasOne(e => e.StaffMember).WithMany().HasForeignKey(e => e.StaffId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(e => new { e.HospitalId, e.LeaveYear, e.StaffId });
         });
 
         // HospitalLeavePolicy Configuration
