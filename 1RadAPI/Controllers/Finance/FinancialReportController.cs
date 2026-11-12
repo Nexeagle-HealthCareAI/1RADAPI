@@ -95,6 +95,15 @@ public class FinancialReportController : ControllerBase
         return Ok(result);
     }
 
+    // Money ▸ Daily check: does the day add up (visits, bills, money, cash book)? Read-only.
+    [HttpGet("daily-check")]
+    [Authorize(Roles = RoleSets.FinanceReports)]
+    public async Task<IActionResult> DailyCheck([FromQuery] DateTime? date)
+    {
+        var today = _1Rad.Application.Common.IstDateRange.ToIst(DateTime.UtcNow).Date;
+        return Ok(await _mediator.Send(new _1Rad.Application.Features.Finance.DailyCheck.GetDailyCheckQuery(date ?? today)));
+    }
+
     // Money ▸ Overview, "the centre at a glance": today against yesterday and last week,
     // the month so far against the month before, by modality, by referrer, what needs you.
     // month = "YYYY-MM" (default this month).
