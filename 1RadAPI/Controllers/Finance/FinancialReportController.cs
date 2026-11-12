@@ -114,6 +114,18 @@ public class FinancialReportController : ControllerBase
         return Ok(result);
     }
 
+    // Money ▸ Reports: the month pack for the CA (summary + 7 sheets).
+    [HttpGet("month-pack")]
+    [Authorize(Roles = RoleSets.FinanceReports)]
+    public async Task<IActionResult> MonthPack([FromQuery] string month)
+    {
+        if (string.IsNullOrWhiteSpace(month) || !DateTime.TryParseExact(month, "yyyy-MM",
+                System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var m))
+            return BadRequest(new { error = "month must be YYYY-MM." });
+        var file = await _mediator.Send(new _1Rad.Application.Features.Finance.MonthPack.ExportMonthPackQuery(m.Year, m.Month));
+        return File(file.Content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", file.FileName);
+    }
+
     // The month's GSTR-1 working sheet (B2C, exempt, SAC summary, documents issued).
     [HttpGet("gstr1")]
     [Authorize(Roles = RoleSets.FinanceReports)]
