@@ -86,6 +86,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<ReferralPortalView> ReferralPortalViews => Set<ReferralPortalView>();
     public DbSet<CreditNote> CreditNotes => Set<CreditNote>();
     public DbSet<HospitalBillingSettings> HospitalBillingSettings => Set<HospitalBillingSettings>();
+    public DbSet<HospitalSettingsLink> HospitalSettingsLinks => Set<HospitalSettingsLink>();
     public DbSet<ReferrerLinkVersion> ReferrerLinkVersions => Set<ReferrerLinkVersion>();
     public DbSet<ReferralBookingRequest> ReferralBookingRequests => Set<ReferralBookingRequest>();
 
@@ -512,6 +513,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             // Migration 102 (review B1): two collections on one bill can't both write PaidAmount.
             entity.Property(e => e.RowVersion).IsRowVersion();
             entity.Property(e => e.InvoiceId).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.DiscountReason).HasMaxLength(200);
             entity.Property(e => e.PatientName).IsRequired().HasMaxLength(255); 
             entity.Property(e => e.GrossAmount).HasPrecision(18, 2);
             entity.Property(e => e.DiscountAmount).HasPrecision(18, 2);
@@ -606,6 +608,8 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.PaymentMethod).IsRequired().HasMaxLength(50);
             entity.Property(e => e.Kind).IsRequired().HasMaxLength(20).HasDefaultValue(PaymentKinds.Payment);
             entity.Property(e => e.Reason).HasMaxLength(500);
+            entity.Property(e => e.Reference).HasMaxLength(60);
+            entity.Property(e => e.ReceiptNumber).HasMaxLength(20);
 
             entity.HasOne(e => e.Invoice)
                 .WithMany(i => i.Payments)
@@ -632,8 +636,13 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.ToTable("DayCloses", "dbo");
             entity.HasKey(e => e.Id);
             foreach (var p in new[] { nameof(DayClose.ExpectedCash), nameof(DayClose.CountedCash), nameof(DayClose.Variance),
-                                      nameof(DayClose.ExpectedUpi), nameof(DayClose.ExpectedCard), nameof(DayClose.ExpectedOther) })
+                                      nameof(DayClose.ExpectedUpi), nameof(DayClose.ExpectedCard), nameof(DayClose.ExpectedOther),
+                                      nameof(DayClose.OpeningFloat), nameof(DayClose.ExpectedBank), nameof(DayClose.FloatKept),
+                                      nameof(DayClose.HandedOver) })
                 entity.Property(p).HasPrecision(18, 2);
+            entity.Property(e => e.NoteCounts).HasMaxLength(400);
+            entity.Property(e => e.DifferenceReason).HasMaxLength(120);
+            entity.Property(e => e.HandedTo).HasMaxLength(100);
             entity.Property(e => e.Note).HasMaxLength(500);
             entity.Property(e => e.ClosedByName).HasMaxLength(200);
             entity.HasIndex(e => new { e.HospitalId, e.BusinessDate }).IsUnique();
@@ -675,8 +684,17 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.TdsProfessionalRate).HasPrecision(5, 2);
             entity.Property(e => e.TdsNoPanRate).HasPrecision(5, 2);
             entity.Property(e => e.FrontDeskDiscountLimitPercent).HasPrecision(5, 2);
+            entity.Property(e => e.AccountantDiscountLimitPercent).HasPrecision(5, 2);
             entity.Property(e => e.TdsCommissionThreshold).HasPrecision(18, 2);
             entity.Property(e => e.TdsProfessionalThreshold).HasPrecision(18, 2);
+        });
+
+        // Owner board: a centre following another centre's setup (migration 120).
+        modelBuilder.Entity<HospitalSettingsLink>(entity =>
+        {
+            entity.ToTable("HospitalSettingsLinks", "dbo");
+            entity.HasKey(e => e.HospitalId);
+            entity.HasIndex(e => e.SourceHospitalId);
         });
         modelBuilder.Entity<CreditNote>(entity =>
         {

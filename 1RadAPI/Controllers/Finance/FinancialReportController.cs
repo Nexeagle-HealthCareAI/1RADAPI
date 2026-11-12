@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Configuration;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -76,11 +77,60 @@ public class FinancialReportController : ControllerBase
     [Authorize(Roles = RoleSets.Billing)]
     public async Task<IActionResult> CloseDay([FromBody] CloseDayRequest body)
     {
-        var result = await _mediator.Send(new _1Rad.Application.Features.Finance.DayBook.CloseDayCommand(body.Date, body.CountedCash, body.Note));
+        var result = await _mediator.Send(new _1Rad.Application.Features.Finance.DayBook.CloseDayCommand(body.Date, body.CountedCash, body.Note,
+            body.NoteCounts, body.DifferenceReason, body.FloatKept, body.HandedTo));
         return Ok(result);
     }
 
-    public record CloseDayRequest(DateTime Date, decimal CountedCash, string? Note);
+    public record CloseDayRequest(DateTime Date, decimal CountedCash, string? Note,
+        Dictionary<string, int>? NoteCounts = null, string? DifferenceReason = null, decimal? FloatKept = null, string? HandedTo = null);
+
+    // Money ▸ Overview: four numbers that add up, the cash view, tests, days, what needs the owner.
+    [HttpGet("overview")]
+    [Authorize(Roles = RoleSets.FinanceReports)]
+    public async Task<IActionResult> Overview([FromQuery] DateTime? from, [FromQuery] DateTime? to)
+    {
+        var today = _1Rad.Application.Common.IstDateRange.ToIst(DateTime.UtcNow).Date;
+        var result = await _mediator.Send(new _1Rad.Application.Features.Finance.Overview.GetMoneyOverviewQuery(from ?? today, to ?? from ?? today));
+        return Ok(result);
+    }
+
+    // Money ▸ Daily check: does the day add up (visits, bills, money, cash book)? Read-only.
+    [HttpGet("daily-check")]
+    [Authorize(Roles = RoleSets.FinanceReports)]
+    public async Task<IActionResult> DailyCheck([FromQuery] DateTime? date)
+    {
+        var today = _1Rad.Application.Common.IstDateRange.ToIst(DateTime.UtcNow).Date;
+        return Ok(await _mediator.Send(new _1Rad.Application.Features.Finance.DailyCheck.GetDailyCheckQuery(date ?? today)));
+    }
+
+    // Money ▸ Overview, "the centre at a glance": today against yesterday and last week,
+    // the month so far against the month before, by modality, by referrer, what needs you.
+    // month = "YYYY-MM" (default this month).
+    [HttpGet("glance")]
+    [Authorize(Roles = RoleSets.FinanceReports)]
+    public async Task<IActionResult> Glance([FromQuery] string? month, [FromServices] IConfiguration configuration)
+    {
+        DateTime? m = null;
+        if (!string.IsNullOrWhiteSpace(month))
+        {
+            if (!DateTime.TryParseExact(month + "-01", "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var parsed))
+                return BadRequest(new { message = "month must look like 2026-11." });
+            m = parsed;
+        }
+        var late = configuration.GetValue<int?>("Worklist:OverdueThresholdMinutes") ?? 180;
+        return Ok(await _mediator.Send(new _1Rad.Application.Features.Finance.Overview.GetCentreGlanceQuery(m, late)));
+    }
+
+    // Money ▸ Cash book: the last N days, closed or not, and what moved each day.
+    [HttpGet("daybook/days")]
+    [Authorize(Roles = RoleSets.Billing)]
+    public async Task<IActionResult> DayStrip([FromQuery] DateTime? to, [FromQuery] int days = 7)
+    {
+        var today = _1Rad.Application.Common.IstDateRange.ToIst(DateTime.UtcNow).Date;
+        var result = await _mediator.Send(new _1Rad.Application.Features.Finance.DayBook.GetDayStripQuery(to ?? today, days));
+        return Ok(result);
+    }
 
     // Credit notes and refund vouchers issued on bills (raised automatically when a
     // paid bill is lowered, cancelled or refunded). By IST issue date, or for one bill.
@@ -90,6 +140,18 @@ public class FinancialReportController : ControllerBase
     {
         var result = await _mediator.Send(new _1Rad.Application.Features.Finance.CreditNotes.GetCreditNotesQuery(from, to, invoiceId));
         return Ok(result);
+    }
+
+    // Money ▸ Reports: the month pack for the CA (summary + 7 sheets).
+    [HttpGet("month-pack")]
+    [Authorize(Roles = RoleSets.FinanceReports)]
+    public async Task<IActionResult> MonthPack([FromQuery] string month)
+    {
+        if (string.IsNullOrWhiteSpace(month) || !DateTime.TryParseExact(month, "yyyy-MM",
+                System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var m))
+            return BadRequest(new { error = "month must be YYYY-MM." });
+        var file = await _mediator.Send(new _1Rad.Application.Features.Finance.MonthPack.ExportMonthPackQuery(m.Year, m.Month));
+        return File(file.Content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", file.FileName);
     }
 
     // The month's GSTR-1 working sheet (B2C, exempt, SAC summary, documents issued).

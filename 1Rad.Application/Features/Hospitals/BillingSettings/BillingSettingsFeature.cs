@@ -18,7 +18,8 @@ public record BillingSettingsDto(
     bool GstEnabled, bool CreditNotesEnabled, bool TdsEnabled, string DefaultTdsCategory,
     decimal TdsCommissionRate, decimal TdsCommissionThreshold, decimal TdsProfessionalRate, decimal TdsProfessionalThreshold,
     decimal TdsNoPanRate, decimal FrontDeskDiscountLimitPercent,
-    bool Customised, DateTime? UpdatedAt, string? UpdatedBy, BillingSettingsDefaults Defaults);
+    bool Customised, DateTime? UpdatedAt, string? UpdatedBy, BillingSettingsDefaults Defaults,
+    decimal? AccountantDiscountLimitPercent = null, bool DiscountReasonRequired = false, bool PartnerPayWhenBilled = true);
 
 public record BillingSettingsDefaults(
     decimal TdsCommissionRate, decimal TdsCommissionThreshold, decimal TdsProfessionalRate, decimal TdsProfessionalThreshold,
@@ -30,7 +31,12 @@ public record GetBillingSettingsQuery(Guid HospitalId) : IRequest<BillingSetting
 public record UpdateBillingSettingsCommand(
     Guid HospitalId, bool GstEnabled, bool CreditNotesEnabled, bool TdsEnabled, string? DefaultTdsCategory,
     decimal? TdsCommissionRate, decimal? TdsCommissionThreshold, decimal? TdsProfessionalRate, decimal? TdsProfessionalThreshold,
-    decimal? TdsNoPanRate, decimal? FrontDeskDiscountLimitPercent) : IRequest<BillingSettingsDto>;
+    decimal? TdsNoPanRate, decimal? FrontDeskDiscountLimitPercent,
+    // Migration 116. Optional so the older Tax & billing screen, which doesn't send
+    // them, leaves them as they are: a value sets the accountant limit,
+    // ClearAccountantLimit = true removes it (no limit), null keeps it.
+    decimal? AccountantDiscountLimitPercent = null, bool? ClearAccountantLimit = null,
+    bool? DiscountReasonRequired = null, bool? PartnerPayWhenBilled = null) : IRequest<BillingSettingsDto>;
 
 public class BillingSettingsHandlers :
     IRequestHandler<GetBillingSettingsQuery, BillingSettingsDto>,
@@ -58,6 +64,8 @@ public class BillingSettingsHandlers :
         Amount(c.TdsProfessionalThreshold, "Professional fees yearly limit");
         if (c.FrontDeskDiscountLimitPercent is < 0 or > 100)
             throw new ValidationException("The front-desk discount limit must be between 0% and 100%.");
+        if (c.AccountantDiscountLimitPercent is < 0 or > 100)
+            throw new ValidationException("The accountant discount limit must be between 0% and 100%.");
 
         var row = await _db.HospitalBillingSettings.IgnoreQueryFilters().FirstOrDefaultAsync(s => s.HospitalId == c.HospitalId, ct);
         if (row == null)
@@ -75,9 +83,15 @@ public class BillingSettingsHandlers :
         row.TdsProfessionalThreshold = c.TdsProfessionalThreshold;
         row.TdsNoPanRate = c.TdsNoPanRate;
         row.FrontDeskDiscountLimitPercent = c.FrontDeskDiscountLimitPercent;
+        if (c.AccountantDiscountLimitPercent.HasValue) row.AccountantDiscountLimitPercent = c.AccountantDiscountLimitPercent;
+        else if (c.ClearAccountantLimit == true) row.AccountantDiscountLimitPercent = null;
+        if (c.DiscountReasonRequired.HasValue) row.DiscountReasonRequired = c.DiscountReasonRequired.Value;
+        if (c.PartnerPayWhenBilled.HasValue) row.PartnerPayWhenBilled = c.PartnerPayWhenBilled.Value;
         row.UpdatedByUserId = _db.UserContext.UserId == Guid.Empty ? null : _db.UserContext.UserId;
         row.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
+        // Centres that follow this one (owner board, migration 120) get the same rules.
+        await _1Rad.Application.Features.Owner.ChainSetup.PushBillingAsync(_db, c.HospitalId, ct);
         return await LoadAsync(c.HospitalId, ct);
     }
 
@@ -96,7 +110,8 @@ public class BillingSettingsHandlers :
             e.TdsNoPanRate, e.FrontDeskDiscountLimitPercent,
             row != null, row?.UpdatedAt, by,
             new BillingSettingsDefaults(d.TdsCommissionRate, d.TdsCommissionThreshold, d.TdsProfessionalRate, d.TdsProfessionalThreshold,
-                d.TdsNoPanRate, d.FrontDeskDiscountLimitPercent));
+                d.TdsNoPanRate, d.FrontDeskDiscountLimitPercent),
+            e.AccountantDiscountLimitPercent, e.DiscountReasonRequired, e.PartnerPayWhenBilled);
     }
 
     private static void Rate(decimal? v, string what)

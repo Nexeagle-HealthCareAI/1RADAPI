@@ -16,6 +16,10 @@ public record GenerateInvoiceCommand : IRequest<Guid>
     public decimal ReferrerDiscount { get; init; }
     public decimal? CommissionAmount { get; init; }
     public List<InvoiceItemDto> Items { get; init; } = new();
+    // Duplicate guard (Nov 2026): a free line (not from a visit) whose test this patient
+    // already has on a live bill today is refused with DUPLICATE_BILL_LINE unless the
+    // person confirms it really is a second one.
+    public bool AllowRepeat { get; init; }
 }
 
 // Multi-service rollout (batch-2 fix). AppointmentServiceId is optional —
@@ -87,6 +91,30 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
             if (patient.HospitalId != hospitalId)
             {
                 throw new UnauthorizedAccessException($"Patient does not belong to your hospital.");
+            }
+
+            // Same test billed to this patient already today? (Lines from a visit are
+            // protected by the one-bill-per-visit rule; this covers free lines.)
+            if (!request.AllowRepeat)
+            {
+                static string Key(string? d) => (d ?? string.Empty).Trim().ToUpperInvariant();
+                var free = request.Items.Where(i => i.AppointmentServiceId == null && Key(i.Description).Length > 0)
+                    .Select(i => Key(i.Description)).ToHashSet();
+                if (free.Count > 0)
+                {
+                    var istToday = IstDateRange.ToIst(DateTime.UtcNow).Date;
+                    var from = IstDateRange.ToUtcStart(istToday);
+                    var to = IstDateRange.ToUtcEndInclusive(istToday);
+                    var earlier = await _context.Invoices.AsNoTracking()
+                        .Where(i => i.HospitalId == hospitalId && i.PatientId == request.PatientId && i.DeletedAt == null
+                                    && i.Status != "CANCELLED" && i.CreatedAt >= from && i.CreatedAt <= to)
+                        .SelectMany(i => i.Items.Select(it => new { i.InvoiceId, it.Description }))
+                        .ToListAsync(cancellationToken);
+                    var hit = earlier.FirstOrDefault(e => free.Contains(Key(e.Description)));
+                    if (hit != null)
+                        throw new _1Rad.Domain.Exceptions.DuplicateBillLineException(
+                            $"{patient.FullName} already has {hit.Description} on bill {hit.InvoiceId} today. Bill it again only if it really is a second one.");
+                }
             }
 
             // Verify appointment if provided
@@ -328,6 +356,7 @@ public class GenerateInvoiceCommandHandler : IRequestHandler<GenerateInvoiceComm
 
             return invoice.Id;
         }
+        catch (_1Rad.Domain.Exceptions.DomainException) { throw; }
         catch (ArgumentException) { throw; }
         catch (KeyNotFoundException) { throw; }
         catch (UnauthorizedAccessException) { throw; }

@@ -24,4 +24,14 @@ public class DayClose : BaseEntity, IHospitalContext
     public string? ClosedByName { get; set; }
     public DateTime ClosedAt { get; set; } = DateTime.UtcNow;
     public int CloseCount { get; set; } = 1;
+
+    // Migration 117 (Money ▸ Cash book). Expected in the drawer = OpeningFloat + the
+    // day's net cash; Variance = CountedCash − that.
+    public decimal OpeningFloat { get; set; }
+    public decimal ExpectedBank { get; set; }
+    public string? NoteCounts { get; set; }          // JSON {"500":30,"200":12,"coins":40}
+    public string? DifferenceReason { get; set; }
+    public decimal FloatKept { get; set; }           // left in the drawer for tomorrow
+    public decimal HandedOver { get; set; }          // counted − float kept
+    public string? HandedTo { get; set; }
 }

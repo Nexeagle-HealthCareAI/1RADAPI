@@ -48,6 +48,11 @@ public class Invoice : BaseEntity, IHospitalContext
     // free test apart from an ordinary 100% centre discount.
     public bool IsFree { get; set; } = false;
 
+    // Migration 116: why the centre discount / deduction was given, and by whom
+    // (or, for an approved request, whose approval applied it).
+    public string? DiscountReason { get; set; }
+    public Guid? DiscountByUserId { get; set; }
+
 
     
     public Guid HospitalId { get; set; }

@@ -144,7 +144,32 @@ public class CreateChainCommandHandler : IRequestHandler<CreateChainCommand, Cre
 
             await _context.SaveChangesAsync(cancellationToken);
 
-            return new CreateChainResponse { Success = true, HospitalId = hospital.HospitalId };
+            var response = new CreateChainResponse { Success = true, HospitalId = hospital.HospitalId };
+
+            // Owner board: start with another centre's setup. The centre exists by now,
+            // so a failure here is reported, not thrown — it can be copied again later.
+            if (request.CopySetupFromHospitalId is Guid from && from != Guid.Empty)
+            {
+                try
+                {
+                    // A centre that follows another passes on its main centre, so links never chain.
+                    var main = await _context.HospitalSettingsLinks.IgnoreQueryFilters().AsNoTracking()
+                        .Where(l => l.HospitalId == from && (l.LinkBilling || l.LinkPrices))
+                        .Select(l => (Guid?)l.SourceHospitalId).FirstOrDefaultAsync(cancellationToken);
+                    if (request.KeepLinked && main is Guid m) from = m;
+                    await _1Rad.Application.Features.Owner.OwnerAccess.RequireAsync(_context, user.UserId, new[] { from }, cancellationToken);
+                    await _1Rad.Application.Features.Owner.ChainSetup.CopyAsync(_context, from, new[] { hospital.HospitalId },
+                        billing: true, prices: true, keepLinked: request.KeepLinked, byUserId: user.UserId, cancellationToken);
+                    await _context.SaveChangesAsync(cancellationToken);
+                    response.SetupCopied = true;
+                }
+                catch (Exception copyEx)
+                {
+                    response.SetupCopyError = copyEx.Message;
+                }
+            }
+
+            return response;
         }
         catch (Exception ex)
         {

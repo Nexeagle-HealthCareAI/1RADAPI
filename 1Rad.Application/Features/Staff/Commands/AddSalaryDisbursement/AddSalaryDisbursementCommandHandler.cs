@@ -117,6 +117,7 @@ public class AddSalaryDisbursementCommandHandler : IRequestHandler<AddSalaryDisb
             TransactionDate      = paidOn.ToDateTime(TimeOnly.MinValue),
             LinkedDisbursementId = entry.DisbursementId,
         };
+        if (expense.Status == "Paid") expense.PaidAt = expense.TransactionDate; // migration 119
         _context.Expenses.Add(expense);
 
         // Auto-create Leave Request for encashment if EncashmentDays > 0

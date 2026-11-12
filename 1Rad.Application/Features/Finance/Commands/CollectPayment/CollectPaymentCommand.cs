@@ -13,6 +13,14 @@ public struct ExtraChargeDetail
     public decimal Amount { get; init; }
 }
 
+/// <summary>One part of a split payment: ₹500 cash + ₹265 UPI is two tenders, one receipt.</summary>
+public record TenderLine
+{
+    public string Mode { get; init; } = "CASH";
+    public decimal Amount { get; init; }
+    public string? Reference { get; init; }
+}
+
 public record CollectPaymentCommand : IRequest<bool>
 {
     public Guid InvoiceId { get; init; }
@@ -40,6 +48,14 @@ public record CollectPaymentCommand : IRequest<bool>
     // Review B1: the bill version the cashier is looking at (InvoiceDto.RowVersion).
     // Optional for older clients; when sent, a changed bill is refused with 409.
     public string? RowVersion { get; init; }
+
+    // Money ▸ Collect (migration 116).
+    // Tenders: a split payment. When sent, it replaces Amount + PaymentMethod.
+    public List<TenderLine>? Tenders { get; init; }
+    // UPI / card / bank reference for a single-mode payment.
+    public string? Reference { get; init; }
+    // Why the centre discount / deduction raised in this request was given.
+    public string? DiscountReason { get; init; }
 }
 
 
@@ -72,6 +88,25 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
             {
                 throw new ValidationException("The amount received can't be negative. Use Refund to return money.");
             }
+
+            // Split payment (Money ▸ Collect): each part is its own payment row under one receipt.
+            var tenders = request.Tenders is { Count: > 0 }
+                ? request.Tenders.Select(t => new TenderLine
+                    {
+                        Mode = NormaliseTenderMode(t.Mode),
+                        Amount = Math.Round(t.Amount, 2),
+                        Reference = string.IsNullOrWhiteSpace(t.Reference) ? null : t.Reference.Trim()[..Math.Min(60, t.Reference.Trim().Length)],
+                    }).ToList()
+                : new List<TenderLine>
+                    {
+                        new() { Mode = request.PaymentMethod, Amount = Math.Round(request.Amount, 2),
+                                Reference = string.IsNullOrWhiteSpace(request.Reference) ? null : request.Reference.Trim()[..Math.Min(60, request.Reference.Trim().Length)] }
+                    };
+            if (tenders.Any(t => t.Amount < 0))
+                throw new ValidationException("A part of the payment can't be negative. Use Refund to return money.");
+            if (request.Tenders is { Count: > 6 })
+                throw new ValidationException("Split a payment into at most 6 parts.");
+            var amountIn = tenders.Sum(t => t.Amount);
 
             var invoice = await _context.Invoices
                 .Include(i => i.Payments)
@@ -237,6 +272,14 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
                 var centreSettings = await BillingSettings.GetAsync(_context, invoice.HospitalId, _configuration, cancellationToken);
                 DiscountPolicy.CheckLimit(_context.UserContext, BillingSettings.Overlay(centreSettings, _configuration), invoice.GrossAmount,
                     invoice.CentreDiscount, invoice.InstitutionalDeduction);
+                var reasonText = request.DiscountReason?.Trim();
+                if (centreSettings.DiscountReasonRequired && string.IsNullOrWhiteSpace(reasonText))
+                    throw new ValidationException("Pick a reason for the discount.");
+                if (!string.IsNullOrWhiteSpace(reasonText))
+                {
+                    invoice.DiscountReason = reasonText.Length > 200 ? reasonText[..200] : reasonText;
+                    invoice.DiscountByUserId = _context.UserContext.UserId == Guid.Empty ? null : _context.UserContext.UserId;
+                }
             }
             InvoiceTotals.ApplyDiscountAndFinalize(invoice, totalDiscount);
 
@@ -252,18 +295,18 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
                 await PaymentLedger.SettleAfterTotalChangeAsync(_context, invoice,
                     "Discount at collection took the bill below what was paid", cancellationToken);
             }
-            else if (invoice.PaidAmount >= invoice.TotalAmount - 0.01m && invoice.TotalAmount > 0.01m && request.Amount <= 0.009m)
+            else if (invoice.PaidAmount >= invoice.TotalAmount - 0.01m && invoice.TotalAmount > 0.01m && amountIn <= 0.009m)
             {
                 // Nothing to collect and nothing to return: just re-derive the status.
                 PaymentLedger.DeriveStatus(invoice);
             }
 
             var zeroTotal = invoice.TotalAmount <= 0.01m;
-            if (!zeroTotal && request.Amount > 0.009m && invoice.PaidAmount >= invoice.TotalAmount - 0.01m)
+            if (!zeroTotal && amountIn > 0.009m && invoice.PaidAmount >= invoice.TotalAmount - 0.01m)
             {
                 throw new ConflictException($"Bill {invoice.InvoiceId} is already settled.");
             }
-            if (zeroTotal && request.Amount > 0.009m && string.Equals(invoice.Status, "PAID", StringComparison.OrdinalIgnoreCase))
+            if (zeroTotal && amountIn > 0.009m && string.Equals(invoice.Status, "PAID", StringComparison.OrdinalIgnoreCase))
             {
                 throw new ConflictException($"Bill {invoice.InvoiceId} is already settled.");
             }
@@ -281,43 +324,53 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
             // part that fits the balance settles the invoice; any EXCESS is parked
             // as a patient credit/advance (later refundable or carried forward).
             // The accountant just enters the cash tendered; the split is automatic.
-            if (request.Amount > 0)
+            if (amountIn > 0.009m)
             {
-                var remainingBalance = invoice.TotalAmount - invoice.PaidAmount;
-                var applied = Math.Min(request.Amount, Math.Max(0m, remainingBalance));
-                var excess = request.Amount - applied;
-
-                if (applied > 0)
+                // One receipt number for the whole collection (migration 116).
+                var receipt = await ReceiptNumbering.NextAsync(_context, invoice.HospitalId, DateTime.UtcNow, cancellationToken);
+                var userId = _context.UserContext.UserId == Guid.Empty ? (Guid?)null : _context.UserContext.UserId;
+                foreach (var t in tenders.Where(t => t.Amount > 0.009m))
                 {
-                    _context.Payments.Add(new Payment
-                    {
-                        InvoiceId = request.InvoiceId,
-                        Amount = applied,
-                        Kind = PaymentKinds.Payment,
-                        CreatedByUserId = _context.UserContext.UserId == Guid.Empty ? null : _context.UserContext.UserId,
-                        PaymentMethod = request.PaymentMethod,
-                        CreatedAt = DateTime.UtcNow,
-                        HospitalId = _context.UserContext.HospitalId
-                    });
-                    invoice.PaidAmount += applied;
-                }
+                    var remainingBalance = invoice.TotalAmount - invoice.PaidAmount;
+                    var applied = Math.Min(t.Amount, Math.Max(0m, remainingBalance));
+                    var excess = t.Amount - applied;
 
-                if (excess > 0.009m)
-                {
-                    _context.CreditTransactions.Add(new CreditTransaction
+                    if (applied > 0)
                     {
-                        HospitalId = _context.UserContext.HospitalId,
-                        PatientId = invoice.PatientId,
-                        PatientName = invoice.PatientName ?? string.Empty,
-                        Type = "ADVANCE",
-                        Amount = Math.Round(excess, 2),
-                        InvoiceId = invoice.Id,
-                        InvoiceDisplayId = invoice.InvoiceId,
-                        PaymentMethod = request.PaymentMethod,
-                        CreatedByUserId = _context.UserContext.UserId,
-                        Remarks = "Advance / overpayment held at collection",
-                        CreatedAt = DateTime.UtcNow,
-                    });
+                        _context.Payments.Add(new Payment
+                        {
+                            InvoiceId = request.InvoiceId,
+                            Amount = applied,
+                            Kind = PaymentKinds.Payment,
+                            CreatedByUserId = userId,
+                            PaymentMethod = t.Mode,
+                            Reference = t.Reference,
+                            ReceiptNumber = receipt,
+                            CreatedAt = DateTime.UtcNow,
+                            HospitalId = _context.UserContext.HospitalId
+                        });
+                        invoice.PaidAmount += applied;
+                    }
+
+                    // Overpayment is NO LONGER rejected — the part that fits the balance
+                    // settles the invoice; any EXCESS is parked as a patient advance.
+                    if (excess > 0.009m)
+                    {
+                        _context.CreditTransactions.Add(new CreditTransaction
+                        {
+                            HospitalId = _context.UserContext.HospitalId,
+                            PatientId = invoice.PatientId,
+                            PatientName = invoice.PatientName ?? string.Empty,
+                            Type = "ADVANCE",
+                            Amount = Math.Round(excess, 2),
+                            InvoiceId = invoice.Id,
+                            InvoiceDisplayId = invoice.InvoiceId,
+                            PaymentMethod = t.Mode,
+                            CreatedByUserId = _context.UserContext.UserId,
+                            Remarks = $"Advance / overpayment held at collection ({receipt})",
+                            CreatedAt = DateTime.UtcNow,
+                        });
+                    }
                 }
             }
 
@@ -388,6 +441,17 @@ public class CollectPaymentCommandHandler : IRequestHandler<CollectPaymentComman
         {
             throw;
         }
+    }
+
+    /// <summary>The modes the counter takes. Anything else is refused rather than stored as free text (review B24).</summary>
+    private static string NormaliseTenderMode(string? mode)
+    {
+        var m = (mode ?? string.Empty).Trim().ToUpperInvariant();
+        return m switch
+        {
+            "CASH" or "UPI" or "CARD" or "BANK" => m,
+            _ => throw new ValidationException("Pay by cash, UPI, card or bank transfer."),
+        };
     }
 }
 

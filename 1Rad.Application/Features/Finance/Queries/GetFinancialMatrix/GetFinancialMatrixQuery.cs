@@ -280,7 +280,8 @@ public class GetFinancialMatrixQueryHandler : IRequestHandler<GetFinancialMatrix
             var hospitalId = _context.UserContext.HospitalId;
 
             var invoiceQuery = _context.Invoices.AsNoTracking().Where(i => i.HospitalId == hospitalId && i.DeletedAt == null);
-            var expenseQuery = _context.Expenses.AsNoTracking().Where(e => e.HospitalId == hospitalId);
+            // Deleted expenses are kept as tombstones since the Money redesign (soft delete): leave them out.
+            var expenseQuery = _context.Expenses.AsNoTracking().Where(e => e.HospitalId == hospitalId && e.DeletedAt == null);
             // DeletedAt/Status filter matches the convention used everywhere else this
             // table is read (commissionByServiceId/commissionByAppointmentId below,
             // GetReferralCommissionsQuery, InvoiceEnrichmentService, GetDoctorPortalQuery).

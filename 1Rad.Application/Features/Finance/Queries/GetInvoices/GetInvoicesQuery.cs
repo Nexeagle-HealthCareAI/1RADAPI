@@ -13,7 +13,12 @@ public class PagedInvoiceResult
     public string? NextCursor { get; set; }     // null = last page
     public int TotalCount { get; set; }         // full filtered count (for display)
     public bool IsPaged { get; set; }           // false on the sync-engine path
+    /// <summary>Money ▸ Bills: sums over every bill the filters match (not just this page),
+    /// cancelled bills left out. Sent with the first page only.</summary>
+    public InvoiceListTotals? Totals { get; set; }
 }
+
+public record InvoiceListTotals(int Bills, decimal Billed, decimal Paid, decimal Due, int DueBills);
 
 public record GetInvoicesQuery : IRequest<PagedInvoiceResult>
 {
@@ -167,6 +172,23 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, PagedIn
                 catch { /* malformed cursor */ }
             }
 
+            InvoiceListTotals? totals = null;
+            if (usePaging && string.IsNullOrEmpty(request.Cursor))
+            {
+                var t = await query.Where(i => i.Status != "CANCELLED")
+                    .GroupBy(_ => 1)
+                    .Select(g => new
+                    {
+                        N = g.Count(),
+                        Billed = g.Sum(i => i.TotalAmount),
+                        Paid = g.Sum(i => i.PaidAmount > i.TotalAmount ? i.TotalAmount : i.PaidAmount),
+                        DueN = g.Count(i => i.TotalAmount - i.PaidAmount > 0.009m),
+                    })
+                    .FirstOrDefaultAsync(cancellationToken);
+                totals = t == null ? new InvoiceListTotals(0, 0, 0, 0, 0)
+                    : new InvoiceListTotals(t.N, t.Billed, t.Paid, Math.Round(t.Billed - t.Paid, 2), t.DueN);
+            }
+
             if (usePaging && cursorDate.HasValue && cursorId.HasValue)
             {
                 query = query.Where(i =>
@@ -290,6 +312,7 @@ public class GetInvoicesQueryHandler : IRequestHandler<GetInvoicesQuery, PagedIn
                 Items      = result,
                 NextCursor = nextCursor,
                 TotalCount = usePaging ? totalCount : result.Count,
+                Totals = totals,
                 IsPaged    = usePaging,
             };
         }

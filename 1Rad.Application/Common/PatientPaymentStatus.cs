@@ -46,6 +46,24 @@ public static class PatientPaymentStatus
     public static bool IsPayable(string? resolvedStatus) => resolvedStatus == Paid;
 
     /// <summary>
+    /// The centre's rule (Money ▸ Setup, migration 118). whenBilled: the share can be
+    /// paid once the bill exists and isn't cancelled, paid or not. Otherwise only
+    /// once the patient has paid in full. No bill yet → never payable.
+    /// </summary>
+    public static bool IsPayable(string? resolvedStatus, bool whenBilled) =>
+        whenBilled ? resolvedStatus is Paid or Partial or Pending : resolvedStatus == Paid;
+
+    /// <summary>The bill exists but the patient hasn't paid it in full.</summary>
+    public static bool PatientOwes(string? resolvedStatus) => resolvedStatus is Partial or Pending;
+
+    /// <summary>The centre's setting; on when the centre has never saved billing settings.</summary>
+    public static async Task<bool> PayWhenBilledAsync(IApplicationDbContext context, Guid hospitalId, CancellationToken ct) =>
+        await context.HospitalBillingSettings.AsNoTracking().IgnoreQueryFilters() // also used by the partner portal (no signed-in centre)
+            .Where(s => s.HospitalId == hospitalId)
+            .Select(s => (bool?)s.PartnerPayWhenBilled)
+            .FirstOrDefaultAsync(ct) ?? true;
+
+    /// <summary>
     /// Resolves the patient-payment state for a set of commissions in ONE query.
     /// A commission is matched to its invoice by AppointmentId first, then by the
     /// invoice display id kept in ReferenceNumber; soft-deleted invoices are

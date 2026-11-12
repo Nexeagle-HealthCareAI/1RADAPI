@@ -112,14 +112,17 @@ public class HospitalsController : ControllerBase
         var result = await _mediator.Send(new _1Rad.Application.Features.Hospitals.BillingSettings.UpdateBillingSettingsCommand(
             id, r.GstEnabled, r.CreditNotesEnabled, r.TdsEnabled, r.DefaultTdsCategory,
             r.TdsCommissionRate, r.TdsCommissionThreshold, r.TdsProfessionalRate, r.TdsProfessionalThreshold,
-            r.TdsNoPanRate, r.FrontDeskDiscountLimitPercent), HttpContext.RequestAborted);
+            r.TdsNoPanRate, r.FrontDeskDiscountLimitPercent,
+            r.AccountantDiscountLimitPercent, r.ClearAccountantLimit, r.DiscountReasonRequired, r.PartnerPayWhenBilled), HttpContext.RequestAborted);
         return Ok(result);
     }
 
     public record UpdateBillingSettingsRequest(
         bool GstEnabled, bool CreditNotesEnabled, bool TdsEnabled, string? DefaultTdsCategory,
         decimal? TdsCommissionRate, decimal? TdsCommissionThreshold, decimal? TdsProfessionalRate, decimal? TdsProfessionalThreshold,
-        decimal? TdsNoPanRate, decimal? FrontDeskDiscountLimitPercent);
+        decimal? TdsNoPanRate, decimal? FrontDeskDiscountLimitPercent,
+        decimal? AccountantDiscountLimitPercent = null, bool? ClearAccountantLimit = null, bool? DiscountReasonRequired = null,
+        bool? PartnerPayWhenBilled = null);
 
     [HttpPost("chain")]
     [Authorize(Roles = AdminRoles)]
@@ -137,7 +140,9 @@ public class HospitalsController : ControllerBase
             request.RegistrationNumber,
             request.PAN,
             request.NABHNumber,
-            request.Modules));
+            request.Modules,
+            request.CopySetupFromHospitalId,
+            request.KeepLinked));
 
         if (!result.Success) return BadRequest(new { success = false, message = result.Error, errorCode = result.ErrorCode });
         return Ok(result);
@@ -193,4 +198,8 @@ public record CreateChainRequest(
     string? PAN = null,
     string? NABHNumber = null,
     // Chosen product package (SKU) for the new centre: "RIS" | "PACS" | "RIS,PACS".
-    string? Modules = null);
+    string? Modules = null,
+    // Owner board: start the new centre with this centre's billing rules and price
+    // list. KeepLinked (default) keeps it following that centre; false copies once.
+    Guid? CopySetupFromHospitalId = null,
+    bool KeepLinked = true);

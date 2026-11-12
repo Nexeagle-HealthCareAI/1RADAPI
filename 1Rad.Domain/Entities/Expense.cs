@@ -15,6 +15,8 @@ public class Expense : BaseEntity, IHospitalContext
     public string? CostCenter { get; set; }
     public string Status { get; set; } = "Paid";
     public DateTime TransactionDate { get; set; } = DateTime.UtcNow;
+    /// <summary>When the money left (migration 119). Null while the expense is still to pay.</summary>
+    public DateTime? PaidAt { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     // Sync engine fields (Phase B3 Slice 3). UpdatedAt is stamped by the

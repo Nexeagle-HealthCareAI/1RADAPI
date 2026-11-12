@@ -1299,32 +1299,6 @@ namespace _1RadAPI.Controllers
             }
         }
 
-        [HttpPost("complete")]
-        public async Task<IActionResult> CompleteStudy([FromBody] StudyCompletionRequest request)
-        {
-            try
-            {
-                var appointment = await _context.Appointments
-                    .Include(a => a.StudyAssets)
-                    .FirstOrDefaultAsync(a => a.AppointmentId == request.AppointmentId);
-
-                if (appointment == null) return NotFound(new { success = false, error = "MISSION NOT FOUND: The specified appointment does not exist." });
-
-                appointment.TechnicianComments = request.Comments;
-                appointment.Status = "SCANNED"; // MARK AS READY FOR RADIOLOGIST
-                appointment.ScannedAt = DateTime.UtcNow;
-                appointment.TechnicianId = _userContext.UserId;
-
-                await _context.SaveChangesAsync(default);
-
-                return Ok(new { success = true, status = "READY_FOR_REPORT", comments = request.Comments });
-            }
-            catch (Exception ex)
-            {
-                return StatusCode(500, new { success = false, error = $"MISSION FINALIZATION FAILURE: {ex.Message}" });
-            }
-        }
-
         [HttpPost("upload-token")]
         public async Task<IActionResult> RequestSasUploadToken([FromBody] SasUploadTokenRequest request)
         {
@@ -2654,12 +2628,6 @@ namespace _1RadAPI.Controllers
         // appointment.
         public Guid? AppointmentServiceId { get; set; }
         public IFormFile File { get; set; }
-    }
-
-    public class StudyCompletionRequest
-    {
-        public Guid AppointmentId { get; set; }
-        public string Comments { get; set; }
     }
 
     public class SasUploadTokenRequest

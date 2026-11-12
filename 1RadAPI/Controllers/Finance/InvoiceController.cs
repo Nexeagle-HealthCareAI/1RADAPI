@@ -55,6 +55,15 @@ public class InvoiceController : ControllerBase
         return Ok(result);
     }
 
+    // Money ▸ Bills: the bill and its money history (payments, refunds, credit notes, approvals).
+    [HttpGet("invoices/{id:guid}/history")]
+    [Authorize(Roles = RoleSets.Billing)]
+    public async Task<IActionResult> GetInvoiceHistory(Guid id)
+    {
+        var result = await _mediator.Send(new _1Rad.Application.Features.Finance.Queries.GetInvoiceHistory.GetInvoiceHistoryQuery(id), HttpContext.RequestAborted);
+        return Ok(result);
+    }
+
     [HttpPost("invoices")]
     [Authorize(Roles = $"{RoleConstants.AdminDoctor},{RoleConstants.AdminOperator},{RoleConstants.Receptionist},{RoleConstants.Accountant}")]
     public async Task<IActionResult> GenerateInvoice([FromBody] GenerateInvoiceCommand command)

@@ -209,9 +209,15 @@ public class ReferralIncentiveAccuracyTests : BaseHandlerTest
 
     // ── payout: gating + atomic batch ───────────────────────────────────────────
 
+    /// <summary>These tests cover the "only after the patient pays" rule (centre setting, migration 118).</summary>
+    private void PayOnlyAfterPatientPays() =>
+        Context.HospitalBillingSettings.Add(new HospitalBillingSettings { HospitalId = HospitalId, PartnerPayWhenBilled = false });
+
+
     [Fact]
     public async Task UpdateStatus_RefusesToPayWhenThePatientHasNotPaid()
     {
+        PayOnlyAfterPatientPays();
         var a = AddReferrer("DR A");
         var (visit, _) = AddVisit("DR A", a.ReferrerId);
         AddInvoice(visit, 1000m, 0m);
@@ -226,6 +232,7 @@ public class ReferralIncentiveAccuracyTests : BaseHandlerTest
     [Fact]
     public async Task UpdateStatus_WaitsUntilThePatientHasPaidInFull()
     {
+        PayOnlyAfterPatientPays();
         // Review R5 (Oct 2026): a part-paid bill no longer makes the cut payable —
         // otherwise the referrer is paid on money the centre may never collect.
         var a = AddReferrer("DR A");
@@ -263,6 +270,7 @@ public class ReferralIncentiveAccuracyTests : BaseHandlerTest
     [Fact]
     public async Task BatchPay_PaysEligibleRowsSkipsTheRestAndIsSafeToRepeat()
     {
+        PayOnlyAfterPatientPays();
         var a = AddReferrer("DR A");
         var (paidVisit, _) = AddVisit("DR A", a.ReferrerId);
         AddInvoice(paidVisit, 1000m, 1000m, "PAID");
@@ -511,11 +519,76 @@ public class ReferralIncentiveAccuracyTests : BaseHandlerTest
         Assert.Equal(-300m, saved.CommissionAmount);
     }
 
+    // ── payable once the bill is made (the default since Nov 2026, migration 118) ──
+
+    [Fact]
+    public async Task WhenBilled_AnUnpaidBill_CanBePaidOut()
+    {
+        var a = AddReferrer("DR A");
+        var (visit, _) = AddVisit("DR A", a.ReferrerId);
+        AddInvoice(visit, 1000m, 0m);
+        var c = AddCommission(a, visit, 200m);
+        await Context.SaveChangesAsync();
+
+        await new UpdateReferralCommissionStatusCommandHandler(Context)
+            .Handle(new UpdateReferralCommissionStatusCommand(c.Id, "PAID"), CancellationToken.None);
+
+        Assert.Equal("PAID", Context.ReferralCommissions.Single(x => x.Id == c.Id).Status, ignoreCase: true);
+    }
+
+    [Fact]
+    public async Task WhenBilled_NoBillYet_CannotBePaidOut()
+    {
+        var a = AddReferrer("DR A");
+        var (visit, _) = AddVisit("DR A", a.ReferrerId);
+        var c = AddCommission(a, visit, 200m);
+        await Context.SaveChangesAsync();
+
+        await Assert.ThrowsAsync<BusinessRuleViolationException>(() => new UpdateReferralCommissionStatusCommandHandler(Context)
+            .Handle(new UpdateReferralCommissionStatusCommand(c.Id, "PAID"), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task WhenBilled_ACancelledBill_CannotBePaidOut()
+    {
+        var a = AddReferrer("DR A");
+        var (visit, _) = AddVisit("DR A", a.ReferrerId);
+        AddInvoice(visit, 1000m, 0m, "CANCELLED");
+        var c = AddCommission(a, visit, 200m);
+        await Context.SaveChangesAsync();
+
+        await Assert.ThrowsAsync<BusinessRuleViolationException>(() => new UpdateReferralCommissionStatusCommandHandler(Context)
+            .Handle(new UpdateReferralCommissionStatusCommand(c.Id, "PAID"), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task WhenBilled_TheOutstandingListMarksWhatThePatientStillOwes()
+    {
+        var a = AddReferrer("DR A");
+        var (paidVisit, _) = AddVisit("DR A", a.ReferrerId);
+        AddInvoice(paidVisit, 1000m, 1000m, "PAID");
+        var (owingVisit, _) = AddVisit("DR A", a.ReferrerId);
+        AddInvoice(owingVisit, 900m, 0m);
+        AddCommission(a, paidVisit, 200m);
+        AddCommission(a, owingVisit, 180m);
+        await Context.SaveChangesAsync();
+
+        var result = await new _1Rad.Application.Features.Referrers.Queries.GetReferrersOutstanding.GetReferrersOutstandingQueryHandler(Context)
+            .Handle(new _1Rad.Application.Features.Referrers.Queries.GetReferrersOutstanding.GetReferrersOutstandingQuery(), CancellationToken.None);
+
+        var row = Assert.Single(result.Items);
+        Assert.Equal(380m, row.PayableNow);
+        Assert.Equal(180m, row.PatientOwes);
+        Assert.Equal(0m, row.AwaitingPatient);
+        Assert.True(result.PayWhenBilled);
+    }
+
     // ── doctor portal ───────────────────────────────────────────────────────────
 
     [Fact]
     public async Task Portal_CombinesMergedDuplicatesAndSplitsPayableFromAwaiting()
     {
+        PayOnlyAfterPatientPays();
         var primary = AddReferrer("DR PRIMARY");
         var dupe = AddReferrer("DR DUPE", mergedInto: primary.ReferrerId);
         var (paidVisit, _) = AddVisit("DR PRIMARY", primary.ReferrerId);
