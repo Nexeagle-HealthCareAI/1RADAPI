@@ -108,6 +108,7 @@ public static class DependencyInjection
         // PHI container (stateless — singleton).
         services.AddSingleton<IAssetUrlSigner, AssetUrlSigner>();
         services.AddHttpContextAccessor();
+        services.AddScoped<IActingCentre, ActingCentre>();
         services.AddScoped<IUserContext, UserContext>();
 
         // Product-module entitlements (RIS / PACS SKUs). Scoped because it

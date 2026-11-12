@@ -140,7 +140,9 @@ public class HospitalsController : ControllerBase
             request.RegistrationNumber,
             request.PAN,
             request.NABHNumber,
-            request.Modules));
+            request.Modules,
+            request.CopySetupFromHospitalId,
+            request.KeepLinked));
 
         if (!result.Success) return BadRequest(new { success = false, message = result.Error, errorCode = result.ErrorCode });
         return Ok(result);
@@ -196,4 +198,8 @@ public record CreateChainRequest(
     string? PAN = null,
     string? NABHNumber = null,
     // Chosen product package (SKU) for the new centre: "RIS" | "PACS" | "RIS,PACS".
-    string? Modules = null);
+    string? Modules = null,
+    // Owner board: start the new centre with this centre's billing rules and price
+    // list. KeepLinked (default) keeps it following that centre; false copies once.
+    Guid? CopySetupFromHospitalId = null,
+    bool KeepLinked = true);

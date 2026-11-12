@@ -86,6 +86,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<ReferralPortalView> ReferralPortalViews => Set<ReferralPortalView>();
     public DbSet<CreditNote> CreditNotes => Set<CreditNote>();
     public DbSet<HospitalBillingSettings> HospitalBillingSettings => Set<HospitalBillingSettings>();
+    public DbSet<HospitalSettingsLink> HospitalSettingsLinks => Set<HospitalSettingsLink>();
     public DbSet<ReferrerLinkVersion> ReferrerLinkVersions => Set<ReferrerLinkVersion>();
     public DbSet<ReferralBookingRequest> ReferralBookingRequests => Set<ReferralBookingRequest>();
 
@@ -686,6 +687,14 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
             entity.Property(e => e.AccountantDiscountLimitPercent).HasPrecision(5, 2);
             entity.Property(e => e.TdsCommissionThreshold).HasPrecision(18, 2);
             entity.Property(e => e.TdsProfessionalThreshold).HasPrecision(18, 2);
+        });
+
+        // Owner board: a centre following another centre's setup (migration 120).
+        modelBuilder.Entity<HospitalSettingsLink>(entity =>
+        {
+            entity.ToTable("HospitalSettingsLinks", "dbo");
+            entity.HasKey(e => e.HospitalId);
+            entity.HasIndex(e => e.SourceHospitalId);
         });
         modelBuilder.Entity<CreditNote>(entity =>
         {

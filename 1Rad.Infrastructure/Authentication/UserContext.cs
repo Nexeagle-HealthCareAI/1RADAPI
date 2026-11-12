@@ -7,10 +7,12 @@ namespace _1Rad.Infrastructure.Authentication;
 public class UserContext : IUserContext
 {
     private readonly IHttpContextAccessor _httpContextAccessor;
+    private readonly IActingCentre? _acting;
 
-    public UserContext(IHttpContextAccessor httpContextAccessor)
+    public UserContext(IHttpContextAccessor httpContextAccessor, IActingCentre? acting = null)
     {
         _httpContextAccessor = httpContextAccessor;
+        _acting = acting;
     }
 
     public Guid UserId
@@ -27,6 +29,8 @@ public class UserContext : IUserContext
     {
         get
         {
+            // Owner board: a checked, request-scoped override (see IActingCentre).
+            if (_acting?.HospitalId is Guid acting) return acting;
             var cid = _httpContextAccessor.HttpContext?.User.FindFirstValue("cid");
             return cid != null ? Guid.Parse(cid) : Guid.Empty;
         }

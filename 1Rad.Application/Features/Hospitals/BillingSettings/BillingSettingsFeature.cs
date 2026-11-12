@@ -90,6 +90,8 @@ public class BillingSettingsHandlers :
         row.UpdatedByUserId = _db.UserContext.UserId == Guid.Empty ? null : _db.UserContext.UserId;
         row.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
+        // Centres that follow this one (owner board, migration 120) get the same rules.
+        await _1Rad.Application.Features.Owner.ChainSetup.PushBillingAsync(_db, c.HospitalId, ct);
         return await LoadAsync(c.HospitalId, ct);
     }
 

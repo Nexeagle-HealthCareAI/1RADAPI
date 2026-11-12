@@ -63,6 +63,7 @@ public interface IApplicationDbContext
     DbSet<ReferralPortalView> ReferralPortalViews { get; }
     DbSet<CreditNote> CreditNotes { get; }
     DbSet<HospitalBillingSettings> HospitalBillingSettings { get; }
+    DbSet<HospitalSettingsLink> HospitalSettingsLinks { get; }
     DbSet<ReferrerLinkVersion> ReferrerLinkVersions { get; }
     DbSet<ReferralBookingRequest> ReferralBookingRequests { get; }
     IUserContext UserContext { get; }

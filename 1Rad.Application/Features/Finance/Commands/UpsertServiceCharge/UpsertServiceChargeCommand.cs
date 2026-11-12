@@ -63,6 +63,7 @@ public class UpsertServiceChargeCommandHandler : IRequestHandler<UpsertServiceCh
             }
 
             ServiceCharge? entity;
+            string? oldKey = null;
 
             if (request.Id.HasValue && request.Id != Guid.Empty)
             {
@@ -79,6 +80,7 @@ public class UpsertServiceChargeCommandHandler : IRequestHandler<UpsertServiceCh
                 {
                     throw new UnauthorizedAccessException("You do not have permission to modify this service charge.");
                 }
+                oldKey = _1Rad.Application.Features.Owner.ChainSetup.Key(entity.Modality, entity.ServiceName);
             }
             else
             {
@@ -120,6 +122,9 @@ public class UpsertServiceChargeCommandHandler : IRequestHandler<UpsertServiceCh
             }
 
             await _context.SaveChangesAsync(cancellationToken);
+
+            // Centres that follow this centre's price list (owner board) get the same price.
+            await _1Rad.Application.Features.Owner.ChainSetup.PushPriceAsync(_context, entity, oldKey, cancellationToken);
 
             return entity.Id;
         }
