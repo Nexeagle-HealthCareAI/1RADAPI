@@ -27,6 +27,9 @@ public class StaffMember : BaseEntity, IHospitalContext
     public string? LicenseNo { get; set; }
 
     public DateOnly? JoiningDate { get; set; }
+
+    /// <summary>This person's own weekly off ("TUE", "SAT,SUN"); null = the centre's weekly off (migration 121).</summary>
+    public string? WeeklyOff { get; set; }
     public string Status { get; set; } = "Active"; // Active | Inactive
 
     /// <summary>Public HTTPS URL of the staff member's profile photo (Azure Blob). Null if no photo uploaded.</summary>

@@ -2,6 +2,7 @@ using _1Rad.Domain.Constants;
 using _1Rad.Application.Features.Staff.Commands.ApplyLeave;
 using _1Rad.Application.Features.Staff.Commands.ReviewLeave;
 using _1Rad.Application.Features.Staff.Queries.GetLeaveRequests;
+using _1Rad.Application.Features.Staff.LeaveBalances;
 using _1Rad.Application.Interfaces;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
@@ -58,6 +59,24 @@ public class LeaveController : ControllerBase
             : BadRequest(new { message = error });
     }
 
+    // GET /api/v1/leave/balances?year=2026[&staffId=] → everyone's balance per leave type (server-side, Nov 2026)
+    [HttpGet("balances")]
+    public async Task<IActionResult> Balances([FromQuery] int? year, [FromQuery] Guid? staffId) =>
+        Ok(await _mediator.Send(new GetLeaveBalancesQuery(year ?? DateTime.UtcNow.Year, staffId)));
+
+    // POST /api/v1/leave/balances/{staffId}/adjust { year, leaveType, kind: OPENING|ADJUST, days, note }
+    [HttpPost("balances/{staffId:guid}/adjust")]
+    public async Task<IActionResult> Adjust(Guid staffId, [FromBody] AdjustLeaveRequest body)
+    {
+        await _mediator.Send(new AdjustLeaveBalanceCommand(staffId, body.Year, body.LeaveType, body.Kind, body.Days, body.Note));
+        return Ok(new { success = true });
+    }
+
+    // POST /api/v1/leave/year-end { year } → carry what is left into the next year
+    [HttpPost("year-end")]
+    public async Task<IActionResult> YearEnd([FromBody] YearEndRequest body) =>
+        Ok(await _mediator.Send(new RunLeaveYearEndCommand(body.Year)));
+
     // PATCH /api/v1/leave/{leaveRequestId}/status  → approve or reject
     [HttpPatch("{leaveRequestId:guid}/status")]
     public async Task<IActionResult> ReviewLeave(Guid leaveRequestId, [FromBody] ReviewLeaveRequest body)
@@ -86,3 +105,6 @@ public record ApplyLeaveRequest(
     string? Reason);
 
 public record ReviewLeaveRequest(string Status);  // approved | rejected
+
+public record AdjustLeaveRequest(int Year, string LeaveType, string Kind, decimal Days, string? Note);
+public record YearEndRequest(int Year);
